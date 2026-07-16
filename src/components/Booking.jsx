@@ -2298,6 +2298,22 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
     }
   ];
 
+  const normalizeBookingItems = (payload) => {
+    const candidates = [
+      payload?.booking_item,
+      payload?.data?.booking_item,
+      payload?.message?.booking_item,
+      payload?.data?.data?.booking_item
+    ];
+
+    const items = candidates.find(Array.isArray);
+    if (Array.isArray(items)) {
+      return items.filter(item => item && (item.item_code || item.name));
+    }
+
+    return [];
+  };
+
   // Fetch DocType fields metadata to construct dynamic form
   const fetchDocTypeFields = async () => {
     if (!erpnextConfig || !erpnextConfig.url) return;
@@ -2350,7 +2366,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
         try {
           // Attempt standard resource API first
           setSyncStatus('Syncing via ERPNext REST Resource API...');
-          let resourceUrl = `${erpnextConfig.url}/api/resource/Booking?fields=["name","custom_contract","booking_date","customer","customer_name","booking_type","status","workflow_state","payment_status","booking_amount","paid_amount","pending_amount","starting_date","ending_date","property","quotation"]&limit_page_length=200&order_by=creation%20desc`;
+          let resourceUrl = `${erpnextConfig.url}/api/resource/Booking?fields=["name","custom_contract","booking_date","customer","customer_name","booking_type","status","workflow_state","payment_status","booking_amount","paid_amount","pending_amount","starting_date","ending_date","country","property","quotation","booking_item"]&limit_page_length=200&order_by=creation%20desc`;
           if (cust) {
             resourceUrl += `&filters=[["Booking","customer","=","${cust}"]]`;
           }
@@ -2427,6 +2443,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
           if (res.ok) {
             const json = await res.json();
             details = json.data;
+            console.log('Fetched booking details via resource API:', details);
           } else {
             throw new Error('Standard resource API returned not OK');
           }
@@ -2465,16 +2482,31 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
       }
 
       if (details) {
-        setSelectedBookingDetails(details);
+        const normalizedItems = normalizeBookingItems(details);
+        setSelectedBookingDetails({ ...details, booking_item: normalizedItems });
+        setBookings(prev => prev.map(b => {
+          const bookingId = b.name || b.id;
+          return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
+        }));
       } else {
         // Mock detail fallback
         const mockDetail = bookings.find(b => b.name === id || b.id === id);
-        setSelectedBookingDetails(mockDetail || null);
+        const normalizedItems = normalizeBookingItems(mockDetail || {});
+        setSelectedBookingDetails(mockDetail ? { ...mockDetail, booking_item: normalizedItems } : null);
+        setBookings(prev => prev.map(b => {
+          const bookingId = b.name || b.id;
+          return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
+        }));
       }
     } catch (err) {
       console.warn('Failed to load booking details:', err);
       const mockDetail = bookings.find(b => b.name === id || b.id === id);
-      setSelectedBookingDetails(mockDetail || null);
+      const normalizedItems = normalizeBookingItems(mockDetail || {});
+      setSelectedBookingDetails(mockDetail ? { ...mockDetail, booking_item: normalizedItems } : null);
+      setBookings(prev => prev.map(b => {
+        const bookingId = b.name || b.id;
+        return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
+      }));
     } finally {
       setLoadingDetails(false);
     }
@@ -2798,6 +2830,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
       (b.customer && b.customer.toLowerCase().includes(term)) ||
       (b.customer_name && b.customer_name.toLowerCase().includes(term)) ||
       (b.property && b.property.toLowerCase().includes(term)) ||
+      (b.country && b.country.toLowerCase().includes(term)) ||
       (b.quotation && String(b.quotation).toLowerCase().includes(term)) ||
       (b.custom_quotation && String(b.custom_quotation).toLowerCase().includes(term)) ||
       (b.quotation_id && String(b.quotation_id).toLowerCase().includes(term));
@@ -3051,11 +3084,31 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                     <td>
                       <div style={{ fontWeight: 600 }}>{b.customer_name || b.customer}</div>
                       <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{b.customer_email || 'No email'}</div>
-                    </td>
-                    <td style={{ fontSize: 12, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {b.property || 'Not specified'}
-                    </td>
-                    <td>
+                    </td>                
+<td>
+  {Array.isArray(b.booking_item) &&
+  b.booking_item.filter(item => item.unit_group === "Commercial").length > 0 ? (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+      {b.booking_item
+        .filter(item => item.unit_group === "Commercial")
+        .map((item, index) => (
+          <span
+            key={`${b.name || b.id}-${item.name || item.item_code || index}`}
+            className="badge badge-secondary"
+            style={{
+              whiteSpace: "normal",
+              textTransform: "none",
+              lineHeight: 1.3
+            }}
+          >
+            {item.item_code}
+          </span>
+        ))}
+    </div>
+  ) : (
+    <span style={{ color: "var(--text-muted)" }}>Not specified</span>
+  )}
+</td>           <td>
                       <span className="badge badge-secondary" style={{ textTransform: 'none' }}>
                         {b.custom_contract || b.contract || 'N/A'}
                       </span>

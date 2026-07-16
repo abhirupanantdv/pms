@@ -2953,16 +2953,6 @@ function TaskAssignPanel({ taskDoc, employeeDir, vendorDir, erpnextConfig, getCs
   useEffect(() => {
     setAssignType(taskDoc?.custom_assign.toLowerCase())
   }, [taskDoc?.custom_assign])
-
-  // // local selections (ids checked)
-  // const [selectedEmpIds, setSelectedEmpIds] = useState(() =>
-  //   (taskDoc?.custom_assign_to_ || []).map(r => r.employee || r.name).filter(Boolean)
-  // );
-  // const [selectedVendorIds, setSelectedVendorIds] = useState(() =>
-  //   (taskDoc?.custom_assign_to_vendor || []).map(r => r.vendor || r.name).filter(Boolean)
-  // );
-
-
   const [selectedEmpIds, setSelectedEmpIds] = useState(() =>
     (taskDoc?.custom_assign_to_ || [])
       .map(r => r.emp_id)
@@ -2974,12 +2964,6 @@ function TaskAssignPanel({ taskDoc, employeeDir, vendorDir, erpnextConfig, getCs
       .map(r => r.vendor_name)
       .filter(Boolean)
   );
-
-  // Reset local state when task changes
-  // useEffect(() => {
-  //   setSelectedEmpIds((taskDoc?.custom_assign_to_ || []).map(r => r.employee || r.name).filter(Boolean));
-  //   setSelectedVendorIds((taskDoc?.custom_assign_to_vendor || []).map(r => r.vendor || r.name).filter(Boolean));
-  // }, [taskDoc?.name]);
   useEffect(() => {
     setSelectedEmpIds(
       (taskDoc?.custom_assign_to_ || [])
@@ -2996,141 +2980,6 @@ function TaskAssignPanel({ taskDoc, employeeDir, vendorDir, erpnextConfig, getCs
 
   const toggleEmp = (id) => setSelectedEmpIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const toggleVendor = (id) => setSelectedVendorIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-
-  // const handleReassign = async () => {
-  //   if (!erpnextConfig?.url || !taskDoc?.name) {
-  //     showToast('No ERPNext connection.', 'error');
-  //     return;
-  //   }
-  //   setSaving(true);
-  //   try {
-  //     console.log(selectedEmpIds, selectedVendorIds);
-  //     const body = assignType === 'employee'
-  //       ? { custom_assign_to_: selectedEmpIds.map(id => ({ employee: id })) }
-  //       : { custom_assign_to_vendor: selectedVendorIds.map(id => ({ vendor: id })) };
-
-  //     console.log('Reassigning task', taskDoc.name, 'with body:', body);
-  //     const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`, {
-  //       method: 'PUT',
-  //       credentials: 'include',
-  //       headers: { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': getCsrfToken() },
-  //       body: JSON.stringify(body),
-  //     });
-
-  //     if (res.ok) {
-  //       const json = await res.json();
-  //       showToast(`${assignType === 'employee' ? 'Employees' : 'Vendors'} reassigned successfully.`, 'success');
-  //       if (onSaved) onSaved(json.data);
-  //     } else {
-  //       const txt = await res.text();
-  //       console.warn('Reassign failed:', txt);
-  //       showToast('Reassign failed — check ERPNext logs.', 'error');
-  //     }
-  //   } catch (e) {
-  //     showToast('Error saving assignment.', 'error');
-  //   } finally {
-  //     setSaving(false);
-  //   }
-  // };
-
-  // Render assigned rows as a clean table
-
-  // const handleReassign = async () => {
-  //   if (!erpnextConfig?.url || !taskDoc?.name) {
-  //     showToast("No ERPNext connection.", "error");
-  //     return;
-  //   }
-
-  //   setSaving(true);
-
-  //   try {
-  //     let body = {};
-  //     console.log("Selected Employee IDs:", selectedEmpIds, "selectedVendorIds:", selectedVendorIds);
-  //     console.log("Employee Rows:", empRows, "Vendor Rows:", vendorRows);
-
-  //     if (assignType === "employee") {
-  //       // body = {
-  //       //   custom_assign_to_: empRows.map((row, index) => ({
-  //       //     name: row.name,                     // Existing child row name
-  //       //     emp_id: selectedEmpIds[index],
-  //       //   })),
-  //       // };
-  //       empRows.map((row, index) => ({
-  //         emp_id: selectedEmpIds[index]
-  //       }))
-  //       body = {
-  //         custom_assign_to_: empRows.map((row, index) => {
-  //           const emp = employeeDir.find(e => e.id === selectedEmpIds[index]);
-
-  //           return {
-  //             name: row.name,
-  //             emp_id: emp?.id || "",
-  //             // emp_name: emp?.name || "",
-  //             // designation: emp?.certs || "",
-  //             // contact_number: emp?.phone || ""
-  //           };
-  //         })
-  //       };
-  //     } else {
-  //       // body = {
-  //       //   custom_assign_to_vendor: vendorRows.map((row, index) => ({
-  //       //     name: row.name,                     // Existing child row name
-  //       //     vendor: selectedVendorIds[index],
-  //       //   })),
-  //       // };
-  //       body = {
-  //         custom_assign_to_vendor: vendorRows.map((row, index) => {
-  //           const vendor = vendorDir.find(v => v.id === selectedVendorIds[index]);
-
-  //           return {
-  //             name: row.name,
-  //             vendor_name: vendor?.name || "",
-  //             // supplier_type: vendor?.type || ""
-  //           };
-  //         })
-  //       };
-  //     }
-
-  //     console.log("Sending Body:", JSON.stringify(body, null, 2));
-
-  //     const res = await fetch(
-  //       `${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`,
-  //       {
-  //         method: "PUT",
-  //         credentials: "include",
-  //         headers: {
-  //           "Content-Type": "application/json",
-  //           "X-Frappe-CSRF-Token": getCsrfToken(),
-  //         },
-  //         body: JSON.stringify(body),
-  //       }
-  //     );
-
-  //     const json = await res.json();
-
-  //     console.log("Response:", json);
-
-  //     if (!res.ok) {
-  //       showToast(json?.exception || "Failed to update assignment.", "error");
-  //       return;
-  //     }
-
-  //     showToast(
-  //       `${assignType === "employee" ? "Employees" : "Vendors"} updated successfully.`,
-  //       "success"
-  //     );
-
-  //     if (onSaved) {
-  //       onSaved(json.data);
-  //     }
-  //   } catch (err) {
-  //     console.error(err);
-  //     showToast("Error saving assignment.", "error");
-  //   } finally {
-  //     setSaving(false);
-  //   }
-  // };
-
   const handleReassign = async () => {
     if (!erpnextConfig?.url || !taskDoc?.name) {
       showToast("No ERPNext connection.", "error");
@@ -4378,7 +4227,13 @@ export default function Maintenance({
                     <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Customer Name</label>
                     <input type="text" value={bookingDetails?.customer_name || bookingDetails?.customer || tenants.find(t => t.id === schedCustomer)?.name || ''} readOnly className="form-input" disabled style={{ fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-secondary)' }} />
                   </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Customer Name</label>
+                    <input type="text" value={bookingDetails?.customer_name || bookingDetails?.customer || tenants.find(t => t.id === schedCustomer)?.name || ''} readOnly className="form-input" disabled style={{ fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-secondary)' }} />
+                  </div>
                 </div>
+
+                
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px 16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                     <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Property Group</label>
