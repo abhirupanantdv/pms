@@ -3242,6 +3242,7 @@ export default function Maintenance({
 
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showWOModal, setShowWOModal] = useState(false);
+  const [custom_maintenance_schedule, setCustomMaintenanceSchedule] = useState(null);
   const [showConsumeModal, setShowConsumeModal] = useState(false);
 
   // ── Toast ───────────────────────────────────────────────────────────────────
@@ -3374,7 +3375,9 @@ export default function Maintenance({
     setBookingDetails(null);
     setSchedItems(prev => prev.map(row => ({ ...row, itemCode: '', itemName: '', startDate: new Date().toISOString().split('T')[0] })));
   };
-
+const handlemaintenanceChange = (value) => {
+  setCustomMaintenanceSchedule(value);
+};
   const availableSchedUnits = useMemo(() => {
     if (!bookingDetails || !schedUnits.length) return [];
 
@@ -3574,7 +3577,7 @@ export default function Maintenance({
     if (!erpnextConfig?.url) return;
     try {
       const res = await fetch(
-        `${erpnextConfig.url}/api/resource/Maintenance Schedule?fields=%5B%22name%22%2C%22customer%22%2C%22customer_name%22%2C%22transaction_date%22%2C%22custom_property%22%2C%22status%22%2C%22docstatus%22%5D&limit_page_length=200&order_by=creation%20desc`,
+        `${erpnextConfig.url}/api/resource/Maintenance Schedule?fields=%5B%22name%22%2C%22customer%22%2C%22customer_name%22%2C%22transaction_date%22%2C%22custom_property%22%2C%22status%22%2C%22docstatus%22%5D&limit_page_length=200&order_by=creation%20asc`,
         { credentials: 'include', headers: { 'Content-Type': 'application/json' } }
       );
       if (res.ok) {
@@ -3584,10 +3587,12 @@ export default function Maintenance({
     } catch (e) { }
   }, [erpnextConfig]);
 
+  // useEffect(() => {
+  //   setLocalSchedules(schedules);
+  // }, [schedules]);
   useEffect(() => {
-    if (schedules && schedules.length > 0) setLocalSchedules(schedules);
-    else fetchSchedules();
-  }, [schedules]);
+  fetchSchedules();
+}, [fetchSchedules]);
 
   useEffect(() => {
     setTechProfiles(employees.length > 0 ? employees.map(emp => ({
@@ -3655,7 +3660,7 @@ export default function Maintenance({
     const customerName = tenantObj ? tenantObj.name : schedCustomer;
     const payload = {
       customer: schedCustomer, customer_name: customerName, transaction_date: schedTransDate,
-      custom_booking_id: schedBookingId, custom_property: schedProperty, status: 'Draft',
+      custom_booking_id: schedBookingId, custom_property: schedProperty, status: 'Draft',custom_maintenance_schedule:custom_maintenance_schedule,
       items: schedItems.map(r => ({ item_code: r.itemCode, item_name: r.itemName || r.itemCode, start_date: r.startDate, periodicity: r.periodicity, no_of_visits: Number(r.noOfVisits) || 1, end_date: r.endDate }))
     };
     try {
@@ -3789,6 +3794,128 @@ export default function Maintenance({
     }
   };
 
+  const handleSchedCustomerChange = async (customerName) => {
+
+  setSchedCustomer(customerName);
+
+  if (!customerName || !erpnextConfig?.url) {
+    return;
+  }
+
+  try {
+
+    const filters = encodeURIComponent(
+      JSON.stringify([
+        ["customer", "=", customerName],
+        ["docstatus", "=", 1]
+      ])
+    );
+
+    const url =
+      `${erpnextConfig.url}/api/resource/Booking` +
+      `?filters=${filters}` +
+      `&limit_page_length=200` +
+      `&order_by=creation desc`;
+
+    console.log("Customer:", customerName);
+    console.log("URL:", url);
+
+    const res = await fetch(url, {
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json"
+      }
+    });
+
+    const json = await res.json();
+
+    console.log("Response:", json);
+
+    if (!res.ok) {
+      throw new Error(
+        json.exception ||
+        json.exc_type ||
+        "Booking API failed"
+      );
+    }
+
+    const bookings = json.data || [];
+
+    if (!bookings.length) {
+      frappe.msgprint(
+        `No submitted booking found for ${customerName}`
+      );
+      return;
+    }
+
+    // Latest booking
+    const booking = bookings[0];
+
+    setSchedBookingId(booking.name);
+    setBookingDetails(booking);
+
+    // Fetch complete booking document
+    const detailRes = await fetch(
+      `${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(booking.name)}`,
+      {
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    const detailJson = await detailRes.json();
+
+    if (!detailRes.ok) {
+      throw new Error(
+        detailJson.exception ||
+        "Unable to fetch complete booking details"
+      );
+    }
+
+    const fullBooking = detailJson.data;
+
+    setBookingDetails(fullBooking);
+
+    // Commercial units only
+    const commercialItems = (fullBooking.booking_item || [])
+      .filter(item => item.unit_group === "Commercial");
+
+    const scheduleItems = commercialItems.map(item => ({
+      itemCode: item.item_code,
+      itemName: item.item_code,
+      startDate: fullBooking.start_date || "",
+      periodicity: "",
+      noOfVisits: 1,
+      endDate: fullBooking.end_date || ""
+    }));
+
+    setSchedItems(
+      scheduleItems.length
+        ? scheduleItems
+        : [{
+            itemCode: "",
+            itemName: "",
+            startDate: fullBooking.start_date || "",
+            periodicity: "",
+            noOfVisits: 1,
+            endDate: fullBooking.end_date || ""
+          }]
+    );
+
+  } catch (error) {
+
+    console.error("Customer Booking Error:", error);
+
+    frappe.msgprint({
+      title: __("Error"),
+      indicator: "red",
+      message: error.message
+    });
+  }
+};
+
   const handleConsumeItemSubmit = (e) => {
     e.preventDefault();
     if (!selectedWorkOrder) return;
@@ -3895,7 +4022,7 @@ export default function Maintenance({
                         return (
                           <tr key={sch.name} onClick={() => setSelectedSchedule(sch)} style={{ cursor: 'pointer', backgroundColor: selectedSchedule?.name === sch.name ? 'var(--bg-accent-alpha)' : '' }}>
                             <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{sch.name}</td>
-                            <td><span className="badge badge-secondary" style={{ textTransform: 'none' }}>{sch.type || 'PM Schedule'}</span></td>
+                            <td><span className="badge badge-secondary" style={{ textTransform: 'none' }}>{sch.custom_maintenance_schedule || 'PM Schedule'}</span></td>
                             <td>{sch.customer_name || sch.customer}</td>
                             <td>{getPropertyNameById(sch.custom_property)}</td>
                             <td>{firstItem ? firstItem.periodicity : '—'}</td>
@@ -3992,10 +4119,11 @@ export default function Maintenance({
                   <button onClick={() => setSelectedSchedule(null)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={16} /></button>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
-                  <div>Type: <strong>{selectedSchedule.type || '—'}</strong></div>
+                  <div>Type: <strong>{selectedSchedule.custom_maintenance_schedule ||'PM Schedule'}</strong></div>
                   <div>Property: <strong>{getPropertyNameById(selectedSchedule.custom_property)}</strong></div>
                   <div>Tenant: <strong>{selectedSchedule.customer_name || selectedSchedule.customer}</strong></div>
                   <div>Date: <strong>{selectedSchedule.transaction_date}</strong></div>
+                  {/* <div>Task Id: <strong>{selectedSchedule.type || '—'}</strong></div> */}
                   <div>Status: <span className={`badge ${isScheduleSubmitted(selectedSchedule) ? 'badge-info' : 'badge-warning'}`}>{selectedSchedule.status || 'Draft'}</span></div>
                 </div>
 
@@ -4215,24 +4343,48 @@ export default function Maintenance({
                 )}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Booking ID</label>
-                    <select value={schedBookingId} onChange={(e) => handleSchedBookingChange(e.target.value)} className="form-select" required disabled={submittingSchedule} style={{ fontSize: 13, boxSizing: 'border-box' }}>
+                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Customer Name</label>
+                    {/* <select value={schedBookingId} onChange={(e) => handleSchedBookingChange(e.target.value)} className="form-select" required disabled={submittingSchedule} style={{ fontSize: 13, boxSizing: 'border-box' }}>
                       <option value="">-- Choose Booking --</option>
                       {bookings.length === 0 ? (
                         <option value="" disabled>{erpnextConfig?.url ? 'Loading bookings...' : 'ERPNext URL not configured'}</option>
                       ) : bookings.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
+                    </select> */}
+                    <select className="form-select" required 
+                      value={schedCustomer}
+                      onChange={(e) => handleSchedCustomerChange(e.target.value)}
+                    >
+                      <option value="">-- Choose Customer --</option>
+
+                      {tenants.map(customer => (
+                        <option
+                          key={customer.name}
+                          value={customer.name}
+                        >
+                          {customer.customer_name || customer.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                     <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Customer Name</label>
-                    <input type="text" value={bookingDetails?.customer_name || bookingDetails?.customer || tenants.find(t => t.id === schedCustomer)?.name || ''} readOnly className="form-input" disabled style={{ fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-secondary)' }} />
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Customer Name</label>
-                    <input type="text" value={bookingDetails?.customer_name || bookingDetails?.customer || tenants.find(t => t.id === schedCustomer)?.name || ''} readOnly className="form-input" disabled style={{ fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-secondary)' }} />
+                    {/* <input type="text" value={bookingDetails?.customer_name || bookingDetails?.customer || tenants.find(t => t.id === schedCustomer)?.name || ''} readOnly className="form-input" disabled style={{ fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-secondary)' }} /> */}
                   </div>
                 </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Maintainance Type</label>
+                     <select className="form-select" required
+                     value={custom_maintenance_schedule}
+                     onChange={(e) => handlemaintenanceChange(e.target.value)}
+                    >
+                        <option value="">-- Select Type --</option>
 
+                        <option value="Scheduled Maintenance">Scheduled Maintenance</option>  
+                        <option value="Adhoc Maintenance">Adhoc Maintenance</option>                    
+                    </select>
+                  </div>
+                </div>
                 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px 16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
