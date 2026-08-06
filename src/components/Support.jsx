@@ -36,7 +36,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   const [selectedTicketId, setSelectedTicketId] = useState(tickets[0]?.id || null);
   const [commTab, setCommTab] = useState('public'); // 'public', 'internal', 'emails', 'history'
   const [issueViewMode, setIssueViewMode] = useState('list'); // 'list', 'kanban'
-  
+
   // Create Issue Modal Form States
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [issueSubject, setIssueSubject] = useState('');
@@ -46,19 +46,19 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   const [issuePriority, setIssuePriority] = useState('Medium');
   const [issueDescription, setIssueDescription] = useState('');
   const [issueCompany, setIssueCompany] = useState('CARPENTERS PROPERTIES PTE LIMITED');
-  
+
   // Custom Upgrades form fields
   const [issueSubcategory, setIssueSubcategory] = useState('Leakage');
   const [preferredVisitDate, setPreferredVisitDate] = useState('2026-06-18');
   const [isEmergency, setIsEmergency] = useState(false);
-  
+
   // New Booking & Issue List fields states
   const [bookingOptions, setBookingOptions] = useState([]);
   const [loadingBookings, setLoadingBookings] = useState(false);
   const [selectedBookingNumber, setSelectedBookingNumber] = useState('');
   const [selectedIssueList, setSelectedIssueList] = useState('Utilities & Infrastructure Issues List');
   const [issueListRows, setIssueListRows] = useState([]);
-  
+
   // Submit status & validation message states
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -71,7 +71,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   const [localTickets, setLocalTickets] = useState(tickets);
   const [messageText, setMessageText] = useState('');
   const [isListening, setIsListening] = useState(false);
-  
+
   // Tinni AI Chat State
   const [tinniMessages, setTinniMessages] = useState([
     { sender: 'tinni', text: "Hello! I am Tinni, your Carpenters Estate AI Assistant. Ask me anything about lease standards, maintenance rosters, or billing rules!", timestamp: 'Just now' }
@@ -88,6 +88,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
     if (tickets.length > 0 && !selectedTicketId) {
       setSelectedTicketId(tickets[0].id);
     }
+    console.log("List of support tickets from ERPNext:", tickets);
   }, [tickets]);
 
   useEffect(() => {
@@ -219,7 +220,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
     const dateRaised = new Date(ticket.dateRaised || '2026-06-16');
     const deadline = new Date(dateRaised.getTime() + target.resolution * 60 * 60 * 1000);
     const now = new Date('2026-06-16T20:25:00'); // current mock time
-    
+
     const diffMs = deadline - now;
     if (diffMs < 0 || ticket.status === 'closed' || ticket.status === 'resolved') {
       return (
@@ -228,7 +229,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
         </span>
       );
     }
-    
+
     const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
     const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
     return (
@@ -265,9 +266,9 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
 
     setLocalTickets(prev => prev.map(t => {
       if (t.id === ticketId) {
-        return { 
-          ...t, 
-          status: displayStatus, 
+        return {
+          ...t,
+          status: displayStatus,
           lastUpdated: 'Just now',
           messages: [
             ...t.messages,
@@ -342,9 +343,9 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
           lastUpdated: 'Just now',
           messages: [
             ...t.messages,
-            { 
-              sender: 'admin', 
-              text: messageText + fileMsgText, 
+            {
+              sender: 'admin',
+              text: messageText + fileMsgText,
               timestamp: 'Just now',
               is_internal: isInternal
             }
@@ -365,6 +366,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   const handleCreateIssueSubmit = async (e) => {
     e.preventDefault();
     if (!issueSubject || !issueCustomer || !issueRaisedBy) return;
+    console.log("DocType name where the issue is getting created:", "Issue");
     setSubmitting(true);
     setErrorMsg('');
 
@@ -464,8 +466,8 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
     if (pagesCount <= 1) return null;
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12, padding: '12px 16px', borderTop: '1px solid var(--border-color)' }}>
-        <button 
-          className="btn btn-secondary btn-sm" 
+        <button
+          className="btn btn-secondary btn-sm"
           disabled={currentPage === 1}
           onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
           style={{ padding: '4px 8px', fontSize: 11 }}
@@ -475,8 +477,8 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
         <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
           Page {currentPage} of {pagesCount}
         </span>
-        <button 
-          className="btn btn-secondary btn-sm" 
+        <button
+          className="btn btn-secondary btn-sm"
           disabled={currentPage === pagesCount}
           onClick={() => setCurrentPage(prev => Math.min(prev + 1, pagesCount))}
           style={{ padding: '4px 8px', fontSize: 11 }}
@@ -512,7 +514,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
       {/* TAB 1: ROLE-BASED DASHBOARD */}
       {activeTab === 'dashboard' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          
+
           {/* Dashboard Switcher */}
           <div className="card-panel" style={{ display: 'flex', justifyContent: 'center', padding: '10px', gap: 8, flexWrap: 'wrap' }}>
             <button className={`btn btn-sm ${dashboardRole === 'tenant' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setDashboardRole('tenant')}>
@@ -625,7 +627,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                   <div className="stat-value">$18,450</div>
                 </div>
               </div>
-              
+
               <div className="grid-2col">
                 <div className="card-panel">
                   <h3 style={{ fontSize: 14, marginBottom: 12 }}>SLA Compliance Monitoring</h3>
@@ -730,25 +732,25 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
               <div className="card-panel" style={{ padding: 0, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border-color)', marginBottom: 10 }}>
                   <h3 style={{ fontSize: '0.95rem', margin: 0 }}>Open Issues ({openTickets.length})</h3>
-                  <button 
-                    className="btn btn-primary btn-sm" 
+                  <button
+                    className="btn btn-primary btn-sm"
                     style={{ padding: '6px 12px', fontSize: 11 }}
                     onClick={() => setShowCreateModal(true)}
                   >
                     Create Issue
                   </button>
                 </div>
-                
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8, overflowY: 'auto', maxHeight: 420 }}>
                   {currentItems.map(ticket => {
                     const isSelected = selectedTicketId === ticket.id;
                     return (
-                      <div 
-                        key={ticket.id} 
+                      <div
+                        key={ticket.id}
                         onClick={() => setSelectedTicketId(ticket.id)}
-                        style={{ 
-                          padding: 12, 
-                          backgroundColor: isSelected ? 'var(--bg-accent-alpha)' : 'var(--bg-tertiary)', 
+                        style={{
+                          padding: 12,
+                          backgroundColor: isSelected ? 'var(--bg-accent-alpha)' : 'var(--bg-tertiary)',
                           border: `1px solid ${isSelected ? 'var(--brand-color)' : 'var(--border-color)'}`,
                           borderRadius: 'var(--radius-md)',
                           cursor: 'pointer',
@@ -785,18 +787,18 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                           Tenant: {selectedTicket.tenantName} | Date: {selectedTicket.dateRaised}
                         </div>
                       </div>
-                      
+
                       {/* Convert controls */}
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <button 
+                        <button
                           className="btn btn-secondary btn-sm"
                           style={{ padding: '5px 10px', fontSize: 10 }}
                           onClick={() => handleConvertToMaintenance(selectedTicket)}
                         >
                           Convert to Maintenance Schedule
                         </button>
-                        <select 
-                          value={selectedTicket.status} 
+                        <select
+                          value={selectedTicket.status}
                           onChange={(e) => handleStatusChange(selectedTicket.id, e.target.value)}
                           className="form-select"
                           style={{ padding: '4px 8px', fontSize: 10, width: 110 }}
@@ -813,16 +815,16 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                     {/* Sub Tab Selector for Thread Details */}
                     <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-tertiary)' }}>
                       {['public', 'internal', 'emails', 'history'].map(t => (
-                        <button 
+                        <button
                           key={t}
                           onClick={() => setCommTab(t)}
-                          style={{ 
-                            flex: 1, 
-                            padding: '10px 0', 
-                            fontSize: 11, 
-                            fontWeight: 600, 
-                            border: 'none', 
-                            background: 'none', 
+                          style={{
+                            flex: 1,
+                            padding: '10px 0',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            border: 'none',
+                            background: 'none',
                             color: commTab === t ? 'var(--brand-color)' : 'var(--text-secondary)',
                             borderBottom: commTab === t ? '2px solid var(--brand-color)' : 'none',
                             cursor: 'pointer'
@@ -889,21 +891,21 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                     {(commTab === 'public' || commTab === 'internal') && (
                       <form onSubmit={handleSendAdminMessage} style={{ padding: 12, borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             value={messageText}
                             onChange={(e) => setMessageText(e.target.value)}
-                            placeholder={isInternal ? "Type internal comment..." : "Type public comment response..."} 
-                            className="form-input" 
+                            placeholder={isInternal ? "Type internal comment..." : "Type public comment response..."}
+                            className="form-input"
                             style={{ flex: 1 }}
                           />
                           <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 6, border: '1px solid var(--border-color)', margin: 0 }}>
                             <Paperclip size={14} style={{ color: attachedFile ? 'var(--brand-color)' : 'var(--text-secondary)' }} />
-                            <input 
-                              type="file" 
+                            <input
+                              type="file"
                               id="comment-file-input"
-                              style={{ display: 'none' }} 
-                              onChange={(e) => setAttachedFile(e.target.files[0])} 
+                              style={{ display: 'none' }}
+                              onChange={(e) => setAttachedFile(e.target.files[0])}
                             />
                             {attachedFile && <span style={{ fontSize: 10, marginLeft: 4, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{attachedFile.name}</span>}
                           </label>
@@ -913,17 +915,17 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer', color: 'var(--text-secondary)' }}>
-                            <input 
-                              type="checkbox" 
-                              checked={isInternal} 
-                              onChange={(e) => setIsInternal(e.target.checked)} 
+                            <input
+                              type="checkbox"
+                              checked={isInternal}
+                              onChange={(e) => setIsInternal(e.target.checked)}
                             />
                             Internal Comment (Invisible to Tenant)
                           </label>
                           {attachedFile && (
-                            <button 
-                              type="button" 
-                              className="btn btn-secondary btn-sm" 
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
                               onClick={() => {
                                 setAttachedFile(null);
                                 const fileInput = document.getElementById('comment-file-input');
@@ -956,8 +958,8 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                   return tStatus === colStatus;
                 });
                 return (
-                  <div 
-                    key={status} 
+                  <div
+                    key={status}
                     onDragOver={handleDragOver}
                     onDrop={(e) => handleDrop(e, status)}
                     style={{ background: 'var(--bg-tertiary)', padding: 10, borderRadius: 8 }}
@@ -967,9 +969,9 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                     </h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       {statusTickets.map(t => (
-                        <div 
-                          key={t.id} 
-                          draggable 
+                        <div
+                          key={t.id}
+                          draggable
                           onDragStart={(e) => handleDragStart(e, t.id)}
                           onClick={() => { setSelectedTicketId(t.id); setIssueViewMode('list'); }}
                           style={{ background: 'var(--bg-secondary)', padding: 8, borderRadius: 6, border: '1px solid var(--border-color)', cursor: 'grab', fontSize: 11 }}
@@ -985,7 +987,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
               })}
             </div>
           )
-}
+          }
         </div>
       )}
 
@@ -1018,8 +1020,8 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
           </div>
 
           <form onSubmit={handleSendTinni} style={{ padding: 12, borderTop: '1px solid var(--border-color)', display: 'flex', gap: 8 }}>
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={tinniInput}
               onChange={(e) => setTinniInput(e.target.value)}
               placeholder="Ask Tinni anything..."

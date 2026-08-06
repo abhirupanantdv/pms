@@ -2253,7 +2253,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
   const [viewLayout, setViewLayout] = useState('standard'); // 'standard' | 'three-column'
   const [selectedUnitId, setSelectedUnitId] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 20;
+  const itemsPerPage = selectedProp ? 6 : 10;
 
   // ERPNext Integration States
   const [detailedProp, setDetailedProp] = useState(null);
@@ -2604,6 +2604,10 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     return matchesFilter && matchesSearch;
   });
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filteredProperties.length]);
+
   const totalPages = Math.ceil(filteredProperties.length / itemsPerPage);
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
@@ -2612,41 +2616,28 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
   const renderPaginationControls = () => {
     if (totalPages <= 1) return null;
     return (
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 13, color: 'var(--text-secondary)', background: 'var(--bg-card)' }}>
-        <div>
-          Showing <strong>{indexOfFirstItem + 1}</strong> to <strong>{Math.min(indexOfLastItem, filteredProperties.length)}</strong> of <strong>{filteredProperties.length}</strong> entries
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-card)', flexShrink: 0 }}>
+        <button
+          type="button"
+          disabled={currentPage === 1}
+          onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+          className="btn btn-secondary"
+          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', minWidth: 60 }}
+        >
+          Previous
+        </button>
+        <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+          Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong>
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button
-            type="button"
-            disabled={currentPage === 1}
-            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-            className="btn btn-secondary"
-            style={{ padding: '6px 12px', fontSize: 12, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
-          >
-            Previous
-          </button>
-          {[...Array(totalPages)].map((_, i) => (
-            <button
-              type="button"
-              key={i + 1}
-              onClick={() => setCurrentPage(i + 1)}
-              className={`btn ${currentPage === i + 1 ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '6px 12px', fontSize: 12 }}
-            >
-              {i + 1}
-            </button>
-          ))}
-          <button
-            type="button"
-            disabled={currentPage === totalPages}
-            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-            className="btn btn-secondary"
-            style={{ padding: '6px 12px', fontSize: 12, opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}
-          >
-            Next
-          </button>
-        </div>
+        <button
+          type="button"
+          disabled={currentPage === totalPages}
+          onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+          className="btn btn-secondary"
+          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', minWidth: 60 }}
+        >
+          Next
+        </button>
       </div>
     );
   };
@@ -2682,10 +2673,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         ? showUiFields.includes(key)
         : (!blacklist.includes(key.toLowerCase()) && !blacklist.includes(kLower));
 
-      if (isAllowed) {
+      const val = details[key];
+      if (isAllowed && val !== null && typeof val !== 'object') {
         fields.push({
           label: key.replace(/^custom_/, '').replace(/_custom_/gi, '_').replace(/custom/gi, '').replace(/_/g, ' ').trim(),
-          value: String(details[key])
+          value: String(val)
         });
       }
     });

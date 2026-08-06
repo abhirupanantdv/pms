@@ -2200,6 +2200,10 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
   const [bookings, setBookings] = useState([]);
   const [selectedBookingId, setSelectedBookingId] = useState(null);
   const [selectedBookingDetails, setSelectedBookingDetails] = useState(null);
+  const [currency, setCurrency] = useState('FJD');
+  const [editStartDate, setEditStartDate] = useState('');
+  const [editEndDate, setEditEndDate] = useState('');
+  const [updatingDates, setUpdatingDates] = useState(false);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -2252,7 +2256,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const itemsPerPage = selectedBookingId ? 6 : 10;
 
   // Initial mock data if connection fails or starts empty
   const mockBookings = [
@@ -2366,7 +2370,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
         try {
           // Attempt standard resource API first
           setSyncStatus('Syncing via ERPNext REST Resource API...');
-          let resourceUrl = `${erpnextConfig.url}/api/resource/Booking?fields=["name","custom_contract","booking_date","customer","customer_name","booking_type","status","workflow_state","payment_status","booking_amount","paid_amount","pending_amount","starting_date","ending_date","country","property","quotation","booking_item"]&limit_page_length=200&order_by=creation%20desc`;
+          let resourceUrl = `${erpnextConfig.url}/api/resource/Booking?fields=["name","custom_contract","booking_date","customer","customer_name","customer_email","booking_type","status","workflow_state","payment_status","booking_amount","paid_amount","pending_amount","starting_date","ending_date","country","property","quotation","booking_item"]&limit_page_length=200&order_by=creation%20desc`;
           if (cust) {
             resourceUrl += `&filters=[["Booking","customer","=","${cust}"]]`;
           }
@@ -2408,6 +2412,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
         }
       }
 
+      console.log('Fetched bookings first item keys and data:', dataList[0] ? Object.keys(dataList[0]) : [], dataList[0]);
       console.log('Fetched bookings:', dataList);
       if (Array.isArray(dataList) && dataList.length > 0) {
         setBookings(dataList);
@@ -2509,6 +2514,62 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
       }));
     } finally {
       setLoadingDetails(false);
+    }
+  };
+
+  const handleUpdateBookingDates = async () => {
+    if (!editStartDate || !editEndDate) {
+      showToast('error', 'Start Date and End Date are required.');
+      return;
+    }
+
+    const start = new Date(editStartDate);
+    const end = new Date(editEndDate);
+    const oneYearLater = new Date(start);
+    oneYearLater.setFullYear(start.getFullYear() + 1);
+
+    if (end < oneYearLater) {
+      showToast('error', 'Booking period must be at least 1 year.');
+      return;
+    }
+
+    setUpdatingDates(true);
+    try {
+      if (!erpnextConfig || !erpnextConfig.url) {
+        setSelectedBookingDetails(prev => prev ? {
+          ...prev,
+          starting_date: editStartDate,
+          ending_date: editEndDate
+        } : prev);
+        setBookings(prev => prev.map(b => (b.name === selectedBookingDetails.name || b.id === selectedBookingDetails.name) ? { ...b, starting_date: editStartDate, ending_date: editEndDate } : b));
+        showToast('success', 'Booking dates updated locally.');
+        return;
+      }
+
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${selectedBookingDetails.name}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': getCsrfToken()
+        },
+        body: JSON.stringify({
+          starting_date: editStartDate,
+          ending_date: editEndDate
+        })
+      });
+
+      if (res.ok) {
+        showToast('success', 'Booking dates updated successfully.');
+        await fetchBookingDetails(selectedBookingDetails.name);
+      } else {
+        const text = await res.text();
+        showToast('error', `Failed to update dates: ${text}`);
+      }
+    } catch (err) {
+      showToast('error', `Error updating dates: ${err.message}`);
+    } finally {
+      setUpdatingDates(false);
     }
   };
 
@@ -2703,11 +2764,43 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
   }, [erpnextConfig]);
 
   useEffect(() => {
+    if (!erpnextConfig || !erpnextConfig.url) return;
+    const fetchCompanyCurrency = async () => {
+      try {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Company/CARPENTERS PROPERTIES PTE LIMITED`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (res.ok) {
+          const json = await res.json();
+          const doc = json.data || json;
+          if (doc.default_currency) {
+            setCurrency(doc.default_currency);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed fetching company details for currency:', err);
+      }
+    };
+    fetchCompanyCurrency();
+  }, [erpnextConfig]);
+
+  useEffect(() => {
     if (initialSearchTerm) {
       setSearchTerm(initialSearchTerm);
       setCurrentPage(1);
     }
   }, [initialSearchTerm]);
+
+  useEffect(() => {
+    if (selectedBookingDetails) {
+      setEditStartDate(selectedBookingDetails.starting_date || selectedBookingDetails.start_date || '');
+      setEditEndDate(selectedBookingDetails.ending_date || selectedBookingDetails.end_date || '');
+    } else {
+      setEditStartDate('');
+      setEditEndDate('');
+    }
+  }, [selectedBookingDetails]);
 
   // Handle Form Input Changes
   const handleInputChange = (fieldname, value) => {
@@ -2829,6 +2922,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
       (b.name && b.name.toLowerCase().includes(term)) ||
       (b.customer && b.customer.toLowerCase().includes(term)) ||
       (b.customer_name && b.customer_name.toLowerCase().includes(term)) ||
+      (b.customer_email && b.customer_email.toLowerCase().includes(term)) ||
       (b.property && b.property.toLowerCase().includes(term)) ||
       (b.country && b.country.toLowerCase().includes(term)) ||
       (b.quotation && String(b.quotation).toLowerCase().includes(term)) ||
@@ -2841,11 +2935,63 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
     return matchSearch && matchStatus && matchType;
   });
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filteredBookings.length]);
+
   // Pagination slice
   const totalPages = Math.ceil(filteredBookings.length / itemsPerPage);
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentItems = filteredBookings.slice(indexOfFirstItem, indexOfLastItem);
+
+  const fetchBookingDetailsSilently = async (id) => {
+    if (!erpnextConfig || !erpnextConfig.url) return;
+    try {
+      let details = null;
+      try {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${id}`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (res.ok) {
+          const json = await res.json();
+          details = json.data;
+        }
+      } catch (resourceErr) {
+        try {
+          const res = await fetch(`${erpnextConfig.url}/api/method/erpnext.api.booking.get_booking_details?booking_id=${id}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (res.ok) {
+            const json = await res.json();
+            details = json.message || json.data;
+          }
+        } catch (customErr) { }
+      }
+
+      if (details) {
+        const normalizedItems = normalizeBookingItems(details);
+        setBookings(prev => prev.map(b => {
+          const bookingId = b.name || b.id;
+          return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
+        }));
+      }
+    } catch (err) {
+      console.warn('Silent fetch failed:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (!currentItems || currentItems.length === 0) return;
+    currentItems.forEach(b => {
+      const id = b.name || b.id;
+      if (id && !b.booking_item) {
+        fetchBookingDetailsSilently(id);
+      }
+    });
+  }, [currentPage, bookings]);
 
   const isBookingApproved = selectedBookingDetails && (
     selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.workflow_state === 'Approved'
@@ -3084,31 +3230,27 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                     <td>
                       <div style={{ fontWeight: 600 }}>{b.customer_name || b.customer}</div>
                       <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{b.customer_email || 'No email'}</div>
-                    </td>                
-<td>
-  {Array.isArray(b.booking_item) &&
-  b.booking_item.filter(item => item.unit_group === "Commercial").length > 0 ? (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-      {b.booking_item
-        .filter(item => item.unit_group === "Commercial")
-        .map((item, index) => (
-          <span
-            key={`${b.name || b.id}-${item.name || item.item_code || index}`}
-            className="badge badge-secondary"
-            style={{
-              whiteSpace: "normal",
-              textTransform: "none",
-              lineHeight: 1.3
-            }}
-          >
-            {item.item_code}
-          </span>
-        ))}
-    </div>
-  ) : (
-    <span style={{ color: "var(--text-muted)" }}>Not specified</span>
-  )}
-</td>           <td>
+                    </td>
+                    <td>
+                      {Array.isArray(b.booking_item) && b.booking_item.length > 0 ? (
+                        <span
+                          className="badge badge-secondary"
+                          style={{
+                            whiteSpace: "normal",
+                            textTransform: "none",
+                            lineHeight: 1.3
+                          }}
+                        >
+                          {b.booking_item[0].item_code}
+                        </span>
+                      ) : b.property ? (
+                        <span className="badge badge-secondary" style={{ textTransform: 'none' }}>
+                          {b.property}
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)" }}>Not specified</span>
+                      )}
+                    </td>           <td>
                       <span className="badge badge-secondary" style={{ textTransform: 'none' }}>
                         {b.custom_contract || b.contract || 'N/A'}
                       </span>
@@ -3142,38 +3284,28 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
 
           {/* Pagination controls */}
           {totalPages > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 13, color: 'var(--text-secondary)' }}>
-              <div>
-                Showing <strong>{indexOfFirstItem + 1}</strong> to <strong>{Math.min(indexOfLastItem, filteredBookings.length)}</strong> of <strong>{filteredBookings.length}</strong> bookings
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-card)', flexShrink: 0 }}>
+              <button
+                type="button"
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+                className="btn btn-secondary"
+                style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', minWidth: 60 }}
+              >
+                Previous
+              </button>
+              <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  disabled={currentPage === 1}
-                  onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-                  className="btn btn-secondary"
-                  style={{ padding: '4px 10px', fontSize: 12 }}
-                >
-                  Prev
-                </button>
-                {[...Array(totalPages)].map((_, i) => (
-                  <button
-                    key={i + 1}
-                    onClick={() => setCurrentPage(i + 1)}
-                    className={`btn ${currentPage === i + 1 ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ padding: '4px 10px', fontSize: 12 }}
-                  >
-                    {i + 1}
-                  </button>
-                ))}
-                <button
-                  disabled={currentPage === totalPages}
-                  onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-                  className="btn btn-secondary"
-                  style={{ padding: '4px 10px', fontSize: 12 }}
-                >
-                  Next
-                </button>
-              </div>
+              <button
+                type="button"
+                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+                className="btn btn-secondary"
+                style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', minWidth: 60 }}
+              >
+                Next
+              </button>
             </div>
           )}
         </div>
@@ -3236,23 +3368,63 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Start Date:</span>
-                    <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.starting_date || selectedBookingDetails.start_date || 'N/A'}</strong>
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>End Date:</span>
-                    <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.ending_date || selectedBookingDetails.end_date || 'N/A'}</strong>
-                  </div>
+                  {(() => {
+                    const isWaitingForContractSubmit = selectedBookingDetails.workflow_state === 'Waiting For Contract Submit' || selectedBookingDetails.status === 'Waiting For Contract Submit';
+                    if (isWaitingForContractSubmit) {
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 10 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: 'var(--text-muted)' }}>Start Date:</span>
+                            <input
+                              type="date"
+                              value={editStartDate}
+                              onChange={(e) => setEditStartDate(e.target.value)}
+                              className="form-input"
+                              style={{ width: '150px', fontSize: 12, padding: '4px 8px' }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: 'var(--text-muted)' }}>End Date:</span>
+                            <input
+                              type="date"
+                              value={editEndDate}
+                              onChange={(e) => setEditEndDate(e.target.value)}
+                              className="form-input"
+                              style={{ width: '150px', fontSize: 12, padding: '4px 8px' }}
+                            />
+                          </div>
+                          <button
+                            onClick={handleUpdateBookingDates}
+                            disabled={updatingDates}
+                            className="btn btn-sm btn-primary"
+                            style={{ alignSelf: 'flex-end', marginTop: 4, padding: '4px 12px', fontSize: 11 }}
+                          >
+                            {updatingDates ? 'Updating...' : 'Update Dates'}
+                          </button>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
+                            <span style={{ color: 'var(--text-muted)' }}>Start Date:</span>
+                            <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.starting_date || selectedBookingDetails.start_date || 'N/A'}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
+                            <span style={{ color: 'var(--text-muted)' }}>End Date:</span>
+                            <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.ending_date || selectedBookingDetails.end_date || 'N/A'}</strong>
+                          </div>
+                        </>
+                      );
+                    }
+                  })()}
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
                     <span style={{ color: 'var(--text-muted)' }}>Total Days:</span>
-                    <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.total_days || selectedBookingDetails.total_days || 'N/A'}</strong>
-                    {/* <strong style={{ color: 'var(--text-secondary)' }}>
+                    <strong style={{ color: 'var(--text-secondary)' }}>
                       {(() => {
-                        const start = selectedBookingDetails.starting_date || selectedBookingDetails.start_date;
-                        const end = selectedBookingDetails.ending_date || selectedBookingDetails.end_date;
+                        const start = editStartDate;
+                        const end = editEndDate;
                         if (start && end) {
                           const startDate = new Date(start);
                           const endDate = new Date(end);
@@ -3264,7 +3436,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                         }
                         return selectedBookingDetails.total_days || 'N/A';
                       })()}
-                    </strong> */}
+                    </strong>
                   </div>
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
@@ -3287,6 +3459,37 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                     <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.payment_method || 'Cash'}</strong>
                   </div>
                 </div>
+
+                {/* BOOKING ITEMS TABLE */}
+                {selectedBookingDetails.booking_item && selectedBookingDetails.booking_item.length > 0 && (
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 4, overflow: 'hidden', marginTop: 4 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                      <thead>
+                        <tr style={{ background: '#1f2937', color: '#ffffff', borderBottom: '1px solid #374151' }}>
+                          <th style={{ padding: '8px 10px', color: '#ffffff' }}>Unit Name</th>
+                          <th style={{ padding: '8px 10px', color: '#ffffff' }}>Billing Cycle</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'right', color: '#ffffff' }}>Amount ({currency})</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedBookingDetails.booking_item.map((item, idx) => {
+                          const amtVal = item.amount !== undefined && item.amount !== null
+                            ? parseFloat(item.amount)
+                            : ((parseFloat(item.qty) || 1) * (parseFloat(item.rate) || 0));
+                          return (
+                            <tr key={idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                              <td style={{ padding: '8px 10px', color: '#374151', fontWeight: 600 }}>{item.item_name || item.item_code}</td>
+                              <td style={{ padding: '8px 10px', color: '#4b5563' }}>{item.uom || 'Month'}</td>
+                              <td style={{ padding: '8px 10px', textAlign: 'right', color: '#111827', fontWeight: 600 }}>
+                                ${amtVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
 
                 {/* Account Balances Section */}
                 <div style={{ background: 'var(--bg-tertiary)', padding: 14, borderRadius: 8, marginTop: 4 }}>
@@ -3333,9 +3536,9 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                     }
                     if (erpnextConfig?.url) {
                       // Open the print page for Lease Agreement print format on Contract doctype
-                      const printUrl = `${erpnextConfig.url}/printview?doctype=Contract&name=${encodeURIComponent(contractId)}&format=Lease%20Agreement&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+                      const printUrl = `${erpnextConfig.url}/printview?doctype=Contract&name=${encodeURIComponent(contractId)}&format=Lease%20Agreement%20Contract&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
                       const printWindow = window.open(printUrl, '_blank');
-                      
+
                       if (printWindow) {
                         const injectAndPrint = () => {
                           try {
@@ -3343,10 +3546,10 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                             if (doc) {
                               // Prevent printing window title
                               doc.title = "";
-                              
+
                               if (doc.head) {
                                 if (doc.getElementById('pms-custom-print-style')) return;
-                                
+
                                 const style = doc.createElement('style');
                                 style.id = 'pms-custom-print-style';
                                 style.innerHTML = `
@@ -3377,7 +3580,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                                   }
                                 `;
                                 doc.head.appendChild(style);
-                                
+
                                 // Delay slightly to ensure CSS and title updates are applied before printing
                                 setTimeout(() => {
                                   printWindow.print();
@@ -3419,7 +3622,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
 
 
                 {/* Approve Booking Action */}
-                {/* {!isBookingApproved && (
+                {!isBookingApproved && (
                   <button
                     className="btn btn-primary"
                     onClick={openApproveModal}
@@ -3428,7 +3631,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                     <CheckCircle2 size={14} />
                     Approve Booking
                   </button>
-                )} */}
+                )}
               </div>
             ) : (
               <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>

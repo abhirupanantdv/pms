@@ -1939,11 +1939,11 @@
 
 // export default TaskAssignPanel;
 
-import { useState, useEffect, useRef } from "react";
-import { Plus, Minus, Trash2, Save, RefreshCw, FileText, CheckCircle2, ChevronDown, Search, X } from "lucide-react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { Plus, Minus, Trash2, Save, RefreshCw, FileText, CheckCircle2, ChevronDown, Search, X, Briefcase, Clock } from "lucide-react";
 
 // ---------- Searchable multi-select dropdown (local data — employees / vendors) ----------
-function AssignSearchDropdown({ items = [], selected = [], onToggle, placeholder = "Search…", renderOption }) {
+function AssignSearchDropdown({ items = [], selected = [], onToggle, placeholder = "Search…", renderOption, disabled = false }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const wrapRef = useRef(null);
@@ -1970,13 +1970,13 @@ function AssignSearchDropdown({ items = [], selected = [], onToggle, placeholder
                     {selectedItems.map((item) => (
                         <span key={item.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: "var(--brand-color, #2563eb)", color: "#fff" }}>
                             {item.name}
-                            <X size={10} style={{ cursor: "pointer", opacity: 0.8 }} onClick={() => onToggle?.(item.id)} />
+                            {!disabled && <X size={10} style={{ cursor: "pointer", opacity: 0.8 }} onClick={() => onToggle?.(item.id)} />}
                         </span>
                     ))}
                 </div>
             )}
 
-            <div onClick={() => setOpen((o) => !o)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 10px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: "var(--text-muted)", cursor: "pointer" }}>
+            <div onClick={() => !disabled && setOpen((o) => !o)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 10px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border-color)", background: disabled ? "var(--bg-tertiary)" : "var(--bg-primary)", color: "var(--text-muted)", cursor: disabled ? "not-allowed" : "pointer" }}>
                 <span>{placeholder}</span>
                 <ChevronDown size={13} style={{ transform: open ? "rotate(180deg)" : "none", transition: "0.15s" }} />
             </div>
@@ -2035,12 +2035,16 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
         const t = setTimeout(async () => {
             setLoading(true);
             try {
-                const filters = query ? [["item_code", "like", `%${query}%`]] : [];
+                const filters = [["item_group", "descendants of (inclusive)", "Services"]];
+                if (query) {
+                    filters.push(["item_code", "like", `%${query}%`]);
+                }
                 const res = await fetch(
                     `${erpnextConfig.url}/api/resource/Item?filters=${encodeURIComponent(JSON.stringify(filters))}&fields=${encodeURIComponent(JSON.stringify(["item_code", "item_name"]))}&limit_page_length=20`,
                     { credentials: "include" }
                 );
                 const json = await res.json();
+                console.log("Items (Services) shown in Add Item:", json?.data);
                 setOptions(Array.isArray(json?.data) ? json.data : []);
             } catch (e) { console.error("Item search failed:", e); setOptions([]); }
             finally { setLoading(false); }
@@ -2052,7 +2056,7 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
         <div ref={wrapRef} style={{ position: "relative", flex: 1 }}>
             {/* Trigger — same visual style as AssignSearchDropdown */}
             <div onClick={() => setOpen((o) => !o)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 10px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--bg-primary)", color: selectedLabel ? "var(--text-primary)" : "var(--text-muted)", cursor: "pointer" }}>
-                <span>{selectedLabel || "Select item…"}</span>
+                <span>{selectedLabel || "Select services..."}</span>
                 <ChevronDown size={13} style={{ transform: open ? "rotate(180deg)" : "none", transition: "0.15s" }} />
             </div>
 
@@ -2088,12 +2092,12 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
 }
 
 // ---------- Main component ----------
-function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextConfig, getCsrfToken, showToast, onSaved,aftersucess }) {
+function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextConfig, getCsrfToken, showToast, onSaved, aftersucess }) {
 
     // A task is "locked" (read-only) once it's actually submitted (docstatus 1)
     // OR its status has been set to Completed — either condition disables
     // all editing/assignment/item features and reveals the Quotation actions.
-    const [isLocked,setisLocked] = useState(taskDoc?.docstatus === 1 || taskDoc?.status === "Completed");
+    const [isLocked, setisLocked] = useState(taskDoc?.docstatus === 1 || taskDoc?.status === "Completed");
 
     // ── ASSIGN ──
     const [assignType, setAssignType] = useState("");
@@ -2104,13 +2108,124 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     useEffect(() => { setAssignType((taskDoc?.custom_assign || "").toLowerCase()); }, [taskDoc?.custom_assign]);
     useEffect(() => {
         setSelectedEmpIds((taskDoc?.custom_assign_to_ || []).map((r) => r?.emp_id).filter(Boolean));
-        setSelectedVendorIds((taskDoc?.custom_assign_to_vendor || []).map((r) => r?.vendor_name).filter(Boolean));
+        setSelectedVendorIds((taskDoc?.custom_assign_to_vendor || []).map((r) => r?.vendor_name || r?.vendor).filter(Boolean));
     }, [taskDoc]);
 
     const toggleEmp = (id) => setSelectedEmpIds((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
     const toggleVendor = (id) => setSelectedVendorIds((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
     const empRows = taskDoc?.custom_assign_to_ || [];
     const vendorRows = taskDoc?.custom_assign_to_vendor || [];
+
+    const [assignedVendorDetails, setAssignedVendorDetails] = useState({});
+
+    const vendorNamesStr = vendorRows.map(r => r.vendor_name || r.vendor).filter(Boolean).join(',');
+
+    useEffect(() => {
+        if (!erpnextConfig?.url || vendorRows.length === 0) return;
+
+        const fetchDetails = async () => {
+            const details = {};
+            for (const r of vendorRows) {
+                const vName = r.vendor_name || r.vendor;
+                if (!vName || details[vName]) continue;
+                try {
+                    const res = await fetch(`${erpnextConfig.url}/api/resource/Supplier/${encodeURIComponent(vName)}`, {
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    if (res.ok) {
+                        const json = await res.json();
+                        const doc = json.data || json || {};
+                        console.log("Supplier detailed response in TaskItemsPanel:", doc);
+                        const matchedVendor = vendorDir?.find(v => v.id === vName || v.name === vName);
+                        let contactPerson = doc.custom_contact_person || (doc.supplier_primary_contact ? doc.supplier_primary_contact.split('-')[0].trim() : '') || '';
+                        let email = doc.email_id || doc.owner || '';
+                        let phoneVal = '';
+
+                        // Fetch Contacts linked to this Supplier
+                        let contacts = [];
+                        try {
+                            const contactRes = await fetch(`${erpnextConfig.url}/api/resource/Contact?filters=[["Dynamic Link", "link_doctype", "=", "Supplier"], ["Dynamic Link", "link_name", "=", "${vName}"]]&fields=["name","email_id","phone","first_name","last_name"]`, {
+                                credentials: 'include',
+                                headers: { 'Content-Type': 'application/json' }
+                            });
+                            if (contactRes.ok) {
+                                const contactJson = await contactRes.json();
+                                contacts = contactJson.data || [];
+                                // Fetch detailed contact information for any contact whose first_name is "Jitendra" (child table)
+                                contacts = await Promise.all(contacts.map(async (c) => {
+                                    if (c.first_name === 'Jitendra' && c.name) {
+                                        try {
+                                            const detailRes = await fetch(`${erpnextConfig.url}/api/resource/Contact/${encodeURIComponent(c.name)}`, { credentials: 'include' });
+                                            if (detailRes.ok) {
+                                                const detailJson = await detailRes.json();
+                                                const contactDetails = detailJson?.data || detailJson || {};
+                                                const fetchedPhone = contactDetails.phone || (contactDetails.phone_nos && contactDetails.phone_nos[0]?.phone) || '';
+                                                const fetchedEmail = contactDetails.email_id || (contactDetails.email_ids && contactDetails.email_ids[0]?.email_id) || '';
+                                                return {
+                                                    ...c,
+                                                    phone: fetchedPhone || c.phone,
+                                                    email_id: fetchedEmail || c.email_id
+                                                };
+                                            }
+                                        } catch (err) {
+                                            console.warn('Failed fetching detailed contact info for Jitendra:', err);
+                                        }
+                                    }
+                                    return c;
+                                }));
+                            }
+                        } catch (cErr) {
+                            console.warn("Failed fetching contacts linked to supplier:", cErr);
+                        }
+
+                        if ((!email || !phoneVal) && doc.supplier_primary_contact) {
+                            try {
+                                const contactFilter = JSON.stringify([["name", "=", doc.supplier_primary_contact]]);
+                                const contactFields = JSON.stringify(["name", "email_id", "phone", "mobile_no"]);
+                                const contactRes = await fetch(`${erpnextConfig.url}/api/resource/Contact?filters=${encodeURIComponent(contactFilter)}&fields=${encodeURIComponent(contactFields)}`, {
+                                    credentials: 'include',
+                                    headers: { 'Content-Type': 'application/json' }
+                                });
+                                if (contactRes.ok) {
+                                    const contactJson = await contactRes.json();
+                                    const contactList = contactJson.data || [];
+                                    if (contactList.length > 0) {
+                                        const contactDoc = contactList[0];
+                                        if (contactDoc.email_id) email = contactDoc.email_id;
+                                        if (contactDoc.phone) phoneVal = contactDoc.phone;
+                                        else if (contactDoc.mobile_no) phoneVal = contactDoc.mobile_no;
+                                    }
+                                }
+                            } catch (cErr) {
+                                console.warn("Failed fetching primary contact:", cErr);
+                            }
+                        }
+
+                        if (!contactPerson) contactPerson = matchedVendor?.custom_contact_person || '';
+                        if (!email) email = matchedVendor?.email_id || matchedVendor?.email || '';
+                        if (!phoneVal) phoneVal = matchedVendor?.phone_no || matchedVendor?.phone || '';
+
+                        details[vName] = {
+                            name: doc.supplier_name || doc.name || vName,
+                            contactPerson,
+                            email_id: email,
+                            email,
+                            phone: phoneVal,
+                            contacts,
+                            service_name: doc.service_name || [],
+                            custom_services_list: doc.custom_services_list || []
+                        };
+                    }
+                } catch (err) {
+                    console.warn(`Failed fetching details for vendor ${vName}:`, err);
+                }
+            }
+            setAssignedVendorDetails(prev => ({ ...prev, ...details }));
+        };
+
+        fetchDetails();
+    }, [vendorNamesStr, erpnextConfig]);
 
     const handleReassign = async () => {
         if (isLocked) return;
@@ -2140,6 +2255,55 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     useEffect(() => {
         setItemRows((taskDoc?.custom_items_used_for_maintenance || []).map((r) => ({ name: r?.name, item_code: r?.item_code, item_name: r?.item_name, qty: r?.qty || 1 })));
     }, [taskDoc]);
+
+    const [supplierServices, setSupplierServices] = useState([]);
+
+    useEffect(() => {
+        if (!erpnextConfig?.url) return;
+        fetch(`${erpnextConfig.url}/api/resource/multi-services?fields=%5B%22parent%22%2C%22service_group%22%2C%22services%22%5D&limit_page_length=1000`, { credentials: "include" })
+            .then(res => res.ok ? res.json() : null)
+            .then(json => {
+                if (json && json.data) {
+                    setSupplierServices(json.data);
+                }
+            })
+            .catch(err => console.error("Failed to fetch multi-services:", err));
+    }, [erpnextConfig]);
+
+    const vendorsWithServices = useMemo(() => {
+        return vendorDir.map(vendor => {
+            const services = supplierServices.filter(s => s.parent === vendor.id);
+            return {
+                ...vendor,
+                services_list: services
+            };
+        });
+    }, [vendorDir, supplierServices]);
+
+    const filteredVendorDir = useMemo(() => {
+        if (itemRows.length === 0) {
+            return [];
+        }
+        return vendorsWithServices.filter(vendor => {
+            const vendorServices = vendor.services_list || [];
+            return vendorServices.some(vs => {
+                const serviceGroup = (vs.service_group || '').toLowerCase().trim();
+                const serviceName = (vs.services || '').toLowerCase().trim();
+                return itemRows.some(item => {
+                    const code = (item.item_code || '').toLowerCase().trim();
+                    const name = (item.item_name || '').toLowerCase().trim();
+                    return (
+                        (serviceGroup && (code.includes(serviceGroup) || serviceGroup.includes(code) || name.includes(serviceGroup) || serviceGroup.includes(name))) ||
+                        (serviceName && (code.includes(serviceName) || serviceName.includes(code) || name.includes(serviceName) || serviceName.includes(name)))
+                    );
+                });
+            });
+        });
+    }, [vendorsWithServices, itemRows]);
+
+    const vendorPlaceholder = itemRows.length === 0
+        ? "Please select services first"
+        : `Search & select vendors (${filteredVendorDir.length} matches)…`;
 
     const addItemToList = () => {
         if (isLocked) return;
@@ -2297,6 +2461,82 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     return (
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
 
+            {/* ── SERVICES USED FOR MAINTENANCE SECTION ── */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={sectionLabelStyle}>Services Used for Maintenance</div>
+
+                {/* Items table */}
+                {itemRows.length === 0 ? (
+                    <div style={emptyMsgStyle}>No services added yet.</div>
+                ) : (
+                    <div style={tableWrapStyle}>
+                        <table style={tableStyle}>
+                            <thead><tr style={{ background: "var(--bg-tertiary)" }}>
+                                <th style={thStyle}>Item Code</th>
+                                <th style={thStyle}>Item Name</th>
+                                <th style={thStyle}>Qty</th>
+                                {!isLocked && <th style={thStyle}></th>}
+                            </tr></thead>
+                            <tbody>
+                                {itemRows.map((r, i) => (
+                                    <tr key={r?.name || r?.item_code || i} style={trStyle(i, itemRows.length)}>
+                                        <td style={{ ...tdStyle, color: "var(--brand-color)", fontWeight: 600 }}>{r?.item_code}</td>
+                                        <td style={tdStyle}>{r?.item_name || "—"}</td>
+                                        <td style={tdStyle}>
+                                            {isLocked ? r?.qty : (
+                                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                                    <button type="button" onClick={() => changeRowQty(i, -1)} style={stepperBtnStyle}><Minus size={11} /></button>
+                                                    <span style={{ minWidth: 18, textAlign: "center" }}>{r?.qty}</span>
+                                                    <button type="button" onClick={() => changeRowQty(i, 1)} style={stepperBtnStyle}><Plus size={11} /></button>
+                                                </div>
+                                            )}
+                                        </td>
+                                        {!isLocked && (
+                                            <td style={tdStyle}>
+                                                <button type="button" onClick={() => removeRow(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)" }}>
+                                                    <Trash2 size={13} />
+                                                </button>
+                                            </td>
+                                        )}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {/* Add Item row — hidden when locked */}
+                {!isLocked && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div style={sectionLabelStyle}>Add Services</div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                            <ItemSearchDropdown
+                                erpnextConfig={erpnextConfig}
+                                selectedLabel={pendingItem ? `${pendingItem.item_code}${pendingItem.item_name && pendingItem.item_name !== pendingItem.item_code ? ` — ${pendingItem.item_name}` : ""}` : null}
+                                onSelect={(item) => setPendingItem(item)}
+                            />
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                <button type="button" onClick={() => setPendingQty((q) => Math.max(1, q - 1))} style={stepperBtnStyle}><Minus size={12} /></button>
+                                <span style={{ minWidth: 22, textAlign: "center", fontSize: 12 }}>{pendingQty}</span>
+                                <button type="button" onClick={() => setPendingQty((q) => q + 1)} style={stepperBtnStyle}><Plus size={12} /></button>
+                            </div>
+                            <button type="button" onClick={addItemToList} disabled={!pendingItem}
+                                style={{ padding: "0 12px", borderRadius: 6, border: "none", fontSize: 12, fontWeight: 600, cursor: pendingItem ? "pointer" : "not-allowed", background: pendingItem ? "var(--brand-color, #2563eb)" : "var(--bg-tertiary)", color: pendingItem ? "#fff" : "var(--text-muted)" }}
+                            >Add</button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Update Items btn — right under the table, hidden when locked. */}
+                {!isLocked && (
+                    <button type="button" onClick={handleUpdateItems} disabled={savingItems}
+                        style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 0", borderRadius: 7, border: "none", cursor: savingItems ? "not-allowed" : "pointer", width: "100%", fontSize: 12, fontWeight: 700, background: savingItems ? "var(--bg-tertiary)" : "var(--brand-color, #2563eb)", color: savingItems ? "var(--text-secondary)" : "#fff" }}
+                    >
+                        {savingItems ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Updating…</> : <><Save size={13} /> Update Services</>}
+                    </button>
+                )}
+            </div>
+
             {/* ── ASSIGN SECTION ── */}
             {assignType === "employee" ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -2341,34 +2581,127 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     <div style={sectionLabelStyle}>Current Vendors</div>
                     {vendorRows.length === 0 ? <div style={emptyMsgStyle}>No vendors assigned yet.</div> : (
-                        <div style={tableWrapStyle}>
-                            <table style={tableStyle}>
-                                <thead><tr style={{ background: "var(--bg-tertiary)" }}>
-                                    <th style={thStyle}>Vendor ID</th><th style={thStyle}>Vendor Name</th><th style={thStyle}>Supplier Type</th>
-                                </tr></thead>
-                                <tbody>{vendorRows.map((r, i) => {
-                                    const m = vendorDir.find((v) => v?.id === r?.vendor_name);
-                                    return (
-                                        <tr key={r?.name || i} style={trStyle(i, vendorRows.length)}>
-                                            <td style={tdStyle}><span style={{ color: "var(--brand-color)", fontWeight: 600 }}>{r?.vendor || r?.name}</span></td>
-                                            <td style={tdStyle}>{m?.name || r?.vendor || "—"}</td>
-                                            <td style={{ ...tdStyle, color: "var(--text-secondary)" }}>{m?.type || r?.supplier_type || "—"}</td>
-                                        </tr>
-                                    );
-                                })}</tbody>
-                            </table>
-                        </div>
+                        <>
+                            <div style={tableWrapStyle}>
+                                <table style={tableStyle}>
+                                    <thead><tr style={{ background: "var(--bg-tertiary)" }}>
+                                        <th style={thStyle}>Supplier Name</th>
+                                        <th style={thStyle}>Contact Person</th>
+                                        <th style={thStyle}>Email</th>
+                                        <th style={thStyle}>Phone</th>
+                                    </tr></thead>
+                                    <tbody>{vendorRows.map((r, i) => {
+                                        const vKey = r?.vendor_name || r?.vendor;
+                                        const m = vendorDir.find((v) => v?.id === vKey || v?.name === vKey);
+                                        const details = assignedVendorDetails[vKey] || {};
+                                        const primaryContact = details.contacts?.[0] || {};
+                                        
+                                        const contactPersonName = [primaryContact.first_name, primaryContact.last_name].filter(Boolean).join(' ') 
+                                            || details.contactPerson 
+                                            || m?.custom_contact_person 
+                                            || "—";
+                                        const contactEmail = primaryContact.email_id 
+                                            || details.email_id 
+                                            || details.email 
+                                            || m?.email_id 
+                                            || "—";
+                                        const contactPhone = primaryContact.phone 
+                                            || details.phone 
+                                            || m?.phone_no 
+                                            || "—";
+
+                                        return (
+                                            <tr key={r?.name || i} style={trStyle(i, vendorRows.length)}>
+                                                <td style={tdStyle}><span style={{ color: "var(--brand-color)", fontWeight: 600 }}>{details.name || m?.name || vKey || "—"}</span></td>
+                                                <td style={tdStyle}>{contactPersonName}</td>
+                                                <td style={tdStyle}>{contactEmail}</td>
+                                                <td style={tdStyle}>{contactPhone}</td>
+                                            </tr>
+                                        );
+                                    })}</tbody>
+                                </table>
+                            </div>
+
+                            {/* Services Provided & Linked Contacts Details for each Vendor */}
+                            {vendorRows.map((r, i) => {
+                                const vKey = r?.vendor_name || r?.vendor;
+                                const m = vendorDir.find((v) => v?.id === vKey || v?.name === vKey);
+                                const details = assignedVendorDetails[vKey] || {};
+
+                                const rawServices = details.custom_services_list || details.service_name || m?.custom_services_list || m?.service_name || [];
+                                const linkedContacts = details.contacts || [];
+
+                                return (
+                                    <div key={vKey || i} style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14, borderTop: '1px solid var(--border-color)', paddingTop: 14 }}>
+                                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--brand-color)' }}>
+                                            {details.name || m?.name || vKey} Details
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                                            {/* Services Provided */}
+                                            <div style={{ background: 'var(--bg-primary)', padding: 14, borderRadius: '8px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, borderBottom: '1px solid var(--border-color)', paddingBottom: 8, marginBottom: 4 }}>
+                                                    <Briefcase size={14} style={{ color: '#10b981' }} />
+                                                    <span style={{ fontSize: 9, fontWeight: 800, color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Services Provided</span>
+                                                </div>
+                                                {rawServices.length === 0 ? (
+                                                    <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>No services declared.</span>
+                                                ) : (
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                                        {rawServices.map((sObj, idx) => {
+                                                            const displayVal = sObj.services || sObj.service_group || 'Service';
+                                                            return (
+                                                                <div key={idx} style={{ background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0', padding: '4px 10px', borderRadius: '14px', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                                    <div style={{ width: 5, height: 5, borderRadius: '50%', backgroundColor: '#16a34a' }} />
+                                                                    <span>{displayVal}</span>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Linked Contacts */}
+                                            <div style={{ background: 'var(--bg-primary)', padding: 14, borderRadius: '8px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, borderBottom: '1px solid var(--border-color)', paddingBottom: 8, marginBottom: 4 }}>
+                                                    <Clock size={14} style={{ color: '#10b981' }} />
+                                                    <span style={{ fontSize: 9, fontWeight: 800, color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Linked Contacts</span>
+                                                </div>
+                                                {linkedContacts.length === 0 ? (
+                                                    <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>No linked contacts.</span>
+                                                ) : (
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                                        {linkedContacts.map((c, idx) => (
+                                                            <div key={idx} style={{ background: 'var(--bg-tertiary)', padding: 10, borderRadius: 6, border: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-primary)' }}>
+                                                                <div style={{ fontWeight: 600, marginBottom: 2 }}>{[c.first_name, c.last_name].filter(Boolean).join(' ') || 'Contact'}</div>
+                                                                {c.email_id && <div style={{ color: 'var(--text-secondary)' }}>Email: {c.email_id}</div>}
+                                                                {c.phone && <div style={{ color: 'var(--text-secondary)' }}>Phone: {c.phone}</div>}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </>
                     )}
 
                     {!isLocked && (<>
                         <div style={sectionLabelStyle}>Reassign Vendors</div>
                         <AssignSearchDropdown
-                            items={vendorDir} selected={selectedVendorIds} onToggle={toggleVendor}
-                            placeholder="Search & select vendors…"
+                            items={filteredVendorDir} selected={selectedVendorIds} onToggle={toggleVendor}
+                            placeholder={vendorPlaceholder}
+                            disabled={itemRows.length === 0}
                             renderOption={(v) => (
                                 <div style={{ display: "flex", flexDirection: "column" }}>
                                     <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{v.name}</span>
                                     {v.type && <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{v.type}</span>}
+                                    {v.services_list && v.services_list.length > 0 && (
+                                        <span style={{ fontSize: 9, color: "#d97706", fontWeight: 600, marginTop: 2 }}>
+                                            Services: {v.services_list.map(sl => `${sl.service_group} (${sl.services})`).join(', ')}
+                                        </span>
+                                    )}
                                 </div>
                             )}
                         />
@@ -2386,104 +2719,19 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                 </button>
             )}
 
-            {/* ── ITEMS SECTION ── */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={sectionLabelStyle}>Items Used for Maintenance</div>
-
-                {/* Items table */}
-                {itemRows.length === 0 ? (
-                    <div style={emptyMsgStyle}>No items added yet.</div>
-                ) : (
-                    <div style={tableWrapStyle}>
-                        <table style={tableStyle}>
-                            <thead><tr style={{ background: "var(--bg-tertiary)" }}>
-                                <th style={thStyle}>Item Code</th>
-                                <th style={thStyle}>Item Name</th>
-                                <th style={thStyle}>Qty</th>
-                                {!isLocked && <th style={thStyle}></th>}
-                            </tr></thead>
-                            <tbody>
-                                {itemRows.map((r, i) => (
-                                    <tr key={r?.name || r?.item_code || i} style={trStyle(i, itemRows.length)}>
-                                        <td style={{ ...tdStyle, color: "var(--brand-color)", fontWeight: 600 }}>{r?.item_code}</td>
-                                        <td style={tdStyle}>{r?.item_name || "—"}</td>
-                                        <td style={tdStyle}>
-                                            {isLocked ? r?.qty : (
-                                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                                    <button type="button" onClick={() => changeRowQty(i, -1)} style={stepperBtnStyle}><Minus size={11} /></button>
-                                                    <span style={{ minWidth: 18, textAlign: "center" }}>{r?.qty}</span>
-                                                    <button type="button" onClick={() => changeRowQty(i, 1)} style={stepperBtnStyle}><Plus size={11} /></button>
-                                                </div>
-                                            )}
-                                        </td>
-                                        {!isLocked && (
-                                            <td style={tdStyle}>
-                                                <button type="button" onClick={() => removeRow(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)" }}>
-                                                    <Trash2 size={13} />
-                                                </button>
-                                            </td>
-                                        )}
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-
-
-
-
-
-                {/* Add Item row — hidden when locked */}
-                {!isLocked && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                        <div style={sectionLabelStyle}>Add Item</div>
-                        <div style={{ display: "flex", gap: 6 }}>
-                            <ItemSearchDropdown
-                                erpnextConfig={erpnextConfig}
-                                selectedLabel={pendingItem ? `${pendingItem.item_code}${pendingItem.item_name && pendingItem.item_name !== pendingItem.item_code ? ` — ${pendingItem.item_name}` : ""}` : null}
-                                onSelect={(item) => setPendingItem(item)}
-                            />
-                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                <button type="button" onClick={() => setPendingQty((q) => Math.max(1, q - 1))} style={stepperBtnStyle}><Minus size={12} /></button>
-                                <span style={{ minWidth: 22, textAlign: "center", fontSize: 12 }}>{pendingQty}</span>
-                                <button type="button" onClick={() => setPendingQty((q) => q + 1)} style={stepperBtnStyle}><Plus size={12} /></button>
-                            </div>
-                            <button type="button" onClick={addItemToList} disabled={!pendingItem}
-                                style={{ padding: "0 12px", borderRadius: 6, border: "none", fontSize: 12, fontWeight: 600, cursor: pendingItem ? "pointer" : "not-allowed", background: pendingItem ? "var(--brand-color, #2563eb)" : "var(--bg-tertiary)", color: pendingItem ? "#fff" : "var(--text-muted)" }}
-                            >Add</button>
-                        </div>
-                    </div>
-                )}
-
-                {/* Update Items btn — right under the table, hidden when locked. No item-count validation here. */}
-                {!isLocked && (
-                    <button type="button" onClick={handleUpdateItems} disabled={savingItems}
-                        style={{ marginBottom: 70, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 0", borderRadius: 7, border: "none", cursor: savingItems ? "not-allowed" : "pointer", width: "100%", fontSize: 12, fontWeight: 700, background: savingItems ? "var(--bg-tertiary)" : "var(--brand-color, #2563eb)", color: savingItems ? "var(--text-secondary)" : "#fff" }}
-                    >
-
-                        {savingItems ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Updating…</> : <><Save size={13} /> Update Items</>}
-                    </button>
-                )}
-
-
-                {/* Submit / Quotation — Submit only possible while not locked.
+            {/* Submit / Quotation — Submit only possible while not locked.
             Once locked (submitted OR Completed), Create/View Quotation become the active actions. */}
-                <div style={{ display: "flex", gap: 8 }}>
-                    {!isLocked &&
-                        <>
-                            <button type="button" onClick={handleSubmitClick} disabled={submitting}
-                                // style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 0", borderRadius: 7, border: "none", cursor: submitting ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, background: submitting ? "var(--bg-tertiary)" : "#16a34a", color: submitting ? "var(--text-secondary)" : "#fff" }}
-                                style={primaryActionBtnStyle}
-                            >
-                                {submitting ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Submitting…</> : <><CheckCircle2 size={13} /> Submit Task</>}
-                            </button>
-
-                            {/* <button type="button" onClick={handleCreateQuotation} style={primaryActionBtnStyle}><FileText size={13} /> Create Quotation</button> */}
-                            <button type="button" onClick={handleViewQuotation} style={secondaryActionBtnStyle}><FileText size={13} /> View Quotation</button>
-                        </>
-                    }
-                </div>
+            <div style={{ display: "flex", gap: 8 }}>
+                {!isLocked &&
+                    <>
+                        <button type="button" onClick={handleSubmitClick} disabled={submitting}
+                            style={primaryActionBtnStyle}
+                        >
+                            {submitting ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Submitting…</> : <><CheckCircle2 size={13} /> Submit Task</>}
+                        </button>
+                        <button type="button" onClick={handleViewQuotation} style={secondaryActionBtnStyle}><FileText size={13} /> View Quotation</button>
+                    </>
+                }
             </div>
 
             <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>

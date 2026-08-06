@@ -15,7 +15,7 @@ export default defineConfig({
     }
   },
   server: {
-    host:true,
+    host: true,
     proxy: {
       '/api': {
         target: 'http://192.168.101.180:8980',

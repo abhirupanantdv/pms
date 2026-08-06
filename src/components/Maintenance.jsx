@@ -3230,6 +3230,25 @@ export default function Maintenance({
   const [maintenanceSearch, setMaintenanceSearch] = useState('');
 
   const [selectedSchedule, setSelectedSchedule] = useState(null);
+
+  const handleSelectSchedule = async (sch) => {
+    setSelectedSchedule(sch);
+    if (!erpnextConfig?.url || !sch?.name) return;
+    try {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(sch.name)}`, { credentials: 'include' });
+      if (res.ok) {
+        const json = await res.json();
+        const fullDoc = json.data || json;
+        setSelectedSchedule(fullDoc);
+      }
+    } catch (e) {
+      console.warn("Failed fetching detailed schedule on select:", e);
+    }
+  };
+
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = selectedSchedule ? 6 : 10;
   const [selectedVisit, setSelectedVisit] = useState(null);
   const [selectedWorkOrder, setSelectedWorkOrder] = useState(null);
   const [selectedAsset, setSelectedAsset] = useState(null);
@@ -3295,6 +3314,10 @@ export default function Maintenance({
   const [consumeItemsList, setConsumeItemsList] = useState([{ itemCode: '', qty: 1, comment: '' }]);
 
   const [localSchedules, setLocalSchedules] = useState([]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [maintenanceSearch, localSchedules.length]);
   const [workOrders, setWorkOrders] = useState([]);
   const [techProfiles, setTechProfiles] = useState([]);
   const [vendorDir, setVendorDir] = useState([]);
@@ -3375,9 +3398,9 @@ export default function Maintenance({
     setBookingDetails(null);
     setSchedItems(prev => prev.map(row => ({ ...row, itemCode: '', itemName: '', startDate: new Date().toISOString().split('T')[0] })));
   };
-const handlemaintenanceChange = (value) => {
-  setCustomMaintenanceSchedule(value);
-};
+  const handlemaintenanceChange = (value) => {
+    setCustomMaintenanceSchedule(value);
+  };
   const availableSchedUnits = useMemo(() => {
     if (!bookingDetails || !schedUnits.length) return [];
 
@@ -3390,10 +3413,19 @@ const handlemaintenanceChange = (value) => {
     // If no booking items, return empty
     if (bookingItemCodes.length === 0) return [];
 
-    // Filter schedUnits to show only those matching booking item codes
+    // Filter schedUnits to show only matching booking item codes, excluding Promotional Fee and Service Charge
     const filtered = schedUnits.filter(u => {
       const unitName = (u.name || '').toString().trim().toLowerCase();
-      return bookingItemCodes.includes(unitName);
+      const unitItemName = (u.item_name || '').toString().trim().toLowerCase();
+      const isMatch = bookingItemCodes.includes(unitName);
+
+      const isExcluded =
+        unitName === 'promotional fee' ||
+        unitName === 'service charge' ||
+        unitItemName === 'promotional fee' ||
+        unitItemName === 'service charge';
+
+      return isMatch && !isExcluded;
     });
 
     return filtered.length > 0 ? filtered : [];
@@ -3439,7 +3471,12 @@ const handlemaintenanceChange = (value) => {
 
     // Extract booking items from booking_item array
     if (bookingDetails.booking_item && Array.isArray(bookingDetails.booking_item) && bookingDetails.booking_item.length > 0) {
-      const bookingItems = bookingDetails.booking_item.map((item, idx) => ({
+      const filteredBookingItems = bookingDetails.booking_item.filter(item => {
+        const code = (item.item_code || '').toString().trim().toLowerCase();
+        return code !== 'promotional fee' && code !== 'service charge';
+      });
+
+      const bookingItems = filteredBookingItems.map((item, idx) => ({
         itemCode: item.item_code || '',
         itemName: '',
         startDate: new Date().toISOString().split('T')[0],
@@ -3447,7 +3484,14 @@ const handlemaintenanceChange = (value) => {
         noOfVisits: 1,
         endDate: ''
       }));
-      setSchedItems(bookingItems);
+      setSchedItems(bookingItems.length > 0 ? bookingItems : [{
+        itemCode: '',
+        itemName: '',
+        startDate: new Date().toISOString().split('T')[0],
+        periodicity: 'Weekly',
+        noOfVisits: 1,
+        endDate: ''
+      }]);
 
       // Fetch item details for each item code
       bookingItems.forEach((item, idx) => {
@@ -3577,22 +3621,40 @@ const handlemaintenanceChange = (value) => {
     if (!erpnextConfig?.url) return;
     try {
       const res = await fetch(
-        `${erpnextConfig.url}/api/resource/Maintenance Schedule?fields=%5B%22name%22%2C%22customer%22%2C%22customer_name%22%2C%22transaction_date%22%2C%22custom_property%22%2C%22status%22%2C%22docstatus%22%5D&limit_page_length=200&order_by=creation%20asc`,
+        `${erpnextConfig.url}/api/resource/Maintenance Schedule?fields=%5B%22name%22%2C%22customer%22%2C%22customer_name%22%2C%22transaction_date%22%2C%22custom_property%22%2C%22status%22%2C%22docstatus%22%5D&limit_page_length=200&order_by=creation%20desc`,
         { credentials: 'include', headers: { 'Content-Type': 'application/json' } }
       );
       if (res.ok) {
         const json = await res.json();
-        setLocalSchedules(json.data || []);
+        const list = json.data || [];
+        // Fetch detailed schedules so that we have the items child table containing item_name
+        const detailed = await Promise.all(list.map(async (sch) => {
+          try {
+            const detailRes = await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(sch.name)}`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (detailRes.ok) {
+              const detailJson = await detailRes.json();
+              return detailJson?.data || detailJson || sch;
+            }
+          } catch (e) {
+            console.warn(`Failed to fetch detailed schedule ${sch.name}:`, e);
+          }
+          return sch;
+        }));
+        setLocalSchedules(detailed);
       }
     } catch (e) { }
   }, [erpnextConfig]);
 
-  // useEffect(() => {
-  //   setLocalSchedules(schedules);
-  // }, [schedules]);
   useEffect(() => {
-  fetchSchedules();
-}, [fetchSchedules]);
+    if (schedules && schedules.length > 0) {
+      setLocalSchedules(schedules);
+    } else {
+      fetchSchedules();
+    }
+  }, [schedules, fetchSchedules]);
 
   useEffect(() => {
     setTechProfiles(employees.length > 0 ? employees.map(emp => ({
@@ -3660,7 +3722,7 @@ const handlemaintenanceChange = (value) => {
     const customerName = tenantObj ? tenantObj.name : schedCustomer;
     const payload = {
       customer: schedCustomer, customer_name: customerName, transaction_date: schedTransDate,
-      custom_booking_id: schedBookingId, custom_property: schedProperty, status: 'Draft',custom_maintenance_schedule:custom_maintenance_schedule,
+      custom_booking_id: schedBookingId, custom_property: schedProperty, status: 'Draft', custom_maintenance_schedule: custom_maintenance_schedule,
       items: schedItems.map(r => ({ item_code: r.itemCode, item_name: r.itemName || r.itemCode, start_date: r.startDate, periodicity: r.periodicity, no_of_visits: Number(r.noOfVisits) || 1, end_date: r.endDate }))
     };
     try {
@@ -3796,105 +3858,108 @@ const handlemaintenanceChange = (value) => {
 
   const handleSchedCustomerChange = async (customerName) => {
 
-  setSchedCustomer(customerName);
+    setSchedCustomer(customerName);
 
-  if (!customerName || !erpnextConfig?.url) {
-    return;
-  }
-
-  try {
-
-    const filters = encodeURIComponent(
-      JSON.stringify([
-        ["customer", "=", customerName],
-        ["docstatus", "=", 1]
-      ])
-    );
-
-    const url =
-      `${erpnextConfig.url}/api/resource/Booking` +
-      `?filters=${filters}` +
-      `&limit_page_length=200` +
-      `&order_by=creation desc`;
-
-    console.log("Customer:", customerName);
-    console.log("URL:", url);
-
-    const res = await fetch(url, {
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json"
-      }
-    });
-
-    const json = await res.json();
-
-    console.log("Response:", json);
-
-    if (!res.ok) {
-      throw new Error(
-        json.exception ||
-        json.exc_type ||
-        "Booking API failed"
-      );
-    }
-
-    const bookings = json.data || [];
-
-    if (!bookings.length) {
-      frappe.msgprint(
-        `No submitted booking found for ${customerName}`
-      );
+    if (!customerName || !erpnextConfig?.url) {
       return;
     }
 
-    // Latest booking
-    const booking = bookings[0];
+    try {
 
-    setSchedBookingId(booking.name);
-    setBookingDetails(booking);
+      const filters = encodeURIComponent(
+        JSON.stringify([
+          ["customer", "=", customerName],
+          ["docstatus", "=", 1]
+        ])
+      );
 
-    // Fetch complete booking document
-    const detailRes = await fetch(
-      `${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(booking.name)}`,
-      {
+      const url =
+        `${erpnextConfig.url}/api/resource/Booking` +
+        `?filters=${filters}` +
+        `&limit_page_length=200` +
+        `&order_by=creation desc`;
+
+      console.log("Customer:", customerName);
+      console.log("URL:", url);
+
+      const res = await fetch(url, {
         credentials: "include",
         headers: {
           "Content-Type": "application/json"
         }
+      });
+
+      const json = await res.json();
+
+      console.log("Response:", json);
+
+      if (!res.ok) {
+        throw new Error(
+          json.exception ||
+          json.exc_type ||
+          "Booking API failed"
+        );
       }
-    );
 
-    const detailJson = await detailRes.json();
+      const bookings = json.data || [];
 
-    if (!detailRes.ok) {
-      throw new Error(
-        detailJson.exception ||
-        "Unable to fetch complete booking details"
+      if (!bookings.length) {
+        frappe.msgprint(
+          `No submitted booking found for ${customerName}`
+        );
+        return;
+      }
+
+      // Latest booking
+      const booking = bookings[0];
+
+      setSchedBookingId(booking.name);
+      setBookingDetails(booking);
+
+      // Fetch complete booking document
+      const detailRes = await fetch(
+        `${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(booking.name)}`,
+        {
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json"
+          }
+        }
       );
-    }
 
-    const fullBooking = detailJson.data;
+      const detailJson = await detailRes.json();
 
-    setBookingDetails(fullBooking);
+      if (!detailRes.ok) {
+        throw new Error(
+          detailJson.exception ||
+          "Unable to fetch complete booking details"
+        );
+      }
 
-    // Commercial units only
-    const commercialItems = (fullBooking.booking_item || [])
-      .filter(item => item.unit_group === "Commercial");
+      const fullBooking = detailJson.data;
 
-    const scheduleItems = commercialItems.map(item => ({
-      itemCode: item.item_code,
-      itemName: item.item_code,
-      startDate: fullBooking.start_date || "",
-      periodicity: "",
-      noOfVisits: 1,
-      endDate: fullBooking.end_date || ""
-    }));
+      setBookingDetails(fullBooking);
 
-    setSchedItems(
-      scheduleItems.length
-        ? scheduleItems
-        : [{
+      // Commercial units only, excluding Promotional Fee and Service Charge
+      const commercialItems = (fullBooking.booking_item || [])
+        .filter(item => {
+          const code = (item.item_code || '').toString().trim().toLowerCase();
+          return item.unit_group === "Commercial" && code !== 'promotional fee' && code !== 'service charge';
+        });
+
+      const scheduleItems = commercialItems.map(item => ({
+        itemCode: item.item_code,
+        itemName: item.item_code,
+        startDate: fullBooking.start_date || "",
+        periodicity: "",
+        noOfVisits: 1,
+        endDate: fullBooking.end_date || ""
+      }));
+
+      setSchedItems(
+        scheduleItems.length
+          ? scheduleItems
+          : [{
             itemCode: "",
             itemName: "",
             startDate: fullBooking.start_date || "",
@@ -3902,19 +3967,19 @@ const handlemaintenanceChange = (value) => {
             noOfVisits: 1,
             endDate: fullBooking.end_date || ""
           }]
-    );
+      );
 
-  } catch (error) {
+    } catch (error) {
 
-    console.error("Customer Booking Error:", error);
+      console.error("Customer Booking Error:", error);
 
-    frappe.msgprint({
-      title: __("Error"),
-      indicator: "red",
-      message: error.message
-    });
-  }
-};
+      frappe.msgprint({
+        title: __("Error"),
+        indicator: "red",
+        message: error.message
+      });
+    }
+  };
 
   const handleConsumeItemSubmit = (e) => {
     e.preventDefault();
@@ -3968,8 +4033,55 @@ const handlemaintenanceChange = (value) => {
   const filteredSchedules = localSchedules.filter(sch => {
     const term = maintenanceSearch.toLowerCase();
     const propName = getPropertyNameById(sch.custom_property) || '';
-    return sch.name.toLowerCase().includes(term) || (sch.customer_name || sch.customer || '').toLowerCase().includes(term) || propName.toLowerCase().includes(term) || (sch.type || '').toLowerCase().includes(term);
+    const itemName = sch.items?.[0]?.item_name || '';
+    return sch.name.toLowerCase().includes(term) || 
+      (sch.customer_name || sch.customer || '').toLowerCase().includes(term) || 
+      propName.toLowerCase().includes(term) || 
+      itemName.toLowerCase().includes(term) ||
+      (sch.type || '').toLowerCase().includes(term);
   });
+
+  const sortedSchedules = useMemo(() => {
+    return [...filteredSchedules].sort((a, b) => {
+      const keyA = a.creation || a.name || '';
+      const keyB = b.creation || b.name || '';
+      return keyB.localeCompare(keyA);
+    });
+  }, [filteredSchedules]);
+
+  const totalPages = Math.ceil(sortedSchedules.length / itemsPerPage);
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentSchedules = sortedSchedules.slice(indexOfFirstItem, indexOfLastItem);
+
+  const renderPaginationControls = () => {
+    if (totalPages <= 1) return null;
+    return (
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-card)', flexShrink: 0 }}>
+        <button
+          type="button"
+          disabled={currentPage === 1}
+          onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+          className="btn btn-secondary"
+          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', minWidth: 60 }}
+        >
+          Previous
+        </button>
+        <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+          Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong>
+        </div>
+        <button
+          type="button"
+          disabled={currentPage === totalPages}
+          onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+          className="btn btn-secondary"
+          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', minWidth: 60 }}
+        >
+          Next
+        </button>
+      </div>
+    );
+  };
 
   const thStyle = { padding: '8px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-secondary, #6b7280)', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap' };
   const inputStyle = { width: '100%', fontSize: 12, minHeight: 32, padding: '5px 8px', boxSizing: 'border-box' };
@@ -4012,34 +4124,43 @@ const handlemaintenanceChange = (value) => {
 
           <div className="grid-2col" style={{ gridTemplateColumns: selectedSchedule ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
             {viewMode === 'list' && (
-              <div className="card-panel" style={{ padding: 0 }}>
-                <div className="table-container">
+              <div className="card-panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', overflow: 'hidden' }}>
+                <div className="table-container" style={{ flex: 1, overflowY: 'auto' }}>
                   <table className="custom-table">
-                    <thead><tr><th>Schedule ID</th><th>Type</th><th>Tenant / Partner</th><th>Property Group</th><th>Periodicity</th><th>Status</th></tr></thead>
+                    <thead><tr><th>Schedule ID</th><th>Type</th><th>Tenant / Partner</th><th>Unit Name</th><th>Periodicity</th><th>Status</th></tr></thead>
                     <tbody>
-                      {filteredSchedules.map(sch => {
-                        const firstItem = sch.items?.[0];
-                        return (
-                          <tr key={sch.name} onClick={() => setSelectedSchedule(sch)} style={{ cursor: 'pointer', backgroundColor: selectedSchedule?.name === sch.name ? 'var(--bg-accent-alpha)' : '' }}>
-                            <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{sch.name}</td>
-                            <td><span className="badge badge-secondary" style={{ textTransform: 'none' }}>{sch.custom_maintenance_schedule || 'PM Schedule'}</span></td>
-                            <td>{sch.customer_name || sch.customer}</td>
-                            <td>{getPropertyNameById(sch.custom_property)}</td>
-                            <td>{firstItem ? firstItem.periodicity : '—'}</td>
-                            <td><span className={`badge ${sch.status === 'Completed' ? 'badge-success' : isScheduleSubmitted(sch) ? 'badge-info' : 'badge-warning'}`}>{sch.status || 'Draft'}</span></td>
-                          </tr>
-                        );
-                      })}
+                      {currentSchedules.length === 0 ? (
+                        <tr>
+                          <td colSpan="6" style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)' }}>
+                            No schedules found.
+                          </td>
+                        </tr>
+                      ) : (
+                        currentSchedules.map(sch => {
+                          const firstItem = sch.items?.[0];
+                          return (
+                            <tr key={sch.name} onClick={() => handleSelectSchedule(sch)} style={{ cursor: 'pointer', backgroundColor: selectedSchedule?.name === sch.name ? 'var(--bg-accent-alpha)' : '' }}>
+                              <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{sch.name}</td>
+                              <td><span className="badge badge-secondary" style={{ textTransform: 'none' }}>{sch.custom_maintenance_schedule || 'PM Schedule'}</span></td>
+                              <td>{sch.customer_name || sch.customer}</td>
+                              <td>{firstItem ? firstItem.item_name : '—'}</td>
+                              <td>{firstItem ? firstItem.periodicity : '—'}</td>
+                              <td><span className={`badge ${sch.status === 'Completed' ? 'badge-success' : isScheduleSubmitted(sch) ? 'badge-info' : 'badge-warning'}`}>{sch.status || 'Draft'}</span></td>
+                            </tr>
+                          );
+                        })
+                      )}
                     </tbody>
                   </table>
                 </div>
+                {renderPaginationControls()}
               </div>
             )}
 
             {viewMode === 'kanban' && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
                 {['Pending', 'In Progress', 'Completed'].map(status => {
-                  const statusSchedules = filteredSchedules.filter(s => {
+                  const statusSchedules = sortedSchedules.filter(s => {
                     const raw = (s.status || '').toLowerCase();
                     let norm = 'Pending';
                     if (raw === 'completed' || raw === 'closed') norm = 'Completed';
@@ -4050,14 +4171,17 @@ const handlemaintenanceChange = (value) => {
                     <div key={status} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, status)} style={{ background: 'var(--bg-tertiary)', padding: 14, borderRadius: 8, minHeight: 300 }}>
                       <h3 style={{ fontSize: 13, marginBottom: 10, borderBottom: '2px solid var(--border-color)', paddingBottom: 6 }}>{status} ({statusSchedules.length})</h3>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {statusSchedules.map(sch => (
-                          <div key={sch.name} draggable onDragStart={(e) => handleDragStart(e, sch.name)} onClick={() => setSelectedSchedule(sch)} style={{ background: 'var(--bg-secondary)', padding: 10, borderRadius: 6, border: '1px solid var(--border-color)', cursor: 'grab' }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--brand-color)' }}>{sch.name}</div>
-                            <div style={{ fontSize: 12, fontWeight: 600 }}>{sch.customer_name || sch.customer}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Property: {getPropertyNameById(sch.custom_property)}</div>
-                            <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>Type: {sch.type}</div>
-                          </div>
-                        ))}
+                        {statusSchedules.map(sch => {
+                          const firstItem = sch.items?.[0];
+                          return (
+                            <div key={sch.name} draggable onDragStart={(e) => handleDragStart(e, sch.name)} onClick={() => handleSelectSchedule(sch)} style={{ background: 'var(--bg-secondary)', padding: 10, borderRadius: 6, border: '1px solid var(--border-color)', cursor: 'grab' }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--brand-color)' }}>{sch.name}</div>
+                              <div style={{ fontSize: 12, fontWeight: 600 }}>{sch.customer_name || sch.customer}</div>
+                              <div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Unit Name: {firstItem ? firstItem.item_name : '—'}</div>
+                              <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>Type: {sch.type}</div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   );
@@ -4086,7 +4210,7 @@ const handlemaintenanceChange = (value) => {
                       for (let i = 0; i < firstDay; i++) cells.push(<div key={`e-${i}`} style={{ height: 50 }} />);
                       for (let day = 1; day <= totalDays; day++) {
                         const dateStr = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const daySchedules = filteredSchedules.filter(s => s.transaction_date === dateStr);
+                        const daySchedules = sortedSchedules.filter(s => s.transaction_date === dateStr);
                         const isSelected = selectedDateStr === dateStr;
                         const isToday = calendarYear === 2026 && calendarMonth === 5 && day === 17;
                         cells.push(
@@ -4103,9 +4227,9 @@ const handlemaintenanceChange = (value) => {
                 <div className="card-panel" style={{ padding: 16 }}>
                   <h4 style={{ fontSize: 12, marginBottom: 10, color: 'var(--text-secondary)' }}>Schedules for: <strong>{selectedDateStr}</strong></h4>
                   {(() => {
-                    const daySchedules = filteredSchedules.filter(s => s.transaction_date === selectedDateStr);
+                    const daySchedules = sortedSchedules.filter(s => s.transaction_date === selectedDateStr);
                     if (daySchedules.length === 0) return <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No schedules planned for this day.</div>;
-                    return <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{daySchedules.map(sch => <div key={sch.name} onClick={() => setSelectedSchedule(sch)} style={{ padding: 10, background: 'var(--bg-tertiary)', borderLeft: '4px solid var(--brand-color)', borderRadius: 4, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><div><strong style={{ fontSize: 12 }}>{sch.name} ({sch.type})</strong><div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Tenant: {sch.customer_name || sch.customer} | Prop: {getPropertyNameById(sch.custom_property)}</div></div><span className={`badge ${sch.status === 'Completed' ? 'badge-success' : 'badge-warning'}`}>{sch.status || 'Pending'}</span></div>)}</div>;
+                    return <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{daySchedules.map(sch => <div key={sch.name} onClick={() => handleSelectSchedule(sch)} style={{ padding: 10, background: 'var(--bg-tertiary)', borderLeft: '4px solid var(--brand-color)', borderRadius: 4, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><div><strong style={{ fontSize: 12 }}>{sch.name} ({sch.type})</strong><div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Tenant: {sch.customer_name || sch.customer} | Unit Name: {sch.items?.[0]?.item_name || '—'}</div></div><span className={`badge ${sch.status === 'Completed' ? 'badge-success' : 'badge-warning'}`}>{sch.status || 'Pending'}</span></div>)}</div>;
                   })()}
                 </div>
               </div>
@@ -4119,8 +4243,8 @@ const handlemaintenanceChange = (value) => {
                   <button onClick={() => setSelectedSchedule(null)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={16} /></button>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
-                  <div>Type: <strong>{selectedSchedule.custom_maintenance_schedule ||'PM Schedule'}</strong></div>
-                  <div>Property: <strong>{getPropertyNameById(selectedSchedule.custom_property)}</strong></div>
+                  <div>Type: <strong>{selectedSchedule.custom_maintenance_schedule || 'PM Schedule'}</strong></div>
+                  <div>Unit Name: <strong>{selectedSchedule.items?.[0]?.item_name || '—'}</strong></div>
                   <div>Tenant: <strong>{selectedSchedule.customer_name || selectedSchedule.customer}</strong></div>
                   <div>Date: <strong>{selectedSchedule.transaction_date}</strong></div>
                   {/* <div>Task Id: <strong>{selectedSchedule.type || '—'}</strong></div> */}
@@ -4350,7 +4474,7 @@ const handlemaintenanceChange = (value) => {
                         <option value="" disabled>{erpnextConfig?.url ? 'Loading bookings...' : 'ERPNext URL not configured'}</option>
                       ) : bookings.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
                     </select> */}
-                    <select className="form-select" required 
+                    <select className="form-select" required
                       value={schedCustomer}
                       onChange={(e) => handleSchedCustomerChange(e.target.value)}
                     >
@@ -4374,18 +4498,18 @@ const handlemaintenanceChange = (value) => {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                     <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Maintainance Type</label>
-                     <select className="form-select" required
-                     value={custom_maintenance_schedule}
-                     onChange={(e) => handlemaintenanceChange(e.target.value)}
+                    <select className="form-select" required
+                      value={custom_maintenance_schedule}
+                      onChange={(e) => handlemaintenanceChange(e.target.value)}
                     >
-                        <option value="">-- Select Type --</option>
+                      <option value="">-- Select Type --</option>
 
-                        <option value="Scheduled Maintenance">Scheduled Maintenance</option>  
-                        <option value="Adhoc Maintenance">Adhoc Maintenance</option>                    
+                      <option value="Scheduled Maintenance">Scheduled Maintenance</option>
+                      <option value="Adhoc Maintenance">Adhoc Maintenance</option>
                     </select>
                   </div>
                 </div>
-                
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px 16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                     <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Property Group</label>

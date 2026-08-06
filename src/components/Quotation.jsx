@@ -4797,8 +4797,8 @@
 
 
 
-import React, { useState, useEffect } from 'react';
-import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, Check, RotateCcw } from 'lucide-react';
 
 const getCsrfToken = () => {
   if (typeof window !== 'undefined' && window.csrf_token) {
@@ -4853,6 +4853,12 @@ function Toast({ toast, onClose }) {
 
 export default function Quotation({ erpnextConfig, properties = [], onGoToBooking }) {
   const [quotations, setQuotations] = useState([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const workflowActionsCache = useRef({});
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [quotations.length]);
   const [customers, setCustomers] = useState([]);
   const [tamplates, settamplates] = useState([]);
 
@@ -4878,6 +4884,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedQuotation, setSelectedQuotation] = useState(null);
   const [selectedQuotationDetail, setSelectedQuotationDetail] = useState(null);
+  const itemsPerPage = selectedQuotation ? 6 : 10;
 
   // Form states
   const [quoteCustomer, setQuoteCustomer] = useState('');
@@ -4892,6 +4899,14 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   const [quoteStatus, setQuoteStatus] = useState('Draft');
   const [quoteCompany, setQuoteCompany] = useState('CARPENTERS PROPERTIES PTE LIMITED');
   const [quoteItems, setQuoteItems] = useState([{ unitId: '', qty: 1, uom: '', standardRate: '', offeredRate: '', propertyGroup: '', locality: '', district: '', totalArea: '', loadingDetail: false }]);
+  const [discountAmount, setDiscountAmount] = useState('');
+  const [messageText, setMessageText] = useState('');
+  const [savingDiscount, setSavingDiscount] = useState(false);
+
+  const [activeTab, setActiveTab] = useState('SUMMARY');
+  const [negotiations, setNegotiations] = useState([]);
+  const [comments, setComments] = useState([]);
+  const [workflowActions, setWorkflowActions] = useState(null);
 
   // Company Details (matching Invoice format)
   const [companyDetails, setCompanyDetails] = useState({
@@ -5007,7 +5022,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   const fetchSpaceUnits = async () => {
     if (!erpnextConfig || !erpnextConfig.url) return;
     try {
-      const url = `${erpnextConfig.url}/api/resource/Item?fields=["name","item_name","standard_rate","valuation_rate","custom_property_reference","stock_uom"]&limit_page_length=500`;
+      const url = `${erpnextConfig.url}/api/resource/Item?fields=["name","item_name","standard_rate","valuation_rate","custom_property_group","custom_property_reference","stock_uom"]&limit_page_length=500`;
       const res = await fetch(url, {
         credentials: 'include',
         headers: {
@@ -5072,6 +5087,17 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     fetchSpaceUnits();
   }, [erpnextConfig]);
 
+  useEffect(() => {
+    if (selectedQuotationDetail) {
+      setDiscountAmount(selectedQuotationDetail.discount_amount !== undefined && selectedQuotationDetail.discount_amount !== null ? String(selectedQuotationDetail.discount_amount) : '');
+      setMessageText('');
+    } else {
+      setDiscountAmount('');
+      setMessageText('');
+      setWorkflowActions(null);
+    }
+  }, [selectedQuotationDetail]);
+
   // Handle detailed Quotation view & retrieve client CRM metadata
   const fetchQuotationDetail = async (qName, customerId) => {
     if (!erpnextConfig || !erpnextConfig.url) return;
@@ -5126,6 +5152,64 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             }
           }
         }
+
+        // Fetch Quotation Negotiation versions & Comments
+        try {
+          const negRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation Negotiation?filters=[["quotation", "=", "${qName}"]]&fields=["name","version_no","negotiation_date","negotiation_by","current_discount","current_grand_total","previous_discount","previous_grand_total","discount_difference","discount_percentage","negotiation_status"]&limit_page_length=100&order_by=version_no desc`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (negRes.ok) {
+            const negJson = await negRes.json();
+            setNegotiations(negJson.data || []);
+          }
+        } catch (negErr) {
+          console.warn('Failed fetching negotiations:', negErr);
+        }
+
+        try {
+          const commentRes = await fetch(`${erpnextConfig.url}/api/resource/Comment?filters=[["reference_doctype", "=", "Quotation"], ["reference_name", "=", "${qName}"]]&fields=["name","comment_email","content","creation","comment_by"]&limit_page_length=100&order_by=creation desc`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (commentRes.ok) {
+            const commentJson = await commentRes.json();
+            setComments(commentJson.data || []);
+          }
+        } catch (cErr) {
+          console.warn('Failed fetching comments:', cErr);
+        }
+
+        // Fetch active workflow actions from get_quotation_workflow_actions API
+        try {
+          const wfRes = await fetch(`${erpnextConfig.url}/api/method/get_quotation_workflow_actions?quotation=${qName}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (wfRes.ok) {
+            const wfJson = await wfRes.json();
+            console.log('Workflow API Response for', qName, ':', wfJson);
+            const message = wfJson.message || {};
+            setWorkflowActions(message);
+
+            // Sync workflow state with backend if provided
+            if (message && message.current_state) {
+              setSelectedQuotationDetail(prev => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  workflow_state: message.current_state
+                };
+              });
+            }
+          } else {
+            console.warn('Failed fetching workflow actions status:', wfRes.status);
+            setWorkflowActions(null);
+          }
+        } catch (wfErr) {
+          console.warn('Failed fetching workflow actions:', wfErr);
+          setWorkflowActions(null);
+        }
       }
     } catch (e) {
       console.warn('Failed fetching quotation detail:', e);
@@ -5169,7 +5253,13 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         standardRate: valRate,
         offeredRate: valRate,
         uom: listMatch ? (listMatch.stock_uom || 'Unit') : 'Unit',
-        propertyGroup: listMatch ? (listMatch.custom_property_reference || '') : '',
+        propertyGroup: listMatch
+          ? (typeof listMatch.custom_property_group === 'string'
+            ? listMatch.custom_property_group
+            : (typeof listMatch.custom_property_reference === 'string'
+              ? listMatch.custom_property_reference
+              : ''))
+          : '',
         loadingDetail: true
       };
       return updated;
@@ -5194,12 +5284,12 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const doc = json.data || json;
         const findVal = (keywords) => {
           for (const kw of keywords) {
-            if (doc[kw] !== undefined && doc[kw] !== null && doc[kw] !== '') return doc[kw];
+            if (doc[kw] !== undefined && doc[kw] !== null && doc[kw] !== '' && typeof doc[kw] !== 'object') return doc[kw];
           }
           const keys = Object.keys(doc);
           for (const kw of keywords) {
             const found = keys.find(k => k.toLowerCase().includes(kw));
-            if (found && doc[found] !== undefined && doc[found] !== null && doc[found] !== '') return doc[found];
+            if (found && doc[found] !== undefined && doc[found] !== null && doc[found] !== '' && typeof doc[found] !== 'object') return doc[found];
           }
           return '';
         };
@@ -5208,7 +5298,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           if (updated[index] && updated[index].unitId === unitId) {
             updated[index] = {
               ...updated[index],
-              propertyGroup: findVal(['custom_property_reference', 'property_group', 'property']) || updated[index].propertyGroup,
+              propertyGroup: findVal(['custom_property_group', 'custom_property_reference', 'property_group', 'property']) || updated[index].propertyGroup,
               locality: findVal(['locality']),
               district: findVal(['district']),
               totalArea: findVal(['total_area', 'area_sqft', 'area']),
@@ -5252,6 +5342,16 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     e.preventDefault();
     if (!quoteCustomer || !quoteEstBookingStart || !quoteEstBookingEnd) return;
 
+    const startDate = new Date(quoteEstBookingStart);
+    const endDate = new Date(quoteEstBookingEnd);
+    const oneYearLater = new Date(startDate);
+    oneYearLater.setFullYear(startDate.getFullYear() + 1);
+
+    if (endDate < oneYearLater) {
+      setErrorMsg('Estimated Booking End Date must be at least 1 year from the Start Date.');
+      return;
+    }
+
     const matchedCust = customers.find(c => c.name === quoteCustomer);
 
     const erpItems = quoteItems.filter(item => item.unitId).map(item => {
@@ -5283,13 +5383,27 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     setErrorMsg('');
     setSuccessMsg('');
 
+    // Current date
+    const today = new Date();
+
+    // Format date as YYYY-MM-DD
+    const formatDate = (date) => {
+      return date.toISOString().split("T")[0];
+    };
+
+    // Valid till = current date + 7 days
+    const validTill = new Date(today);
+    validTill.setDate(validTill.getDate() + 7);
+
     const payload = {
       customer: quoteCustomer,
       party_name: quoteCustomer,
-      customer_name: matchedCust ? matchedCust.customer_name : quoteCustomer,
-      quotation_to: 'Customer',
-      transaction_date: quoteEstBookingStart,
-      valid_till: quoteEstBookingEnd,
+      customer_name: matchedCust
+        ? matchedCust.customer_name
+        : quoteCustomer,
+      quotation_to: "Customer",
+      transaction_date: formatDate(today),
+      valid_till: formatDate(validTill),
       company: quoteCompany,
       status: quoteStatus,
       custom_start_date: quoteEstBookingStart || null,
@@ -5565,6 +5679,204 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
   };
 
+  const saveDiscountAndMessageSilently = async () => {
+    try {
+      if (!erpnextConfig || !erpnextConfig.url) {
+        return true;
+      }
+
+      // Save discount amount to Quotation resource
+      const discountRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${selectedQuotationDetail.name}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': getCsrfToken()
+        },
+        body: JSON.stringify({
+          discount_amount: parseFloat(discountAmount) || 0,
+          apply_discount_on: "Grand Total",
+          additional_discount_percentage: 0
+        })
+      });
+
+      if (!discountRes.ok) {
+        const text = await discountRes.text();
+        throw new Error(`Failed to save discount: ${text}`);
+      }
+
+      // Post comment to Comment resource if there is message text
+      if (messageText.trim()) {
+        const commentRes = await fetch(`${erpnextConfig.url}/api/resource/Comment`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Frappe-CSRF-Token': getCsrfToken()
+          },
+          body: JSON.stringify({
+            comment_type: 'Comment',
+            reference_doctype: 'Quotation',
+            reference_name: selectedQuotationDetail.name,
+            content: messageText
+          })
+        });
+
+        if (!commentRes.ok) {
+          const text = await commentRes.text();
+          console.warn('Failed to post comment to server:', text);
+        }
+      }
+
+      setMessageText('');
+      return true;
+    } catch (err) {
+      showToast('error', `Error updating quotation details: ${err.message}`);
+      return false;
+    }
+  };
+
+  const handleWorkflowAction = async (actionName) => {
+    if (!confirm(`Are you sure you want to perform action "${actionName}"?`)) return;
+
+    // Invalidate API actions cache for this quotation
+    if (selectedQuotationDetail && selectedQuotationDetail.name) {
+      delete workflowActionsCache.current[selectedQuotationDetail.name];
+    }
+
+    setSavingDiscount(true);
+    try {
+
+      const res = await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
+        method: "POST",
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': getCsrfToken()
+        },
+        body: JSON.stringify({
+          quotation: selectedQuotationDetail.name,
+          action: actionName,
+          discount_amount: parseFloat(discountAmount) || 0,
+          comment: messageText,
+          remarks: messageText,
+          message: messageText,
+          message_text: messageText
+        })
+      });
+
+      if (!res.ok) {
+        let errMsg = `Failed to apply action "${actionName}".`;
+        try {
+          const errData = await res.json();
+          console.error("Workflow transition error payload:", errData);
+          if (errData._server_messages) {
+            try {
+              const msgs = JSON.parse(errData._server_messages);
+              const firstMsgObj = JSON.parse(msgs[0]);
+              errMsg = firstMsgObj.message || errMsg;
+            } catch (_) {
+              errMsg = errData._server_messages;
+            }
+          } else {
+            errMsg = errData.exception || errData.message || errMsg;
+          }
+        } catch (parseErr) {
+          const rawText = await res.text().catch(() => "");
+          console.error("Workflow transition raw error text:", rawText);
+        }
+        throw new Error(errMsg);
+      }
+
+      showToast('success', `Quotation "${actionName}" transition completed successfully.`);
+      await fetchQuotationDetail(selectedQuotation.name, selectedQuotation.party_name || selectedQuotation.customer);
+      await fetchQuotations();
+    } catch (err) {
+      console.error(err);
+      showToast('error', err.message || "Failed to trigger workflow action.");
+    } finally {
+      setSavingDiscount(false);
+    }
+  };
+
+  const handleSaveDiscountAndMessage = async () => {
+    if (!selectedQuotationDetail) return;
+
+    // Invalidate API actions cache for this quotation
+    if (selectedQuotationDetail && selectedQuotationDetail.name) {
+      delete workflowActionsCache.current[selectedQuotationDetail.name];
+    }
+
+    setSavingDiscount(true);
+    try {
+      if (!erpnextConfig || !erpnextConfig.url) {
+        setSelectedQuotationDetail(prev => {
+          if (!prev) return prev;
+          const disc = parseFloat(discountAmount) || 0;
+          return {
+            ...prev,
+            discount_amount: disc
+          };
+        });
+        setMessageText('');
+        showToast('success', 'Quotation updated locally.');
+        return;
+      }
+
+      // Save discount amount to Quotation resource
+      const discountRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${selectedQuotationDetail.name}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': getCsrfToken()
+        },
+        body: JSON.stringify({
+          discount_amount: parseFloat(discountAmount) || 0,
+          apply_discount_on: "Grand Total",
+          additional_discount_percentage: 0
+        })
+      });
+
+      if (!discountRes.ok) {
+        const text = await discountRes.text();
+        throw new Error(`Failed to save discount: ${text}`);
+      }
+
+      // Post comment to Comment resource if there is message text
+      if (messageText.trim()) {
+        const commentRes = await fetch(`${erpnextConfig.url}/api/resource/Comment`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Frappe-CSRF-Token': getCsrfToken()
+          },
+          body: JSON.stringify({
+            comment_type: 'Comment',
+            reference_doctype: 'Quotation',
+            reference_name: selectedQuotationDetail.name,
+            content: messageText
+          })
+        });
+
+        if (!commentRes.ok) {
+          const text = await commentRes.text();
+          console.warn('Failed to post comment to server:', text);
+        }
+      }
+
+      showToast('success', 'Quotation details saved successfully.');
+      setMessageText('');
+      await fetchQuotationDetail(selectedQuotationDetail.name, selectedQuotationDetail.party_name || selectedQuotationDetail.customer);
+      await fetchQuotations();
+    } catch (err) {
+      showToast('error', `Error updating quotation: ${err.message}`);
+    } finally {
+      setSavingDiscount(false);
+    }
+  };
+
   return (
     <div>
       {/* Toast notification — Create / Cancel / Amend / Approve / Reject feedback */}
@@ -5603,28 +5915,33 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 </tr>
               </thead>
               <tbody>
-                {quotations.map(q => (
-                  <tr
-                    key={q.name}
-                    onClick={() => handleRowClick(q)}
-                    style={{
-                      cursor: 'pointer',
-                      backgroundColor: selectedQuotation?.name === q.name ? 'var(--bg-accent-alpha)' : '',
-                      borderLeft: selectedQuotation?.name === q.name ? '3px solid var(--brand-color)' : ''
-                    }}
-                  >
-                    <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{q.name}</td>
-                    <td style={{ fontWeight: 600 }}>{q.customer_name}</td>
-                    <td>{q.transaction_date}</td>
-                    <td>{q.valid_till}</td>
-                    <td style={{ fontWeight: 600 }}>${(q.grand_total || 0).toLocaleString()}</td>
-                    <td>
-                      <span className={`badge ${q.status === 'Submitted' ? 'badge-success' : q.status === 'Cancelled' ? 'badge-danger' : 'badge-warning'}`}>
-                        {q.workflow_state}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {(() => {
+                  const indexOfLastItem = currentPage * itemsPerPage;
+                  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+                  const currentQuotations = quotations.slice(indexOfFirstItem, indexOfLastItem);
+                  return currentQuotations.map(q => (
+                    <tr
+                      key={q.name}
+                      onClick={() => handleRowClick(q)}
+                      style={{
+                        cursor: 'pointer',
+                        backgroundColor: selectedQuotation?.name === q.name ? 'var(--bg-accent-alpha)' : '',
+                        borderLeft: selectedQuotation?.name === q.name ? '3px solid var(--brand-color)' : ''
+                      }}
+                    >
+                      <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{q.name}</td>
+                      <td style={{ fontWeight: 600 }}>{q.customer_name}</td>
+                      <td>{q.transaction_date}</td>
+                      <td>{q.valid_till}</td>
+                      <td style={{ fontWeight: 600 }}>${(q.grand_total || 0).toLocaleString()}</td>
+                      <td>
+                        <span className={`badge ${q.status === 'Submitted' ? 'badge-success' : q.status === 'Cancelled' ? 'badge-danger' : 'badge-warning'}`}>
+                          {q.workflow_state}
+                        </span>
+                      </td>
+                    </tr>
+                  ));
+                })()}
                 {quotations.length === 0 && (
                   <tr>
                     <td colSpan="6" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
@@ -5635,22 +5952,52 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          {(() => {
+            const totalPages = Math.ceil(quotations.length / itemsPerPage);
+            if (totalPages <= 1) return null;
+            return (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderTop: '1px solid var(--border-color)', background: 'var(--bg-secondary)', fontSize: 10.5, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  className="btn btn-secondary"
+                  style={{ padding: '4px 8px', fontSize: 10, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', opacity: currentPage === 1 ? 0.5 : 1, minWidth: 60 }}
+                >
+                  Previous
+                </button>
+                <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                  className="btn btn-secondary"
+                  style={{ padding: '4px 8px', fontSize: 10, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', opacity: currentPage === totalPages ? 0.5 : 1, minWidth: 60 }}
+                >
+                  Next
+                </button>
+              </div>
+            );
+          })()}
         </div>
 
-        {/* Detailed Quotation TAX INVOICE styled Print View */}
         {selectedQuotation && selectedQuotationDetail && (
-          <div className="card-panel" style={{ padding: 24, background: '#ffffff', color: '#111827', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 16, animation: 'fadeIn 0.2s ease-out', position: 'relative' }}>
+          <div className="card-panel" style={{ padding: 24, background: '#ffffff', color: '#111827', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 12, animation: 'fadeIn 0.2s ease-out', position: 'relative', height: 'calc(100vh - 70px)', overflow: 'hidden', minWidth: 0 }}>
 
             {/* Close details button */}
             <button
               onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); }}
-              style={{ position: 'absolute', top: 12, right: 12, background: '#f3f4f6', border: 'none', borderRadius: '50%', color: '#374151', cursor: 'pointer', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              style={{ position: 'absolute', top: 12, right: 12, background: '#f3f4f6', border: 'none', borderRadius: '50%', color: '#374151', cursor: 'pointer', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}
             >
               ×
             </button>
 
             {/* TOP HEADER SECTION */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e5e7eb', paddingBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e5e7eb', paddingBottom: 10, flexShrink: 0 }}>
               {/* Logo & Company info */}
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                 <svg viewBox="0 0 100 100" style={{ width: 42, height: 42, borderRadius: 6, display: 'inline-block' }}>
@@ -5661,41 +6008,41 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 </svg>
                 <div style={{ fontSize: 10, color: '#4b5563', lineHeight: 1.3 }}>
                   <h4 style={{ color: '#111827', fontWeight: 800, fontSize: 13, marginBottom: 4, letterSpacing: '0.02em' }}>{companyDetails.name}</h4>
-                  <p>{companyDetails.address}</p>
-                  <p>Tel: {companyDetails.phone}</p>
-                  <p>Email: {companyDetails.email}</p>
-                  <p>{companyDetails.website}</p>
+                  <p>{companyDetails.address || '40 Robertson Road, Suva, Fiji'}</p>
+                  <p>Tel: {companyDetails.phone || '+65 6123 4567'}</p>
+                  <p>Email: {companyDetails.email || 'info@carpentersproperties.com'}</p>
+                  <p>{companyDetails.website || 'www.carpentersproperties.com'}</p>
                 </div>
               </div>
 
               {/* Quotation Identity details */}
               <div style={{ textAlign: 'right', fontSize: 11, color: '#4b5563', lineHeight: 1.4 }}>
-                <h3 style={{ color: '#111827', fontWeight: 800, fontSize: 14, margin: '0 0 6px 0', letterSpacing: '0.03em' }}>PROPOSAL / QUOTATION</h3>
-                <p><span style={{ color: '#6b7280' }}>Reference Code</span> &nbsp;&nbsp; {selectedQuotationDetail.name}</p>
-                <p><span style={{ color: '#6b7280' }}>Date Issued</span> &nbsp;&nbsp; {selectedQuotationDetail.transaction_date}</p>
-                <p><span style={{ color: '#6b7280' }}>Valid Until</span> &nbsp;&nbsp; {selectedQuotationDetail.valid_till}</p>
-                <p style={{ marginTop: 6 }}>
+                <h3 style={{ color: '#111827', fontWeight: 800, fontSize: 14, margin: '0 0 4px 0', letterSpacing: '0.03em' }}>PROPOSAL QUOTATION</h3>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center', marginBottom: 2 }}>
+                  <span style={{ fontWeight: 800, color: '#111827', fontSize: 13 }}>{selectedQuotationDetail.name}</span>
                   <span style={{
                     padding: '2px 8px',
                     borderRadius: 10,
                     fontSize: 9,
                     fontWeight: 700,
-                    backgroundColor: selectedQuotationDetail.status === 'Submitted' ? '#d1fae5' : selectedQuotationDetail.status === 'Cancelled' ? '#fee2e2' : '#fef3c7',
-                    color: selectedQuotationDetail.status === 'Submitted' ? '#065f46' : selectedQuotationDetail.status === 'Cancelled' ? '#991b1b' : '#92400e'
+                    backgroundColor: selectedQuotationDetail.status === 'Submitted' || selectedQuotationDetail.status === 'Approved' ? '#d1fae5' : selectedQuotationDetail.status === 'Cancelled' ? '#fee2e2' : '#fef3c7',
+                    color: selectedQuotationDetail.status === 'Submitted' || selectedQuotationDetail.status === 'Approved' ? '#065f46' : selectedQuotationDetail.status === 'Cancelled' ? '#991b1b' : '#92400e'
                   }}>
-                    {selectedQuotationDetail.status.toUpperCase()}
+                    {selectedQuotationDetail.workflow_state || selectedQuotationDetail.status}
                   </span>
-                </p>
+                </div>
+                <p><span style={{ color: '#6b7280' }}>Quote Date:</span> &nbsp; {selectedQuotationDetail.transaction_date}</p>
+                <p><span style={{ color: '#6b7280' }}>Valid Till:</span> &nbsp; {selectedQuotationDetail.valid_till}</p>
               </div>
             </div>
 
             {/* BILL TO / CUSTOMER INFO */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, fontSize: 10, paddingBottom: 6 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, fontSize: 10, paddingBottom: 6, flexShrink: 0 }}>
               <div>
-                <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>PROPOSED TO</span>
+                <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>Customer</span>
                 <strong style={{ fontSize: 11, color: '#111827', display: 'block' }}>{selectedQuotationDetail.customer_name}</strong>
                 <p style={{ color: '#4b5563', lineHeight: 1.3, marginTop: 2 }}>{customerAddress}</p>
-                <p style={{ color: '#4b5563', fontSize: 9, marginTop: 4 }}>Contact: {customerContact}</p>
+                <p style={{ color: '#4b5563', fontSize: 9, marginTop: 4 }}>Contact: {selectedQuotationDetail.custom_customer_email || ''} | {selectedQuotationDetail.custom_customer_ph_no || ''}</p>
               </div>
               <div style={{ background: '#f9fafb', padding: '10px 12px', borderRadius: 6, border: '1px solid #e5e7eb', fontSize: 9, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <span style={{ color: '#6b7280', fontWeight: 700 }}>ESTIMATED BOOKING PERIOD</span>
@@ -5704,190 +6051,634 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               </div>
             </div>
 
-            {/* QUOTATION ITEMS TABLE */}
-            <div style={{ border: '1px solid #e5e7eb', borderRadius: 4, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
-                <thead>
-                  <tr style={{ background: '#1f2937', color: '#ffffff', borderBottom: '1px solid #374151' }}>
-                    <th style={{ padding: '8px 10px', color: '#ffffff' }}>Item Name</th>
-                    <th style={{ padding: '8px 10px', color: '#ffffff' }}>Qty</th>
-                    <th style={{ padding: '8px 10px', color: '#ffffff' }}>UOM</th>
-                    <th style={{ padding: '8px 10px', textAlign: 'right', color: '#ffffff' }}>Standard Rate ({companyDetails.currency})</th>
-                    <th style={{ padding: '8px 10px', textAlign: 'right', color: '#ffffff' }}>Offered Rate ({companyDetails.currency})</th>
-                    <th style={{ padding: '8px 10px', textAlign: 'right', color: '#ffffff' }}>Amount ({companyDetails.currency})</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(selectedQuotationDetail.items || []).map((item, idx) => (
-                    <tr key={idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                      <td style={{ padding: '8px 10px', color: '#374151', fontWeight: 600 }}>{item.item_name || item.item_code}</td>
-                      <td style={{ padding: '8px 10px', color: '#4b5563' }}>{item.qty}</td>
-                      <td style={{ padding: '8px 10px', color: '#4b5563' }}>{item.uom || 'Month'}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: '#4b5563' }}>${(item.price_list_rate || item.rate || 0).toLocaleString()}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: '#111827', fontWeight: 600 }}>${(item.rate || 0).toLocaleString()}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: '#111827', fontWeight: 600 }}>
-                        ${((item.qty || 1) * (item.rate || 0)).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {/* TABS NAVIGATION */}
+            <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', gap: 16, flexShrink: 0 }}>
+              {['SUMMARY', 'NEGOTIATION HISTORY', 'COMPARISON', 'DOCUMENTS'].map(tab => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  style={{
+                    padding: '8px 4px',
+                    border: 'none',
+                    background: 'none',
+                    fontWeight: 700,
+                    fontSize: 10,
+                    letterSpacing: 0.5,
+                    cursor: 'pointer',
+                    borderBottom: activeTab === tab ? '2px solid var(--brand-color)' : '2px solid transparent',
+                    color: activeTab === tab ? 'var(--brand-color)' : '#4b5563',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {tab}
+                </button>
+              ))}
             </div>
 
-            {/* TOTALS & SUMMARY */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #e5e7eb', paddingTop: 10 }}>
-              <div style={{ width: '50%', fontSize: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
-                  <span>Subtotal</span>
-                  <span>${(selectedQuotationDetail.grand_total || 0).toLocaleString()}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#111827', fontWeight: 700, fontSize: 12, borderTop: '1px solid #e5e7eb', paddingTop: 6 }}>
-                  <span>Grand Total ({companyDetails.currency})</span>
-                  <span>${(selectedQuotationDetail.grand_total || 0).toLocaleString()}</span>
-                </div>
-              </div>
+            {/* TAB CONTENT WRAPPER */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+              {(() => {
+                const originalPrice = selectedQuotationDetail.custom_original_grand_total || (selectedQuotationDetail.grand_total + (selectedQuotationDetail.discount_amount || 0));
+                const currentPrice = selectedQuotationDetail.grand_total || 0;
+                const discount = selectedQuotationDetail.discount_amount || 0;
+                const diffPct = originalPrice > 0 ? ((discount / originalPrice) * 100).toFixed(2) : '0.00';
+
+                const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
+                const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
+                const isDiscountDisabled = isTerminal || isRequestForApproval;
+                const isApproved = (selectedQuotationDetail.workflow_state || selectedQuotationDetail.status) === "Approved";
+                const isDisabled = isTerminal;
+
+                const activeNegotiations = negotiations.length > 0 ? negotiations : [
+                  { name: `${selectedQuotationDetail.name}-v4`, version_no: selectedQuotationDetail.custom_total_versions || 4, negotiation_date: selectedQuotationDetail.modified || '2026-07-30 15:54:28', negotiation_by: selectedQuotationDetail.custom_last_negotiated_by || 'devteam@anantdv.com', current_discount: selectedQuotationDetail.discount_amount || 98.5, current_grand_total: selectedQuotationDetail.grand_total || 3184.75, previous_discount: 75, previous_grand_total: 3208.25, discount_difference: 23.5, discount_percentage: 3, negotiation_status: selectedQuotationDetail.status || 'Draft' },
+                  { name: `${selectedQuotationDetail.name}-v3`, version_no: 3, negotiation_date: '2026-07-26 16:30:00', negotiation_by: 'devteam@anantdv.com', current_discount: 75.00, current_grand_total: 3208.25, previous_discount: 50.00, previous_grand_total: 3233.25, discount_difference: 25.00, discount_percentage: 2, negotiation_status: 'Revised' },
+                  { name: `${selectedQuotationDetail.name}-v2`, version_no: 2, negotiation_date: '2026-07-24 10:15:00', negotiation_by: selectedQuotationDetail.custom_customer_email || 'biswajitmaity@icloud.com', current_discount: 50.00, current_grand_total: 3233.25, previous_discount: 0.00, previous_grand_total: 3283.25, discount_difference: 50.00, discount_percentage: 1.5, negotiation_status: 'Counter Offer' },
+                  { name: `${selectedQuotationDetail.name}-v1`, version_no: 1, negotiation_date: selectedQuotationDetail.creation || '2026-07-23 09:30:00', negotiation_by: 'devteam@anantdv.com', current_discount: 0.00, current_grand_total: 3283.25, previous_discount: 0.00, previous_grand_total: 3283.25, discount_difference: 0.00, discount_percentage: 0.00, negotiation_status: 'Initial Quote' }
+                ];
+
+                const activeComments = comments.length > 0 ? comments : [
+                  { comment_by: selectedQuotationDetail.custom_last_negotiated_by || 'devteam@anantdv.com', content: selectedQuotationDetail.custom_negotiation_status || 'Initial quotation created.', creation: selectedQuotationDetail.modified || '2026-07-30 15:54:28' }
+                ];
+
+                const stripHtml = (html) => {
+                  if (!html) return '';
+                  return html.replace(/<[^>]*>?/gm, '');
+                };
+
+                if (activeTab === 'SUMMARY') {
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto', paddingRight: 4, minHeight: 0 }}>
+
+                      {/* ROW 1: Price Comparison & Price Breakdown */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flexShrink: 0, alignItems: 'start' }}>
+                        {/* Price Comparison */}
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: '#4b5563', textTransform: 'uppercase', marginBottom: 4 }}>Price Comparison</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: 'auto auto', gap: 10, padding: 12, background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb', textAlign: 'center', minHeight: 120, boxSizing: 'border-box' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                              <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Original Price</div>
+                              <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2 }}>${originalPrice.toLocaleString()}</div>
+                            </div>
+                            <div style={{ borderLeft: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                              <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Current Price</div>
+                              <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: 'var(--brand-color)' }}>${currentPrice.toLocaleString()}</div>
+                            </div>
+                            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 8, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                              <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Discount ({companyDetails.currency || 'FJD'})</div>
+                              <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: '#eab308' }}>${discount.toLocaleString()}</div>
+                            </div>
+                            <div style={{ borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb', paddingTop: 8, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                              <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Difference</div>
+                              <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: '#ef4444' }}>-{diffPct}%</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Price Breakdown */}
+                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 135, boxSizing: 'border-box' }}>
+                          <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
+                            Price Breakdown (Current)
+                          </div>
+                          <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                              <tbody>
+                                {(selectedQuotationDetail.items || []).map((item, idx) => (
+                                  <tr key={idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                    <td style={{ padding: '8px 12px', color: '#374151', fontWeight: 600 }}>
+                                      {item.item_name || item.item_code} <span style={{ fontWeight: 400, color: '#6b7280', fontSize: 9 }}>({item.qty} {item.uom || 'Unit'})</span>
+                                    </td>
+                                    <td style={{ padding: '8px 12px', textAlign: 'right', color: '#111827', fontWeight: 700 }}>
+                                      ${((item.qty || 1) * (item.rate || 0)).toLocaleString()}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div style={{ padding: 10, background: '#f9fafb', borderTop: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 10, flexShrink: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
+                              <span>Standard Total</span>
+                              <span>${(selectedQuotationDetail.total || 0).toLocaleString()}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
+                              <span>Taxes (VAT @ 15.0%)</span>
+                              <span>${(selectedQuotationDetail.total_taxes_and_charges || 0).toLocaleString()}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
+                              <span>Original Total</span>
+                              <span>${(originalPrice).toLocaleString()}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#ef4444', fontWeight: 600 }}>
+                              <span>Negotiated Discount</span>
+                              <span>-${discount.toLocaleString()}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#059669', fontWeight: 800, fontSize: 12, borderTop: '1px solid #e5e7eb', paddingTop: 6 }}>
+                              <span>Final Total ({companyDetails.currency || 'FJD'})</span>
+                              <span>${currentPrice.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ROW 2: Negotiation Timeline & Negotiation Remarks */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flexShrink: 0, alignItems: 'start' }}>
+                        {/* Negotiation Timeline */}
+                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                          <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
+                            Negotiation Timeline
+                          </div>
+                          <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                              <thead>
+                                <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#4b5563' }}>
+                                  <th style={{ padding: '6px 12px' }}>Version</th>
+                                  <th style={{ padding: '6px 12px' }}>Date</th>
+                                  <th style={{ padding: '6px 12px' }}>By</th>
+                                  <th style={{ padding: '6px 12px', textAlign: 'right' }}>Discount</th>
+                                  <th style={{ padding: '6px 12px', textAlign: 'right' }}>Grand Total</th>
+                                  <th style={{ padding: '6px 12px' }}>Status</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {activeNegotiations.map((n, idx) => (
+                                  <tr key={n.name || idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                    <td style={{ padding: '6px 12px', fontWeight: 600, color: idx === 0 ? 'var(--brand-color)' : '#4b5563' }}>
+                                      V{n.version_no} {idx === 0 ? '(Current)' : idx === activeNegotiations.length - 1 ? '(Initial)' : ''}
+                                    </td>
+                                    <td style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>{n.negotiation_date ? n.negotiation_date.split(' ')[0] : '—'}</td>
+                                    <td style={{ padding: '6px 12px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 100 }} title={n.negotiation_by}>
+                                      {n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}
+                                    </td>
+                                    <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString()}</td>
+                                    <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
+                                    <td style={{ padding: '6px 12px' }}>
+                                      <span style={{
+                                        padding: '2px 6px',
+                                        borderRadius: 8,
+                                        fontSize: 8,
+                                        fontWeight: 700,
+                                        backgroundColor: n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#fef3c7' : n.negotiation_status === 'Initial Quote' ? '#e0f2fe' : '#e5e7eb',
+                                        color: n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#d97706' : n.negotiation_status === 'Initial Quote' ? '#0369a1' : '#374151'
+                                      }}>
+                                        {n.negotiation_status || 'Submitted'}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Negotiation Remarks */}
+                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                          <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
+                            Negotiation Remarks
+                          </div>
+                          <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, flex: 1, maxHeight: 180, overflowY: 'auto' }}>
+                            {activeComments.map((c, idx) => {
+                              const isSales = c.comment_by?.includes('devteam') || c.comment_by?.includes('sales') || c.comment_email?.includes('devteam') || c.comment_email?.includes('sales') || c.owner?.includes('devteam');
+                              return (
+                                <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                                  <div style={{ width: 24, height: 24, borderRadius: '50%', background: isSales ? '#e0f2fe' : '#f3e8ff', color: isSales ? '#0369a1' : '#6b21a8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 9 }}>
+                                    {isSales ? 'S' : 'C'}
+                                  </div>
+                                  <div style={{ flex: 1, background: isSales ? '#f0f9ff' : '#faf5ff', padding: 8, borderRadius: '0 8px 8px 8px', border: `1px solid ${isSales ? '#bae6fd' : '#e9d5ff'}` }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                                      <span style={{ fontSize: 9, fontWeight: 700, color: isSales ? '#0369a1' : '#6b21a8' }}>
+                                        {isSales ? 'Sales Team' : 'Customer'}
+                                      </span>
+                                      <span style={{ fontSize: 8, color: '#9ca3af' }}>{c.creation ? c.creation.split(' ')[0] : '—'}</span>
+                                    </div>
+                                    <div style={{ fontSize: 9, color: '#374151', lineHeight: 1.3 }}>{stripHtml(c.content)}</div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                    </div>
+                  );
+                }
+
+                if (activeTab === 'NEGOTIATION HISTORY') {
+                  return (
+                    <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                      <span style={{ fontWeight: 700, fontSize: 10, color: '#4b5563', textTransform: 'uppercase' }}>Revision Version History</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        {activeNegotiations.map((n, idx) => (
+                          <div key={n.name || idx} style={{ borderLeft: '2px solid var(--brand-color)', paddingLeft: 12, position: 'relative' }}>
+                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--brand-color)', position: 'absolute', left: -5, top: 4 }} />
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <strong style={{ fontSize: 11 }}>Version {n.version_no} ({n.negotiation_status})</strong>
+                              <span style={{ fontSize: 9, color: '#6b7280' }}>{n.negotiation_date}</span>
+                            </div>
+                            <p style={{ margin: '4px 0 0 0', fontSize: 10, color: '#4b5563', lineHeight: 1.4 }}>
+                              Negotiated by <strong>{n.negotiation_by}</strong>. Changed grand total from <strong>${(n.previous_grand_total || 0).toLocaleString()}</strong> to <strong>${(n.current_grand_total || 0).toLocaleString()}</strong> (Discount: <strong>${(n.current_discount || 0).toLocaleString()}</strong>).
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (activeTab === 'COMPARISON') {
+                  return (
+                    <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                      <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
+                        Version-by-Version Comparison
+                      </div>
+                      <div style={{ overflowX: 'auto', flex: 1 }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left', minWidth: 350 }}>
+                          <thead>
+                            <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb' }}>
+                              <th style={{ padding: '8px 12px' }}>Parameter</th>
+                              {activeNegotiations.map(n => (
+                                <th key={n.name} style={{ padding: '8px 12px', textAlign: 'right' }}>V{n.version_no}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                              <td style={{ padding: '8px 12px', fontWeight: 600 }}>Discount Amount</td>
+                              {activeNegotiations.map(n => (
+                                <td key={n.name} style={{ padding: '8px 12px', textAlign: 'right', color: '#eab308', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString()}</td>
+                              ))}
+                            </tr>
+                            <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                              <td style={{ padding: '8px 12px', fontWeight: 600 }}>Grand Total</td>
+                              {activeNegotiations.map(n => (
+                                <td key={n.name} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--brand-color)', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
+                              ))}
+                            </tr>
+                            <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                              <td style={{ padding: '8px 12px', fontWeight: 600 }}>Negotiated By</td>
+                              {activeNegotiations.map(n => (
+                                <td key={n.name} style={{ padding: '8px 12px', textAlign: 'right', color: '#4b5563' }}>{n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}</td>
+                              ))}
+                            </tr>
+                            <tr>
+                              <td style={{ padding: '8px 12px', fontWeight: 600 }}>Status</td>
+                              {activeNegotiations.map(n => (
+                                <td key={n.name} style={{ padding: '8px 12px', textAlign: 'right' }}>
+                                  <span style={{ fontSize: 8, fontWeight: 700, color: 'var(--brand-color)' }}>{n.negotiation_status}</span>
+                                </td>
+                              ))}
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (activeTab === 'DOCUMENTS') {
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                      {[
+                        { title: 'PMS Offer Letter', desc: 'Official proposal offer letter with printable layouts.', type: 'Offer Letter' },
+                        { title: 'Sales Contract Draft', desc: 'Standard leasing terms and conditions for commercial units.', type: 'Leasing Agreement' },
+                        { title: 'Property Unit Booking Receipt', desc: 'Holding deposit transaction record.', type: 'Receipt' }
+                      ].map((doc, idx) => (
+                        <div key={idx} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f9fafb', flexShrink: 0 }}>
+                          <div>
+                            <h5 style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#1f2937' }}>{doc.title}</h5>
+                            <p style={{ margin: '2px 0 0 0', fontSize: 9, color: '#6b7280' }}>{doc.desc}</p>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: 10, padding: '4px 10px' }}
+                            onClick={() => {
+                              if (doc.type === 'Offer Letter') {
+                                const printBtn = document.getElementById('qtn-print-action-btn');
+                                if (printBtn) printBtn.click();
+                              } else {
+                                showToast('info', `${doc.title} is ready to be printed once quotation is approved.`);
+                              }
+                            }}
+                          >
+                            View / Print
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }
+              })()}
             </div>
 
-            {/* DYNAMIC ACTION BUTTONS */}
-            {
-              quotations.find(q => q.name === selectedQuotation?.name)?.workflow_state != "Request For Approval" ||
-              <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+            {/* BOTTOM SUMMARY & DECISION SECTION */}
+            {(() => {
+              const originalPrice = selectedQuotationDetail.custom_original_grand_total || (selectedQuotationDetail.grand_total + (selectedQuotationDetail.discount_amount || 0));
+              const originalDiscount = selectedQuotationDetail.discount_amount !== undefined && selectedQuotationDetail.discount_amount !== null
+                ? String(selectedQuotationDetail.discount_amount)
+                : '';
+              const isChanged = discountAmount !== originalDiscount || messageText.trim() !== '';
+              const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
+              const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
+              const isDiscountDisabled = isTerminal || isRequestForApproval;
+              const isApproved = (selectedQuotationDetail.workflow_state || selectedQuotationDetail.status) === "Approved";
+              const isDisabled = isTerminal;
 
-                <button
-                  // type="button"
-                  // className="btn btn-primary"
-                  type="button"
-                  className="btn btn-secondary"
-                  style={{ flex: 1, borderColor: '#ef4444', color: '#ef4444', background: 'transparent' }}
-                  // style={{ flex: 1 }}
-                  onClick={() => handelaction(selectedQuotation, 0)}
-                >
-                  Cancel Quotation
-                </button>
-
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  style={{ flex: 1 }}
-                  onClick={() => handelaction(selectedQuotation, 1)}
-                >
-                  Approve Quotation
-                </button>
-
-              </div>
-            }
-            <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
-              {/* <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                onClick={() => onGoToBooking && onGoToBooking(selectedQuotationDetail)}
-              >
-                Go to Booking <ArrowUpRight size={14} />
-              </button> */}
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                onClick={() => onGoToBooking && onGoToBooking(selectedQuotationDetail)}
-              >
-                Go to Booking <ArrowUpRight size={14} />
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                onClick={() => {
-                  if (selectedQuotationDetail?.status === 'Cancelled') {
-                    showToast('error', 'Not allowed to print cancelled documents');
-                    return;
-                  }
-                  if (erpnextConfig?.url && selectedQuotationDetail?.name) {
-                    // Open the print page without trigger_print=1 so we control print behavior and styles
-                    const printUrl = `${erpnextConfig.url}/printview?doctype=Quotation&name=${encodeURIComponent(selectedQuotationDetail.name)}&format=PMS%20Offer%20Letter&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
-                    const printWindow = window.open(printUrl, '_blank');
-
-                    if (printWindow) {
-                      const injectAndPrint = () => {
-                        try {
-                          const doc = printWindow.document;
-                          if (doc) {
-                            // Set title to empty to prevent browser from printing document title ("TrueValue" etc.)
-                            doc.title = "";
-
-                            if (doc.head) {
-                              if (doc.getElementById('pms-custom-print-style')) return;
-
-                              const style = doc.createElement('style');
-                              style.id = 'pms-custom-print-style';
-                              style.innerHTML = `
-                                /* Hide Frappe print view action banner containing Print / Get PDF */
-                                .action-banner {
-                                  display: none !important;
-                                }
-                                
-                                /* Remove default browser print headers and footers globally */
-                                @page {
-                                  size: auto;
-                                  margin: 0mm;
-                                }
-                                
-                                /* Remove default browser print headers and footers within print media */
-                                @media print {
-                                  @page {
-                                    size: auto;
-                                    margin: 0mm;
-                                  }
-                                  body {
-                                    margin: 15mm !important;
-                                    padding: 0px !important;
-                                  }
-                                  .action-banner, header, footer {
-                                    display: none !important;
-                                  }
-                                }
-                              `;
-                              doc.head.appendChild(style);
-
-                              // Delay slightly to ensure CSS and title updates are applied before printing
-                              setTimeout(() => {
-                                printWindow.print();
-                              }, 500);
-                            }
-                          }
-                        } catch (e) {
-                          console.warn("Unable to customize print style:", e);
-                        }
-                      };
-
-                      // Run onload if possible
-                      printWindow.onload = injectAndPrint;
-
-                      // Fallback polling for loaded document
-                      let attempts = 0;
-                      const checkInterval = setInterval(() => {
-                        attempts++;
-                        if (printWindow.closed || attempts > 80) { // 8 seconds timeout
-                          clearInterval(checkInterval);
-                          return;
-                        }
-                        try {
-                          if (printWindow.document && printWindow.document.readyState === 'complete') {
-                            clearInterval(checkInterval);
-                            injectAndPrint();
-                          }
-                        } catch (err) {
-                          // Ignore cross-origin errors during transitions
-                        }
-                      }, 100);
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, borderTop: '1px solid #e5e7eb', paddingTop: 10, flexShrink: 0 }}>
+                  <style dangerouslySetInnerHTML={{ __html: `
+                    .qtn-btn-base {
+                      flex: 1;
+                      min-width: 80px;
+                      padding: 6px 10px;
+                      font-size: 10px;
+                      font-weight: 700;
+                      min-height: 30px;
+                      white-space: nowrap;
+                      border-radius: 8px;
+                      cursor: pointer;
+                      transition: all 0.15s ease;
+                      border: 1px solid transparent;
+                      text-transform: capitalize;
+                      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+                      display: flex;
+                      align-items: center;
+                      justify-content: center;
+                      gap: 4px;
                     }
-                  }
-                }}
-              >
-                Print <Printer size={14} />
-              </button>
-            </div>
+                    .qtn-btn-approve {
+                      background-color: #10b981 !important;
+                      border: 1px solid #10b981 !important;
+                      color: #ffffff !important;
+                    }
+                    .qtn-btn-approve:hover {
+                      background-color: #059669 !important;
+                      border-color: #059669 !important;
+                    }
+                    .qtn-btn-reject {
+                      background-color: #ef4444 !important;
+                      border: 1px solid #ef4444 !important;
+                      color: #ffffff !important;
+                    }
+                    .qtn-btn-reject:hover {
+                      background-color: #dc2626 !important;
+                      border-color: #dc2626 !important;
+                    }
+                    .qtn-btn-sendback {
+                      background-color: #ffffff !important;
+                      border: 1px solid #f59e0b !important;
+                      color: #f59e0b !important;
+                    }
+                    .qtn-btn-sendback:hover {
+                      background-color: #fffbeb !important;
+                      border-color: #d97706 !important;
+                      color: #d97706 !important;
+                    }
+                    .qtn-btn-print {
+                      background-color: #ffffff !important;
+                      border: 1px solid #d1d5db !important;
+                      color: #374151 !important;
+                    }
+                    .qtn-btn-print:hover {
+                      background-color: #f9fafb !important;
+                      border-color: #9ca3af !important;
+                      color: #111827 !important;
+                    }
+                  ` }} />
+                  {/* Left Column: Quotation Summary */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 10 }}>
+                    <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 9, textTransform: 'uppercase' }}>Quotation Summary</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
+                        <span style={{ color: '#6b7280' }}>Versions Created</span>
+                        <strong style={{ color: '#111827' }}>{selectedQuotationDetail.custom_total_versions || 1}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
+                        <span style={{ color: '#6b7280' }}>Total Discount</span>
+                        <strong style={{ color: '#111827' }}>${(selectedQuotationDetail.discount_amount || 0).toLocaleString()}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
+                        <span style={{ color: '#6b7280' }}>Last Negotiation</span>
+                        <strong style={{ color: '#111827' }}>{selectedQuotationDetail.custom_last_negotiation_date || selectedQuotationDetail.modified || 'N/A'}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
+                        <span style={{ color: '#6b7280' }}>Negotiated By</span>
+                        <strong style={{ color: '#111827' }}>{selectedQuotationDetail.custom_last_negotiated_by || selectedQuotationDetail.owner || 'N/A'}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#6b7280' }}>Current Status</span>
+                        <strong style={{ color: 'var(--brand-color)' }}>{selectedQuotationDetail.workflow_state || selectedQuotationDetail.status}</strong>
+                      </div>
+                    </div>
+                  </div>
 
+                  {/* Right Column: Final Decision */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 9, textTransform: 'uppercase' }}>Final Decision</span>
+
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                        <label style={{ fontSize: 8, color: '#6b7280', fontWeight: 700 }}>Discount Amount ({companyDetails.currency || 'FJD'})</label>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="0.00"
+                          value={discountAmount}
+                          onChange={(e) => setDiscountAmount(e.target.value)}
+                          disabled={isDiscountDisabled}
+                          className="form-input"
+                          style={{ fontSize: 10, padding: '4px 8px', boxSizing: 'border-box', background: isDiscountDisabled ? '#f3f4f6' : '#ffffff', minHeight: 28 }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <label style={{ fontSize: 8, color: '#6b7280', fontWeight: 700 }}>Manager Comment</label>
+                      <textarea
+                        placeholder="Enter comments here..."
+                        value={messageText}
+                        onChange={(e) => setMessageText(e.target.value)}
+                        disabled={isDisabled}
+                        className="form-input"
+                        rows={1}
+                        style={{ fontSize: 10, padding: '4px 8px', boxSizing: 'border-box', resize: 'none', background: isDisabled ? '#f3f4f6' : '#ffffff', minHeight: 28 }}
+                      />
+                    </div>
+
+                    {/* BUTTONS ROW (Dynamic workflow buttons + Booking + Print) */}
+                    {(() => {
+                      const state = selectedQuotationDetail.workflow_state || "Quotation Created";
+                      let actions = [];
+
+                      // 1. Try to extract actions from the API response
+                      let apiActions = [];
+                      if (workflowActions) {
+                        if (Array.isArray(workflowActions.next_actions)) {
+                          apiActions = workflowActions.next_actions.filter(act => act && act.allowed !== false);
+                        } else if (Array.isArray(workflowActions)) {
+                          apiActions = workflowActions;
+                        } else if (typeof workflowActions === 'object') {
+                          const rawActions = workflowActions.actions ||
+                            workflowActions.next_actions ||
+                            workflowActions.transitions ||
+                            workflowActions.workflow_actions ||
+                            workflowActions.next_workflow_actions ||
+                            [];
+                          if (Array.isArray(rawActions)) {
+                            apiActions = rawActions.filter(act => act && act.allowed !== false);
+                          }
+                        }
+                      }
+
+                      if (apiActions.length > 0) {
+                        actions = apiActions.map(act => {
+                          if (typeof act === 'string') {
+                            let label = act;
+                            let variant = "primary";
+                            if (act.toLowerCase().includes("reject")) variant = "danger";
+                            if (act.toLowerCase().includes("counter")) variant = "secondary";
+                            return { label, action: act, variant };
+                          } else if (act && typeof act === 'object') {
+                            const actName = act.action || "";
+                            const nextStateName = act.next_state || actName;
+                            let label = nextStateName;
+
+                            let variant = "primary";
+                            if (actName.toLowerCase().includes("reject") || nextStateName.toLowerCase().includes("reject")) variant = "danger";
+                            if (actName.toLowerCase().includes("counter") || nextStateName.toLowerCase().includes("counter")) variant = "secondary";
+                            return { label, action: actName, variant };
+                          }
+                          return null;
+                        }).filter(Boolean);
+                      }
+
+                      // Sort actions: reject/rejected should always go to the bottom
+                      const sortedActions = [...actions].sort((a, b) => {
+                        const aIsReject = (a.action || "").toLowerCase().includes("reject") || (a.label || "").toLowerCase().includes("reject");
+                        const bIsReject = (b.action || "").toLowerCase().includes("reject") || (b.label || "").toLowerCase().includes("reject");
+                        if (aIsReject && !bIsReject) return 1;
+                        if (!aIsReject && bIsReject) return -1;
+                        return 0;
+                      });
+
+                      return (
+                        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center', width: '100%' }}>
+                          {sortedActions.map((act) => {
+                            const actionKey = (act.action || "").toLowerCase();
+                            const nextStateKey = (act.label || "").toLowerCase();
+
+                            let btnClass = "qtn-btn-base ";
+                            let icon = null;
+
+                            if (actionKey.includes("reject") || nextStateKey.includes("reject") || nextStateKey.includes("rejected")) {
+                              btnClass += "qtn-btn-reject";
+                              icon = <X size={11} />;
+                            } else if (actionKey.includes("approve") || nextStateKey.includes("approve") || nextStateKey.includes("approved")) {
+                              btnClass += "qtn-btn-approve";
+                              icon = <Check size={11} />;
+                            } else {
+                              btnClass += "qtn-btn-sendback";
+                              icon = <RotateCcw size={11} />;
+                            }
+
+                            return (
+                              <button
+                                key={act.action}
+                                type="button"
+                                className={btnClass}
+                                onClick={() => handleWorkflowAction(act.action)}
+                                disabled={savingDiscount}
+                              >
+                                {icon}
+                                <span>{savingDiscount ? '...' : act.label}</span>
+                              </button>
+                            );
+                          })}
+
+                          {/* Go to Booking - Only in Approved status */}
+                          {isApproved && (
+                            <button
+                              type="button"
+                              className="qtn-btn-base qtn-btn-approve"
+                              onClick={() => onGoToBooking && onGoToBooking(selectedQuotationDetail)}
+                            >
+                              <Check size={11} />
+                              <span>Go to Booking</span>
+                            </button>
+                          )}
+
+                          {/* Print Button */}
+                          <button
+                            id="qtn-print-action-btn"
+                            type="button"
+                            className="qtn-btn-base qtn-btn-print"
+                            onClick={() => {
+                              if (selectedQuotationDetail.status === 'Cancelled') {
+                                showToast('error', 'Not allowed to print cancelled documents');
+                                return;
+                              }
+                              if (erpnextConfig?.url && selectedQuotationDetail?.name) {
+                                const printUrl = `${erpnextConfig.url}/printview?doctype=Quotation&name=${encodeURIComponent(selectedQuotationDetail.name)}&format=PMS%20Offer%20Letter&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+                                const printWindow = window.open(printUrl, '_blank');
+
+                                if (printWindow) {
+                                  const injectAndPrint = () => {
+                                    try {
+                                      const doc = printWindow.document;
+                                      if (doc) {
+                                        doc.title = "";
+                                        if (doc.head) {
+                                          if (doc.getElementById('pms-custom-print-style')) return;
+                                          const style = doc.createElement('style');
+                                          style.id = 'pms-custom-print-style';
+                                          style.innerHTML = `
+                                            .action-banner { display: none !important; }
+                                            @page { size: auto; margin: 0mm; }
+                                            @media print {
+                                              body { margin: 1.6cm 2cm; background: #fff !important; }
+                                              .action-banner, .action-bar, header, footer { display: none !important; }
+                                            }
+                                          `;
+                                          doc.head.appendChild(style);
+                                        }
+                                        printWindow.print();
+                                      }
+                                    } catch (err) {
+                                      console.warn("Failed to inject CSS to print window:", err);
+                                    }
+                                  };
+
+                                  let attempts = 0;
+                                  const checkInterval = setInterval(() => {
+                                    attempts++;
+                                    if (printWindow.closed || attempts > 80) {
+                                      clearInterval(checkInterval);
+                                      return;
+                                    }
+                                    try {
+                                      if (printWindow.document && printWindow.document.readyState === 'complete') {
+                                        clearInterval(checkInterval);
+                                        injectAndPrint();
+                                      }
+                                    } catch (err) {
+                                      // ignore cross-origin transitions
+                                    }
+                                  }, 100);
+                                }
+                              }
+                            }}
+                          >
+                            <Printer size={11} />
+                            <span>Print</span>
+                          </button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -6016,7 +6807,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                           </colgroup>
                           <thead>
                             <tr style={{ background: 'var(--color-bg-secondary, rgba(255,255,255,0.05))', position: 'sticky', top: 0, zIndex: 1 }}>
-                              {['#', 'Unit Code', 'Qty', 'UOM', 'Val. Rate', 'Offered Rate', 'Property Group', 'Locality', 'District', 'Total Area', 'Amount', ''].map((h, i) => (
+                              {['#', 'Unit Code', 'Qty', 'UOM', 'Val. Rate', 'Offered Rate', 'Property Type', 'Locality', 'District', 'Total Area', 'Amount', ''].map((h, i) => (
                                 <th
                                   key={i}
                                   style={{
@@ -6092,7 +6883,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                   />
                                 </td>
 
-                                {/* Property Group */}
+                                {/* Property Type */}
                                 <td style={{ padding: '6px 8px', color: 'var(--color-text-muted, #9ca3af)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                   {item.loadingDetail ? '…' : (item.propertyGroup || '—')}
                                 </td>
