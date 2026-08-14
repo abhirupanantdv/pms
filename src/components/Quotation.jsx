@@ -5898,7 +5898,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         </div>
       )}
 
-      <div className="grid-2col" style={{ gridTemplateColumns: selectedQuotation ? '50% calc(50% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
+      <div className="grid-2col" style={{ gridTemplateColumns: '1fr', gap: 24, transition: 'all 0.3s ease' }}>
 
         {/* Quotations List Table */}
         <div className="card-panel" style={{ padding: 0, overflow: 'hidden' }}>
@@ -5985,8 +5985,43 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           })()}
         </div>
 
+      {/* Backdrop with Blur Effect */}
+      {selectedQuotation && selectedQuotationDetail && (
+        <div
+          onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); }}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(15, 23, 42, 0.05)',
+            backdropFilter: 'blur(1.5px)',
+            WebkitBackdropFilter: 'blur(1.5px)',
+            zIndex: 998,
+            animation: 'fadeIn 0.2s ease-out'
+          }}
+        />
+      )}
+
+      {/* Details Drawer (Right Pane) */}
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        right: (selectedQuotation && selectedQuotationDetail) ? 0 : '-650px',
+        width: '650px',
+        maxWidth: '100%',
+        height: '100vh',
+        background: 'var(--bg-primary)',
+        boxShadow: '-8px 0 32px rgba(0, 0, 0, 0.15)',
+        zIndex: 999,
+        transition: 'right 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden'
+      }}>
         {selectedQuotation && selectedQuotationDetail && (
-          <div className="card-panel" style={{ padding: 24, background: '#ffffff', color: '#111827', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 12, animation: 'fadeIn 0.2s ease-out', position: 'relative', height: 'calc(100vh - 70px)', overflow: 'hidden', minWidth: 0 }}>
+          <div className="card-panel" style={{ padding: 24, background: '#ffffff', color: '#111827', display: 'flex', flexDirection: 'column', gap: 12, position: 'relative', height: '100%', overflowY: 'auto', minWidth: 0, border: 'none', borderRadius: 0 }}>
 
             {/* Close details button */}
             <button
@@ -5996,45 +6031,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               ×
             </button>
 
-            {/* TOP HEADER SECTION */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e5e7eb', paddingBottom: 10, flexShrink: 0 }}>
-              {/* Logo & Company info */}
-              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                <svg viewBox="0 0 100 100" style={{ width: 42, height: 42, borderRadius: 6, display: 'inline-block' }}>
-                  <rect width="100" height="100" fill="#000000" rx="12" />
-                  <circle cx="50" cy="50" r="36" fill="#FFDD00" />
-                  <polygon points="50,50 86,14 100,14 100,86 86,86" fill="#000000" />
-                  <line x1="24" y1="76" x2="50" y2="50" stroke="#000000" strokeWidth="5.5" strokeLinecap="round" />
-                </svg>
-                <div style={{ fontSize: 10, color: '#4b5563', lineHeight: 1.3 }}>
-                  <h4 style={{ color: '#111827', fontWeight: 800, fontSize: 13, marginBottom: 4, letterSpacing: '0.02em' }}>{companyDetails.name}</h4>
-                  <p>{companyDetails.address || '40 Robertson Road, Suva, Fiji'}</p>
-                  <p>Tel: {companyDetails.phone || '+65 6123 4567'}</p>
-                  <p>Email: {companyDetails.email || 'info@carpentersproperties.com'}</p>
-                  <p>{companyDetails.website || 'www.carpentersproperties.com'}</p>
-                </div>
-              </div>
 
-              {/* Quotation Identity details */}
-              <div style={{ textAlign: 'right', fontSize: 11, color: '#4b5563', lineHeight: 1.4 }}>
-                <h3 style={{ color: '#111827', fontWeight: 800, fontSize: 14, margin: '0 0 4px 0', letterSpacing: '0.03em' }}>PROPOSAL QUOTATION</h3>
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center', marginBottom: 2 }}>
-                  <span style={{ fontWeight: 800, color: '#111827', fontSize: 13 }}>{selectedQuotationDetail.name}</span>
-                  <span style={{
-                    padding: '2px 8px',
-                    borderRadius: 10,
-                    fontSize: 9,
-                    fontWeight: 700,
-                    backgroundColor: selectedQuotationDetail.status === 'Submitted' || selectedQuotationDetail.status === 'Approved' ? '#d1fae5' : selectedQuotationDetail.status === 'Cancelled' ? '#fee2e2' : '#fef3c7',
-                    color: selectedQuotationDetail.status === 'Submitted' || selectedQuotationDetail.status === 'Approved' ? '#065f46' : selectedQuotationDetail.status === 'Cancelled' ? '#991b1b' : '#92400e'
-                  }}>
-                    {selectedQuotationDetail.workflow_state || selectedQuotationDetail.status}
-                  </span>
-                </div>
-                <p><span style={{ color: '#6b7280' }}>Quote Date:</span> &nbsp; {selectedQuotationDetail.transaction_date}</p>
-                <p><span style={{ color: '#6b7280' }}>Valid Till:</span> &nbsp; {selectedQuotationDetail.valid_till}</p>
-              </div>
-            </div>
 
             {/* BILL TO / CUSTOMER INFO */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, fontSize: 10, paddingBottom: 6, flexShrink: 0 }}>
@@ -6681,6 +6678,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             })()}
           </div>
         )}
+      </div>
       </div>
 
 

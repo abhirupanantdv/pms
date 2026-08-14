@@ -11,3 +11,9 @@ website_route_rules = [
     {"from_route": "/pms/<path:app_path>", "to_route": "pms"},
     {"from_route": "/pms", "to_route": "pms"},
 ]
+
+doc_events = {
+    "Tenant Onboarding": {
+        "validate": "pms.utils.validate_tenant_onboarding_phone"
+    }
+}

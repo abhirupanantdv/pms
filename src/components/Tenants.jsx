@@ -2787,7 +2787,7 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
                       </td>
                       <td>
                         <span className={`badge ${tenant.disabled ? 'badge-danger' : 'badge-success'}`}>
-                          {tenant.disabled ? 'Disabled' : 'Active'}
+                          {tenant.disabled ? 'Inactive' : 'Active'}
                         </span>
                       </td>
                     </tr>
@@ -2801,7 +2801,7 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
 
         {/* Preview panel - only real Customer doctype fields */}
         {selectedTenant && (
-          <div className="card-panel" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20, animation: 'fadeIn 0.2s ease-out' }}>
+          <div className="card-panel" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20, animation: 'fadeIn 0.2s ease-out', overflowY: 'auto', maxHeight: '85vh' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <User size={18} style={{ color: 'var(--brand-color)' }} />
@@ -2816,15 +2816,49 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
               <div className="user-avatar" style={{ margin: '0 auto 12px', width: 64, height: 64, fontSize: 22, borderRadius: '50%' }}>
                 {(selectedTenant.customer_name || '').split(' ').filter(Boolean).map(n => n[0]).join('') || '?'}
               </div>
-              <h2 style={{ fontSize: '1.3rem', marginBottom: 4 }}>{selectedTenant.customer_name}</h2>
-              <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center' }}>
-                <span className={`badge ${selectedTenant.disabled ? 'badge-danger' : 'badge-success'}`}>{selectedTenant.disabled ? 'Disabled' : 'Active'}</span>
-                {selectedTenant.customer_group && <span className="badge badge-secondary">{selectedTenant.customer_group}</span>}
+              <h2 style={{ fontSize: '1.3rem', marginBottom: 6, fontWeight: 700, color: 'var(--text-primary)' }}>{selectedTenant.customer_name}</h2>
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+                <span className={`badge ${selectedTenant.disabled ? 'badge-danger' : 'badge-success'}`}>
+                  {selectedTenant.disabled ? 'Inactive' : 'Active'}
+                </span>
+                {selectedTenant.custom_type && (
+                  <span className="badge badge-secondary">{selectedTenant.custom_type}</span>
+                )}
               </div>
             </div>
 
+            {/* Profile Info Section */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <h3 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 2px 0', fontWeight: 700 }}>Profile Details</h3>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Is Internal?</span>
+                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {selectedTenant.is_internal_customer ? 'Yes' : 'No'}
+                  </span>
+                </div>
+                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Currency</span>
+                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {selectedTenant.default_currency || 'FJD'}
+                  </span>
+                </div>
+              </div>
+
+              {selectedTenant.company_name && (
+                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Company Name</span>
+                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {selectedTenant.company_name}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Contact Details Section */}
             <div style={{ background: 'var(--bg-tertiary)', padding: 16, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <h3 style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 2 }}>Contact</h3>
+              <h3 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 2px 0', fontWeight: 700 }}>Contact & Address</h3>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
@@ -2868,6 +2902,31 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
                 <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{selectedTenant.date_of_birth || '—'}</span>
               </div>
             </div>
+
+            {/* System Info Section */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid var(--border-color)', paddingTop: 14 }}>
+              <h3 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 2px 0', fontWeight: 700 }}>System Information</h3>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                <div>
+                  <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Created On</span>
+                  <span>{selectedTenant.creation || '—'}</span>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Owner</span>
+                  <span style={{ wordBreak: 'break-all' }}>{selectedTenant.owner || '—'}</span>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Last Modified</span>
+                  <span>{selectedTenant.modified || '—'}</span>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Modified By</span>
+                  <span style={{ wordBreak: 'break-all' }}>{selectedTenant.modified_by || '—'}</span>
+                </div>
+              </div>
+            </div>
+
           </div>
         )}
       </div>

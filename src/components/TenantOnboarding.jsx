@@ -8,6 +8,7 @@ import {
   Key,
   DollarSign,
   ShieldCheck,
+  ShieldAlert,
   Calendar,
   ArrowRight,
   CheckCircle2,
@@ -65,6 +66,46 @@ const parsePhoneNumber = (fullNumber) => {
   return { prefix: '+679', local: normalized };
 };
 
+const normalizeFijiPhone = (value) => {
+  if (!value) return "";
+  let phone = value.toString().trim();
+  phone = phone.replace(/[^\d+]/g, "");
+  if (phone.startsWith("679")) {
+    phone = "+" + phone;
+  }
+  if (phone.startsWith("0")) {
+    phone = "+679" + phone.substring(1);
+  }
+  return phone;
+};
+
+const extractErrorMessage = async (res) => {
+  let message = "An error occurred with the request.";
+  try {
+    const errJson = await res.json();
+    let serverMsgs = '';
+    if (errJson._server_messages) {
+      try {
+        const parsedMsgs = JSON.parse(errJson._server_messages);
+        serverMsgs = parsedMsgs.map(m => {
+          try {
+            const item = JSON.parse(m);
+            return item.message;
+          } catch {
+            return m.message || m;
+          }
+        }).join('\n');
+      } catch {
+        serverMsgs = errJson._server_messages;
+      }
+    }
+    message = errJson.exception || serverMsgs || errJson.message || message;
+  } catch (e) {
+    console.warn("Failed parsing error json:", e);
+  }
+  return message;
+};
+
 export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const [onboardings, setOnboardings] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -99,6 +140,18 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const [editPlansForApproval, setEditPlansForApproval] = useState('');
   const [editCompanyName, setEditCompanyName] = useState('');
   const [editMenuAndBusinessPictures, setEditMenuAndBusinessPictures] = useState('');
+
+  // New basic details edit fields
+  const [editType, setEditType] = useState('Company');
+  const [editCompanyVatId, setEditCompanyVatId] = useState('');
+  const [editIsInternalCustomer, setEditIsInternalCustomer] = useState(false);
+  const [editDateOfBirth, setEditDateOfBirth] = useState('');
+  const [editAddressLine1, setEditAddressLine1] = useState('');
+  const [editAddressLine2, setEditAddressLine2] = useState('');
+  const [editCity, setEditCity] = useState('');
+  const [editState, setEditState] = useState('');
+  const [editCountry, setEditCountry] = useState('Fiji');
+
   const [updatingDetails, setUpdatingDetails] = useState(false);
   const [checklistDrafts, setChecklistDrafts] = useState({});
 
@@ -185,7 +238,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     d.document_type?.toLowerCase().trim() === previewDocTitle?.toLowerCase().trim()
   );
   const previewDraftEntry = selectedCase ? checklistDrafts[previewDocTitle] : undefined;
-  
+
   const isPreviewDocVerified = previewDraftEntry !== undefined
     ? !!previewDraftEntry.verified
     : !!currentPreviewErpDoc?.verified;
@@ -228,6 +281,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       if (res.ok) {
         const json = await res.json();
         const detail = json.data || json;
+        console.log("Selected Tenant Onboarding Details:", detail);
         if (detail) {
           const docList = detail.company_search_documents || [];
 
@@ -264,12 +318,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     }
   };
 
-  useEffect(() => {
-    if (onboardings.length > 0 && !selectedCase && !firstLoadDone) {
-      handleSelectCase(onboardings[0]);
-      setFirstLoadDone(true);
-    }
-  }, [onboardings]);
+
 
   // Local checklist storage key
   const LOCAL_CHECKLISTS_KEY = 'pms_tenant_onboarding_checklists';
@@ -290,6 +339,17 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const [contactLocal, setContactLocal] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [districts, setDistricts] = useState([]);
+
+  // New basic details fields
+  const [type, setType] = useState('Company');
+  const [companyVatId, setCompanyVatId] = useState('');
+  const [isInternalCustomer, setIsInternalCustomer] = useState(false);
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [addressLine1, setAddressLine1] = useState('');
+  const [addressLine2, setAddressLine2] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
+  const [country, setCountry] = useState('Fiji');
 
   // Form states - Business Proposal
   const [proposedBusinessType, setProposedBusinessType] = useState('');
@@ -415,9 +475,35 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     }
   };
 
+  const fetchWorkflowDoctype = async () => {
+    if (!erpnextConfig?.url) return;
+    try {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Workflow?limit_page_length=100`, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        console.log("Workflow Doctype List Response:", json);
+      }
+
+      const detailRes = await fetch(`${erpnextConfig.url}/api/resource/Workflow?fields=%5B%22name%22%2C%22document_type%22%2C%22is_active%22%5D&limit_page_length=100`, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (detailRes.ok) {
+        const detailJson = await detailRes.json();
+        console.log("Workflow Doctype Detail Response:", detailJson);
+      }
+    } catch (err) {
+      console.warn("Failed to fetch Workflow Doctype:", err);
+    }
+  };
+
   useEffect(() => {
     fetchOnboardings();
     fetchDistricts();
+    fetchWorkflowDoctype();
   }, [erpnextConfig]);
 
   // Handle saving (attaching, updating, verifying or deleting) a document directly in ERPNext's child table
@@ -596,6 +682,20 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
   const handleUpdateCoreDetails = async () => {
     if (!selectedCase || !erpnextConfig?.url) return;
+
+    if (!editContactLocal.trim()) {
+      alert("Contact Number cannot be empty.");
+      return;
+    }
+    if (!editContactName.trim()) {
+      alert("Contact Name cannot be empty.");
+      return;
+    }
+    if (!editEmailId.trim()) {
+      alert("Email ID cannot be empty.");
+      return;
+    }
+
     setUpdatingDetails(true);
 
     const payload = {
@@ -614,13 +714,24 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       fitout_approval_timeframe: editFitoutApprovalTimeframe,
       contact_name: editContactName,
       email_id: editEmailId,
-      contact_number: `${editContactPrefix} ${editContactLocal}`.trim(),
+      contact_number: normalizeFijiPhone(`${editContactPrefix}${editContactLocal.trim()}`),
       company_name: editCompanyName,
       menu_and_business_pictures: editMenuAndBusinessPictures,
       lease_commencement_date: editLeaseCommencementDate,
       vacant_possession_date: editVacantPossessionDate,
-      plans_for_approval: editPlansForApproval
+      plans_for_approval: editPlansForApproval,
+      type: editType,
+      company_vat_id: editCompanyVatId,
+      is_internal_customer: editIsInternalCustomer ? 1 : 0,
+      date_of_birth: editDateOfBirth,
+      address_line1: editAddressLine1,
+      address_line2: editAddressLine2,
+      city: editCity,
+      state: editState,
+      country: editCountry
     };
+
+    console.log("Core details update payload:", payload);
 
     try {
       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(selectedCase.name)}`, {
@@ -635,6 +746,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
       if (res.ok) {
         const json = await res.json();
+        console.log("Core details update response:", json);
         const detail = json.data || json;
         if (detail) {
           setSelectedCase(prev => {
@@ -661,12 +773,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         }
         setIsEditingDetails(false);
       } else {
-        const errJson = await res.json();
-        alert(errJson?.exception || "Failed to update onboarding details in ERPNext.");
+        const errorMsg = await extractErrorMessage(res);
+        console.error("Tenant Onboarding error:", errorMsg);
+        alert(errorMsg);
       }
     } catch (err) {
       console.error("Error updating onboarding details:", err);
-      alert("Error updating onboarding details.");
+      alert(err.message || "Error updating onboarding details.");
     } finally {
       setUpdatingDetails(false);
     }
@@ -730,6 +843,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     setContactPrefix('+679');
     setContactLocal('');
     setCompanyName('');
+    setType('Company');
+    setCompanyVatId('');
+    setIsInternalCustomer(false);
+    setDateOfBirth('');
+    setAddressLine1('');
+    setAddressLine2('');
+    setCity('');
+    setState('');
+    setCountry('Fiji');
     setProposedBusinessType('');
     setRequiredSpace('');
     setBudget('');
@@ -802,12 +924,21 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         product_service_range: rangeLineItems,
         contact_name: contactName,
         email_id: emailId,
-        contact_number: `${contactPrefix} ${contactLocal}`.trim(),
+        contact_number: normalizeFijiPhone(`${contactPrefix}${contactLocal.trim()}`),
         company_name: companyName,
         lease_commencement_date: leaseCommencement,
         vacant_possession_date: vacantPossessionDate,
         plans_for_approval: plansForApproval,
-        company_search_documents: childDocs
+        company_search_documents: childDocs,
+        type: type,
+        company_vat_id: companyVatId,
+        is_internal_customer: isInternalCustomer ? 1 : 0,
+        date_of_birth: dateOfBirth,
+        address_line1: addressLine1,
+        address_line2: addressLine2,
+        city: city,
+        state: state,
+        country: country
       };
 
       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding`, {
@@ -819,9 +950,10 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         },
         body: JSON.stringify(payload)
       });
-
+      console.log("Onboarding create payload:", payload);
       if (res.ok) {
         const json = await res.json();
+        console.log("Onboarding create response:", json);
         const freshDoc = json.data || json;
         const newDocName = freshDoc.name;
 
@@ -868,19 +1000,58 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           handleSelectCase({ name: newDocName });
         }
       } else {
-        const errJson = await res.json();
-        alert(errJson?.exception || "Failed to create Tenant Onboarding in ERPNext.");
+        const errorMsg = await extractErrorMessage(res);
+        console.error("Tenant Onboarding error:", errorMsg);
+        alert(errorMsg);
       }
     } catch (err) {
       console.error("Failed creating onboarding case:", err);
+      alert(err.message || "An error occurred while creating Tenant Onboarding.");
     } finally {
       setSubmitting(false);
     }
   };
 
+  const handleConvertCustomerClick = async () => {
+    if (!selectedCase) return;
+
+    const verifiedMap = {};
+    const itemDocs = caseDocuments[selectedCase.name] || selectedCase.documents || [];
+    itemDocs.forEach(d => {
+      if (d.document_type) {
+        verifiedMap[d.document_type.toLowerCase().trim()] = !!d.verified;
+      }
+    });
+
+    const verificationDocsList = [
+      'true certified copies of incorporation',
+      'memorandum of associations company',
+      'business name registration certificate.',
+      'directors reports',
+      'tin letter',
+      'business registration certificate',
+      'birth certificate',
+      'passport photo of directors',
+      'tin letter company and individual',
+      'photo id card'
+    ];
+
+    const allVerified = verificationDocsList.every(k => verifiedMap[k]);
+
+    let message = "";
+    if (allVerified) {
+      message = `All documents are verified. Do you want to convert ${selectedCase.company_name || selectedCase.name} into Customer?`;
+    } else {
+      message = `Some documents are not verified. Do you still want to convert ${selectedCase.company_name || selectedCase.name} into Customer?`;
+    }
+
+    if (confirm(message)) {
+      await handleConvertToCustomer(selectedCase.name);
+    }
+  };
+
   const handleConvertToCustomer = async (caseName) => {
     if (!erpnextConfig?.url || !caseName) return;
-    if (!confirm(`Are you sure you want to convert Tenant Onboarding ${caseName} into Customer?`)) return;
 
     setLoading(true);
     try {
@@ -917,7 +1088,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           } else if (errData.exception) {
             rawMsg = errData.exception;
           }
-        } catch (jErr) {}
+        } catch (jErr) { }
         alert(rawMsg);
       }
     } catch (err) {
@@ -974,6 +1145,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     return Math.round((completed / checks.length) * 100);
   };
 
+  const isFormValid =
+    contactName.trim() !== '' &&
+    emailId.trim() !== '' &&
+    contactLocal.trim() !== '' &&
+    proposedBusinessType.trim() !== '' &&
+    businessStatus.trim() !== '';
+
   return (
     <div style={{ display: 'flex', background: 'var(--bg-secondary)', minHeight: '100vh', width: '100%' }}>
 
@@ -985,8 +1163,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         flexDirection: 'column',
         gap: '20px',
         borderRight: '1px solid var(--border-color)',
-        maxWidth: selectedCase ? '50%' : '100%',
-        transition: 'max-width 0.3s ease',
+        maxWidth: '100%',
         height: '100vh',
         overflowY: 'auto'
       }}>
@@ -1233,1112 +1410,1368 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
       </div>
 
-      {/* Details Side Panel (Right Pane) */}
-      {selectedCase && (() => {
-        const caseLocal = localChecklists[selectedCase.name] || {};
-        return (
-          <div style={{ width: '50%', background: 'var(--bg-primary)', borderLeft: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', position: 'sticky', top: 0, height: '100vh', overflowY: 'auto' }}>
+      {/* Backdrop with Blur Effect */}
+      {selectedCase && (
+        <div
+          onClick={() => setSelectedCase(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(15, 23, 42, 0.05)',
+            backdropFilter: 'blur(1.5px)',
+            WebkitBackdropFilter: 'blur(1.5px)',
+            zIndex: 998,
+            animation: 'fadeIn 0.2s ease-out'
+          }}
+        />
+      )}
 
-            {/* Header with Wavy Pattern and Close Button */}
-            <div style={{
-              padding: '24px 24px 16px 24px',
-              borderBottom: '1px solid var(--border-color)',
-              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' viewBox='0 0 800 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23f0fdf4' stop-opacity='0.95'/%3E%3Cstop offset='60%25' stop-color='%23f8fafc' stop-opacity='0.7'/%3E%3Cstop offset='100%25' stop-color='%23ffffff' stop-opacity='1'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100%25' height='100%25' fill='url(%23g)'/%3E%3Cpath d='M-100 150 C 150 50, 250 250, 500 150 S 650 50, 900 150' stroke='rgba(16, 185, 129, 0.09)' fill='none' stroke-width='4.5'/%3E%3Cpath d='M-50 200 C 200 100, 300 300, 550 200 S 700 100, 950 200' stroke='rgba(16, 185, 129, 0.05)' fill='none' stroke-width='2.5'/%3E%3C/svg%3E")`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '14px',
-              position: 'relative'
-            }}>
+      {/* Details Drawer (Right Pane) */}
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        right: selectedCase ? 0 : '-560px',
+        width: '560px',
+        maxWidth: '100%',
+        height: '100vh',
+        background: 'var(--bg-primary)',
+        boxShadow: '-8px 0 32px rgba(0, 0, 0, 0.15)',
+        zIndex: 999,
+        transition: 'right 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden'
+      }}>
+        {selectedCase && (() => {
+          const caseLocal = localChecklists[selectedCase.name] || {};
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
 
-              <div style={{ position: 'absolute', top: '20px', right: '24px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-                {activeDetailTab !== 'search' && (
-                  <button
-                    onClick={() => {
-                      if (isEditingDetails) {
-                        setIsEditingDetails(false);
-                      } else {
-                        setEditProposedBusinessType(selectedCase.proposed_business_type || '');
-                        setEditRequiredSpace(selectedCase.required_space || '');
-                        setEditBudget(selectedCase.budget || '');
-                        setEditLeasePeriod(selectedCase.lease_period || '');
-                        setEditShopSpaceLocation(selectedCase.shop_space_location || '');
-                        setEditRentalCharges(selectedCase.rental_charges || '');
-                        setEditServicePromoCharges(selectedCase.service_promotional_charges || '');
-                        setEditSecurityDepositFee(selectedCase.security_deposit_booking_fee || '');
-                        setEditFitoutPeriod(selectedCase.fitout_period || '');
-                        setEditUsageOfDemisedPremises(selectedCase.usage_of_demised_premises || '');
-                        setEditBusinessStatus(selectedCase.business_status || 'New');
-                        setEditProductServiceRange(selectedCase.product_service_range || '');
-                        setEditFitoutApprovalTimeframe(selectedCase.fitout_approval_timeframe || '');
-                        setEditContactName(selectedCase.contact_name || '');
-                        setEditEmailId(selectedCase.email_id || '');
-                        const parsedPhone = parsePhoneNumber(selectedCase.contact_number);
-                        setEditContactPrefix(parsedPhone.prefix);
-                        setEditContactLocal(parsedPhone.local);
-                        setEditCompanyName(selectedCase.company_name || '');
-                        setEditMenuAndBusinessPictures(selectedCase.menu_and_business_pictures || '');
-                        setEditLeaseCommencementDate(selectedCase.lease_commencement_date || '');
-                        setEditVacantPossessionDate(selectedCase.vacant_possession_date || '');
-                        setEditPlansForApproval(selectedCase.plans_for_approval || '');
-                        setIsEditingDetails(true);
-                      }
-                    }}
-                    style={{
-                      background: isEditingDetails ? 'rgba(239, 68, 68, 0.08)' : 'rgba(37, 99, 235, 0.08)',
-                      border: 'none',
-                      borderRadius: '6px',
-                      color: isEditingDetails ? '#ef4444' : 'var(--brand-color)',
-                      padding: '6px 10px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      fontSize: '12px',
-                      fontWeight: 600
-                    }}
-                  >
-                    {isEditingDetails ? <X size={13} /> : <Edit size={13} />}
-                    <span>{isEditingDetails ? 'Cancel' : 'Edit Details'}</span>
-                  </button>
-                )}
+              {/* Header with Wavy Pattern and Close Button */}
+              <div style={{
+                padding: '24px 24px 16px 24px',
+                borderBottom: '1px solid var(--border-color)',
+                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' viewBox='0 0 800 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23f0fdf4' stop-opacity='0.95'/%3E%3Cstop offset='60%25' stop-color='%23f8fafc' stop-opacity='0.7'/%3E%3Cstop offset='100%25' stop-color='%23ffffff' stop-opacity='1'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100%25' height='100%25' fill='url(%23g)'/%3E%3Cpath d='M-100 150 C 150 50, 250 250, 500 150 S 650 50, 900 150' stroke='rgba(16, 185, 129, 0.09)' fill='none' stroke-width='4.5'/%3E%3Cpath d='M-50 200 C 200 100, 300 300, 550 200 S 700 100, 950 200' stroke='rgba(16, 185, 129, 0.05)' fill='none' stroke-width='2.5'/%3E%3C/svg%3E")`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '14px',
+                position: 'relative'
+              }}>
 
-                <button
-                  onClick={() => setSelectedCase(null)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#0f172a',
-                    cursor: 'pointer',
-                    padding: 4,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <div>
-                  <span style={{
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    padding: '4px 12px',
-                    borderRadius: '20px',
-                    background: 'rgba(74, 222, 128, 0.1)',
-                    color: '#16a34a',
-                    border: '1px solid rgba(74, 222, 128, 0.3)',
-                    display: 'inline-block',
-                    fontFamily: 'monospace'
-                  }}>
-                    {selectedCase.name}
-                  </span>
-                </div>
-                <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Compliance Audit</h2>
-              </div>
-
-              {/* Stage wise Navigation Tabs */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-                <div style={{ display: 'flex', gap: '8px', flex: 1 }}>
-                  {[
-                    { id: 'basic', label: 'Basic Details' },
-                    { id: 'proposal', label: 'Business Proposal' },
-                    { id: 'booking', label: 'Booking Form' },
-                    { id: 'search', label: 'Company Search' }
-                  ].map((tab) => {
-                    const isActive = activeDetailTab === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        onClick={() => setActiveDetailTab(tab.id)}
-                        style={{
-                          padding: '10px 18px',
-                          fontSize: '12.5px',
-                          fontWeight: 700,
-                          borderRadius: '8px',
-                          border: isActive ? 'none' : '1px solid #e2e8f0',
-                          background: isActive ? '#005c3d' : '#f8fafc',
-                          color: isActive ? '#ffffff' : '#334155',
-                          cursor: 'pointer',
-                          transition: 'all 0.15s ease',
-                          boxShadow: isActive ? '0 4px 10px rgba(0, 92, 61, 0.15)' : 'none',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}
-                      >
-                        {tab.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Circular Status Indicator */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <div style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    background: 'rgba(22, 163, 74, 0.08)',
-                    border: '1.5px solid #16a34a',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#16a34a'
-                  }}>
-                    <CheckCircle2 size={16} />
-                  </div>
-                </div>
-              </div>
-
-            </div>
-
-            {/* TAB CONTENT */}
-            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', flex: 1 }}>
-
-              {/* Basic Details */}
-              {activeDetailTab === 'basic' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Basic Onboarding Details</h4>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Person</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="text"
-                          value={editContactName}
-                          onChange={(e) => setEditContactName(e.target.value)}
-                          placeholder="e.g. John Doe"
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.contact_name || '—'}</div>
-                      )}
-                    </div>
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Company Name</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="text"
-                          value={editCompanyName}
-                          onChange={(e) => setEditCompanyName(e.target.value)}
-                          placeholder="e.g. Acme Corp"
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_name || '—'}</div>
-                      )}
-                    </div>
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Email ID</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="email"
-                          value={editEmailId}
-                          onChange={(e) => setEditEmailId(e.target.value)}
-                          placeholder="e.g. john@example.com"
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.email_id || '—'}</div>
-                      )}
-                    </div>
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Number</span>
-                      {isEditingDetails ? (
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
-                          <select
-                            value={editContactPrefix}
-                            onChange={(e) => setEditContactPrefix(e.target.value)}
-                            style={{
-                              border: 'none',
-                              background: 'transparent',
-                              color: 'var(--text-primary)',
-                              fontSize: '13px',
-                              fontWeight: 600,
-                              outline: 'none',
-                              cursor: 'pointer',
-                              padding: 0
-                            }}
-                          >
-                            {COUNTRY_CODES.map(c => (
-                              <option key={c.prefix} value={c.prefix}>
-                                {c.flag} {c.prefix}
-                              </option>
-                            ))}
-                          </select>
-                          <input
-                            type="tel"
-                            value={editContactLocal}
-                            onChange={(e) => setEditContactLocal(e.target.value.replace(/\D/g, ''))}
-                            placeholder="Local number"
-                            style={{
-                              flex: 1,
-                              border: 'none',
-                              background: 'transparent',
-                              color: 'var(--text-primary)',
-                              fontSize: '13px',
-                              fontWeight: 600,
-                              outline: 'none',
-                              padding: 0
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          {(() => {
-                            const parsed = parsePhoneNumber(selectedCase.contact_number);
-                            const matched = COUNTRY_CODES.find(c => c.prefix === parsed.prefix);
-                            return (
-                              <>
-                                <span style={{ fontSize: '15px', lineHeight: 1 }}>{matched?.flag || '🇫🇯'}</span>
-                                <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{parsed.prefix}</span>
-                                <span>{parsed.local || '—'}</span>
-                              </>
-                            );
-                          })()}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {isEditingDetails && (
+                <div style={{ position: 'absolute', top: '20px', right: '24px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  {activeDetailTab !== 'search' && (
                     <button
-                      disabled={updatingDetails}
-                      onClick={handleUpdateCoreDetails}
+                      onClick={() => {
+                        if (isEditingDetails) {
+                          setIsEditingDetails(false);
+                        } else {
+                          setEditProposedBusinessType(selectedCase.proposed_business_type || '');
+                          setEditRequiredSpace(selectedCase.required_space || '');
+                          setEditBudget(selectedCase.budget || '');
+                          setEditLeasePeriod(selectedCase.lease_period || '');
+                          setEditShopSpaceLocation(selectedCase.shop_space_location || '');
+                          setEditRentalCharges(selectedCase.rental_charges || '');
+                          setEditServicePromoCharges(selectedCase.service_promotional_charges || '');
+                          setEditSecurityDepositFee(selectedCase.security_deposit_booking_fee || '');
+                          setEditFitoutPeriod(selectedCase.fitout_period || '');
+                          setEditUsageOfDemisedPremises(selectedCase.usage_of_demised_premises || '');
+                          setEditBusinessStatus(selectedCase.business_status || 'New');
+                          setEditProductServiceRange(selectedCase.product_service_range || '');
+                          setEditFitoutApprovalTimeframe(selectedCase.fitout_approval_timeframe || '');
+                          setEditContactName(selectedCase.contact_name || '');
+                          setEditEmailId(selectedCase.email_id || '');
+                          const parsedPhone = parsePhoneNumber(selectedCase.contact_number);
+                          setEditContactPrefix(parsedPhone.prefix);
+                          setEditContactLocal(parsedPhone.local);
+                          setEditCompanyName(selectedCase.company_name || '');
+                          setEditMenuAndBusinessPictures(selectedCase.menu_and_business_pictures || '');
+                          setEditLeaseCommencementDate(selectedCase.lease_commencement_date || '');
+                          setEditVacantPossessionDate(selectedCase.vacant_possession_date || '');
+                          setEditPlansForApproval(selectedCase.plans_for_approval || '');
+                          setEditType(selectedCase.type || 'Company');
+                          setEditCompanyVatId(selectedCase.company_vat_id || '');
+                          setEditIsInternalCustomer(!!selectedCase.is_internal_customer);
+                          setEditDateOfBirth(selectedCase.date_of_birth || '');
+                          setEditAddressLine1(selectedCase.address_line1 || '');
+                          setEditAddressLine2(selectedCase.address_line2 || '');
+                          setEditCity(selectedCase.city || '');
+                          setEditState(selectedCase.state || '');
+                          setEditCountry(selectedCase.country || 'Fiji');
+                          setIsEditingDetails(true);
+                        }
+                      }}
                       style={{
-                        background: 'var(--brand-color, #2563eb)',
-                        color: '#fff',
-                        padding: '10px 16px',
-                        borderRadius: '8px',
+                        background: isEditingDetails ? 'rgba(239, 68, 68, 0.08)' : 'rgba(37, 99, 235, 0.08)',
                         border: 'none',
-                        fontWeight: 700,
-                        fontSize: '13px',
-                        cursor: updatingDetails ? 'not-allowed' : 'pointer',
+                        borderRadius: '6px',
+                        color: isEditingDetails ? '#ef4444' : 'var(--brand-color)',
+                        padding: '6px 10px',
+                        cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        marginTop: '8px',
-                        boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)'
+                        gap: '4px',
+                        fontSize: '12px',
+                        fontWeight: 600
                       }}
                     >
-                      {updatingDetails ? 'Updating...' : 'Save Changes'}
+                      {isEditingDetails ? <X size={13} /> : <Edit size={13} />}
+                      <span>{isEditingDetails ? 'Cancel' : 'Edit Details'}</span>
                     </button>
                   )}
+
+                  {selectedCase.docstatus !== 1 ? (
+                    <button
+                      onClick={handleConvertCustomerClick}
+                      style={{
+                        background: 'var(--brand-color, #2563eb)',
+                        border: 'none',
+                        borderRadius: '6px',
+                        color: '#fff',
+                        padding: '6px 12px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        boxShadow: '0 2px 6px rgba(37, 99, 235, 0.15)'
+                      }}
+                    >
+                      <UserCheck size={13} />
+                      <span>Convert Customer</span>
+                    </button>
+                  ) : (
+                    <span style={{
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      background: 'rgba(22, 163, 74, 0.1)',
+                      color: '#16a34a',
+                      border: '1px solid rgba(22, 163, 74, 0.3)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}>
+                      <ShieldCheck size={13} />
+                      <span>Converted to Customer</span>
+                    </span>
+                  )}
+
+                  <button
+                    onClick={() => setSelectedCase(null)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#0f172a',
+                      cursor: 'pointer',
+                      padding: 4,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <X size={20} />
+                  </button>
                 </div>
-              )}
 
-              {/* Stage 1: Business Proposal */}
-              {activeDetailTab === 'proposal' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Business Proposal Fields</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div>
+                    <span style={{
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      padding: '4px 12px',
+                      borderRadius: '20px',
+                      background: 'rgba(74, 222, 128, 0.1)',
+                      color: '#16a34a',
+                      border: '1px solid rgba(74, 222, 128, 0.3)',
+                      display: 'inline-block',
+                      fontFamily: 'monospace'
+                    }}>
+                      {selectedCase.name}
+                    </span>
+                  </div>
+                  <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Compliance Audit</h2>
+                </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Business Type</span>
-                      {isEditingDetails ? (
-                        <select
-                          value={editProposedBusinessType}
-                          onChange={(e) => setEditProposedBusinessType(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                {/* Stage wise Navigation Tabs */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flex: 1 }}>
+                    {[
+                      { id: 'basic', label: 'Basic Details' },
+                      { id: 'proposal', label: 'Business Proposal' },
+                      { id: 'booking', label: 'Booking Form' },
+                      { id: 'search', label: 'Company Search' }
+                    ].map((tab) => {
+                      const isActive = activeDetailTab === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          onClick={() => setActiveDetailTab(tab.id)}
+                          style={{
+                            padding: '10px 18px',
+                            fontSize: '12.5px',
+                            fontWeight: 700,
+                            borderRadius: '8px',
+                            border: isActive ? 'none' : '1px solid #e2e8f0',
+                            background: isActive ? '#005c3d' : '#f8fafc',
+                            color: isActive ? '#ffffff' : '#334155',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                            boxShadow: isActive ? '0 4px 10px rgba(0, 92, 61, 0.15)' : 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}
                         >
-                          <option value="Restaurant">Restaurant</option>
-                          <option value="Cafe">Cafe</option>
-                          <option value="Supermarket">Supermarket</option>
-                          <option value="Retail Store">Retail Store</option>
-                          <option value="Pharmacy">Pharmacy</option>
-                          <option value="Salon / Spa">Salon / Spa</option>
-                          <option value="Gym / Fitness">Gym / Fitness</option>
-                          <option value="Cinema / Entertainment">Cinema / Entertainment</option>
-                          <option value="Bar">Bar</option>
-                          <option value="Office / Coworking">Office / Coworking</option>
-                          <option value="Kiosk">Kiosk</option>
-                        </select>
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.proposed_business_type || '—'}</div>
-                      )}
-                    </div>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Space Required</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="number"
-                          value={editRequiredSpace}
-                          onChange={(e) => setEditRequiredSpace(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.required_space ? `${selectedCase.required_space} sq mtr` : '—'}</div>
-                      )}
-                    </div>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Business Status</span>
-                      {isEditingDetails ? (
-                        <select
-                          value={editBusinessStatus}
-                          onChange={(e) => setEditBusinessStatus(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        >
-                          <option value="New">New</option>
-                          <option value="Existing">Existing</option>
-                        </select>
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.business_status || '—'}</div>
-                      )}
-                    </div>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Budget</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="number"
-                          value={editBudget}
-                          onChange={(e) => setEditBudget(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.budget ? `$${selectedCase.budget.toLocaleString()}` : '—'}</div>
-                      )}
-                    </div>
+                          {tab.label}
+                        </button>
+                      );
+                    })}
                   </div>
 
-                  <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Range & Line of Items (Other Business)</span>
-                    {isEditingDetails ? (
-                      <input
-                        type="text"
-                        value={editProductServiceRange}
-                        onChange={(e) => setEditProductServiceRange(e.target.value)}
-                        placeholder="Specify product catalog/ranges..."
-                        style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                      />
-                    ) : (
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.product_service_range || '—'}</div>
-                    )}
+                  {/* Circular Status Indicator */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      background: 'rgba(22, 163, 74, 0.08)',
+                      border: '1.5px solid #16a34a',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#16a34a'
+                    }}>
+                      <CheckCircle2 size={16} />
+                    </div>
                   </div>
+                </div>
 
-                  <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Work Timeframe & Approvals</span>
-                    {isEditingDetails ? (
-                      <input
-                        type="text"
-                        value={editFitoutApprovalTimeframe}
-                        onChange={(e) => setEditFitoutApprovalTimeframe(e.target.value)}
-                        placeholder="Specify timeframe (e.g. 45 days)"
-                        style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                      />
-                    ) : (
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_approval_timeframe || '—'}</div>
-                    )}
-                  </div>
+              </div>
 
-                  {/* Menu & Business Pictures Attachment */}
-                  {isEditingDetails ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
-                      {editMenuAndBusinessPictures ? (
-                        <div style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)' }}>
-                          <img
-                            src={editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`}
-                            alt="Menu and Business Pictures"
-                            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                            crossOrigin="use-credentials"
+              {/* TAB CONTENT */}
+              <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', flex: 1 }}>
+
+                {/* Basic Details */}
+                {activeDetailTab === 'basic' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Basic Onboarding Details</h4>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Person</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="text"
+                            value={editContactName}
+                            onChange={(e) => setEditContactName(e.target.value)}
+                            placeholder="e.g. John Doe"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                           />
-                          <div style={{ position: 'absolute', left: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600, cursor: 'pointer' }}
-                            onClick={() => {
-                              const fullUrl = editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`;
-                              setPreviewDocUrl(fullUrl);
-                              setPreviewDocTitle('Menu & Business Pictures');
-                            }}
-                          >
-                            <Eye size={10} />
-                            <span>Preview</span>
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.contact_name || '—'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Company Name</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="text"
+                            value={editCompanyName}
+                            onChange={(e) => setEditCompanyName(e.target.value)}
+                            placeholder="e.g. Acme Corp"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_name || '—'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Email ID</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="email"
+                            value={editEmailId}
+                            onChange={(e) => setEditEmailId(e.target.value)}
+                            placeholder="e.g. john@example.com"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.email_id || '—'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Number</span>
+                        {isEditingDetails ? (
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
+                            <select
+                              value={editContactPrefix}
+                              onChange={(e) => setEditContactPrefix(e.target.value)}
+                              style={{
+                                border: 'none',
+                                background: 'transparent',
+                                color: 'var(--text-primary)',
+                                fontSize: '13px',
+                                fontWeight: 600,
+                                outline: 'none',
+                                cursor: 'pointer',
+                                padding: 0
+                              }}
+                            >
+                              {COUNTRY_CODES.map(c => (
+                                <option key={c.prefix} value={c.prefix}>
+                                  {c.flag} {c.prefix}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              type="tel"
+                              value={editContactLocal}
+                              onChange={(e) => setEditContactLocal(e.target.value.replace(/\D/g, ''))}
+                              placeholder="Local number"
+                              style={{
+                                flex: 1,
+                                border: 'none',
+                                background: 'transparent',
+                                color: 'var(--text-primary)',
+                                fontSize: '13px',
+                                fontWeight: 600,
+                                outline: 'none',
+                                padding: 0
+                              }}
+                            />
                           </div>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditMenuAndBusinessPictures('');
-                            }}
-                            style={{
-                              position: 'absolute',
-                              top: '8px',
-                              right: '8px',
-                              zIndex: 10,
-                              background: 'rgba(239, 68, 68, 0.9)',
-                              color: '#fff',
-                              borderRadius: '50%',
-                              width: '28px',
-                              height: '28px',
-                              border: 'none',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                              transition: 'background 0.2s'
-                            }}
-                            title="Delete Image"
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            {(() => {
+                              const parsed = parsePhoneNumber(selectedCase.contact_number);
+                              const matched = COUNTRY_CODES.find(c => c.prefix === parsed.prefix);
+                              return (
+                                <>
+                                  <span style={{ fontSize: '15px', lineHeight: 1 }}>{matched?.flag || '🇫🇯'}</span>
+                                  <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{parsed.prefix}</span>
+                                  <span>{parsed.local || '—'}</span>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* New Basic Details Fields */}
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Customer Type</span>
+                        {isEditingDetails ? (
+                          <select
+                            value={editType}
+                            onChange={(e) => setEditType(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none', cursor: 'pointer' }}
                           >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      ) : (
-                        <label style={{
+                            <option value="Company">Company</option>
+                            <option value="Individual">Individual</option>
+                          </select>
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.type || 'Company'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Company TIN ID</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="text"
+                            value={editCompanyVatId}
+                            onChange={(e) => setEditCompanyVatId(e.target.value)}
+                            placeholder="VAT ID"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_vat_id || '—'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Is Internal Customer?</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="checkbox"
+                            checked={editIsInternalCustomer}
+                            onChange={(e) => setEditIsInternalCustomer(e.target.checked)}
+                            style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: selectedCase.is_internal_customer ? '#16a34a' : 'var(--text-muted)' }}>
+                            {selectedCase.is_internal_customer ? 'Yes' : 'No'}
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Date of Birth</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="date"
+                            value={editDateOfBirth}
+                            onChange={(e) => setEditDateOfBirth(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.date_of_birth || '—'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Address Line 1</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="text"
+                            value={editAddressLine1}
+                            onChange={(e) => setEditAddressLine1(e.target.value)}
+                            placeholder="Line 1"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line1 || '—'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Address Line 2</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="text"
+                            value={editAddressLine2}
+                            onChange={(e) => setEditAddressLine2(e.target.value)}
+                            placeholder="Line 2"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line2 || '—'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>City</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="text"
+                            value={editCity}
+                            onChange={(e) => setEditCity(e.target.value)}
+                            placeholder="City"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.city || '—'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>State</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="text"
+                            value={editState}
+                            onChange={(e) => setEditState(e.target.value)}
+                            placeholder="State"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.state || '—'}</div>
+                        )}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Country</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="text"
+                            value={editCountry}
+                            onChange={(e) => setEditCountry(e.target.value)}
+                            placeholder="Country"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.country || '—'}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {isEditingDetails && (
+                      <button
+                        disabled={updatingDetails || !editContactLocal.trim() || !editContactName.trim() || !editEmailId.trim()}
+                        onClick={handleUpdateCoreDetails}
+                        style={{
+                          background: 'var(--brand-color, #2563eb)',
+                          color: '#fff',
+                          padding: '10px 16px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          fontWeight: 700,
+                          fontSize: '13px',
+                          cursor: updatingDetails ? 'not-allowed' : 'pointer',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           gap: '8px',
-                          padding: '16px',
-                          border: '1px dashed var(--border-color)',
-                          background: 'var(--bg-secondary)',
-                          borderRadius: '8px',
-                          cursor: uploadingFile ? 'not-allowed' : 'pointer',
-                          fontSize: '13px',
-                          fontWeight: 600,
-                          color: 'var(--text-secondary)',
-                          transition: 'all 0.2s'
-                        }}>
-                          {uploadingFile ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
-                          <span>{uploadingFile ? 'Uploading...' : 'Attach Menu & Business Pictures'}</span>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            disabled={uploadingFile}
-                            onChange={(e) => handleFileUpload(e, setEditMenuAndBusinessPictures)}
-                            style={{ display: 'none' }}
-                          />
-                        </label>
-                      )}
-                    </div>
-                  ) : (
-                    selectedCase.menu_and_business_pictures && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
-                        <div
-                          onClick={() => {
-                            const fullUrl = selectedCase.menu_and_business_pictures.startsWith('http')
-                              ? selectedCase.menu_and_business_pictures
-                              : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`;
-                            setPreviewDocUrl(fullUrl);
-                            setPreviewDocTitle('Menu & Business Pictures');
-                          }}
-                          style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer' }}
-                        >
-                          <img
-                            src={selectedCase.menu_and_business_pictures.startsWith('http') ? selectedCase.menu_and_business_pictures : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`}
-                            alt="Menu and Business Pictures"
-                            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                            crossOrigin="use-credentials"
-                          />
-                          <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
-                            <Eye size={10} />
-                            <span>Click to Preview</span>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  )}
-                  {isEditingDetails && (
-                    <button
-                      disabled={updatingDetails}
-                      onClick={handleUpdateCoreDetails}
-                      style={{
-                        background: 'var(--brand-color, #2563eb)',
-                        color: '#fff',
-                        padding: '10px 16px',
-                        borderRadius: '8px',
-                        border: 'none',
-                        fontWeight: 700,
-                        fontSize: '13px',
-                        cursor: updatingDetails ? 'not-allowed' : 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        marginTop: '8px',
-                        boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)'
-                      }}
-                    >
-                      {updatingDetails ? 'Updating...' : 'Save Changes'}
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Stage 2: Booking Form */}
-              {activeDetailTab === 'booking' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Booking Form Terms & Conditions</h4>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Shop Space & Location</span>
-                      {isEditingDetails ? (
-                        <select
-                          value={editShopSpaceLocation}
-                          onChange={(e) => setEditShopSpaceLocation(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        >
-                          <option value="">Select Location</option>
-                          {districts.map(d => (
-                            <option key={d} value={d}>{d}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.shop_space_location || '—'}</div>
-                      )}
-                    </div>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Lease Period(Year)</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="number"
-                          value={editLeasePeriod}
-                          onChange={(e) => setEditLeasePeriod(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_period ? `${selectedCase.lease_period} years` : '—'}</div>
-                      )}
-                    </div>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Charges ($)</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="number"
-                          value={editRentalCharges}
-                          onChange={(e) => setEditRentalCharges(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.rental_charges ? `$${selectedCase.rental_charges.toLocaleString()}` : '—'}</div>
-                      )}
-                    </div>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Promo / Service Charges ($)</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="number"
-                          value={editServicePromoCharges}
-                          onChange={(e) => setEditServicePromoCharges(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.service_promotional_charges ? `$${selectedCase.service_promotional_charges.toLocaleString()}` : '—'}</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Security Deposit / Booking Fee</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="number"
-                          value={editSecurityDepositFee}
-                          onChange={(e) => setEditSecurityDepositFee(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.security_deposit_booking_fee ? `$${selectedCase.security_deposit_booking_fee.toLocaleString()}` : '—'}</div>
-                      )}
-                    </div>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Period (Days)</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="number"
-                          value={editFitoutPeriod}
-                          onChange={(e) => setEditFitoutPeriod(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_period ? `${selectedCase.fitout_period} days` : '—'}</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Usage of Demise Premises</span>
-                    {isEditingDetails ? (
-                      <input
-                        type="text"
-                        value={editUsageOfDemisedPremises}
-                        onChange={(e) => setEditUsageOfDemisedPremises(e.target.value)}
-                        style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                      />
-                    ) : (
-                      <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.usage_of_demised_premises || '—'}</div>
+                          marginTop: '8px',
+                          boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)'
+                        }}
+                      >
+                        {updatingDetails ? 'Updating...' : 'Save Changes'}
+                      </button>
                     )}
                   </div>
+                )}
 
-                  <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Nature of Business</span>
-                    <input
-                      type="text"
-                      value={caseLocal.booking_nature_of_business || ''}
-                      onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_nature_of_business', e.target.value)}
-                      placeholder="e.g. Retail Clothing Boutique"
-                      style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                    />
-                  </div>
+                {/* Stage 1: Business Proposal */}
+                {activeDetailTab === 'proposal' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Business Proposal Fields</h4>
 
-                  <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Types of Merchandise</span>
-                    <input
-                      type="text"
-                      value={caseLocal.booking_merchandise_types || ''}
-                      onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_merchandise_types', e.target.value)}
-                      placeholder="e.g. Menswear, accessories"
-                      style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                    />
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Commencement of Lease</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="date"
-                          value={editLeaseCommencementDate}
-                          onChange={(e) => setEditLeaseCommencementDate(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_commencement_date || '—'}</div>
-                      )}
-                    </div>
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Vacant Possession Date</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="date"
-                          value={editVacantPossessionDate}
-                          onChange={(e) => setEditVacantPossessionDate(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.vacant_possession_date || '—'}</div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Plans Submitted for Approval Attach field */}
-                  <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Plans Submitted for Approval</span>
-
-                    {isEditingDetails ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px' }}>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: '11.5px', fontWeight: 600, cursor: uploadingFile ? 'not-allowed' : 'pointer' }}>
-                          {uploadingFile ? <Loader2 size={12} className="spin" /> : <Paperclip size={12} />}
-                          <span>{uploadingFile ? 'Uploading...' : 'Attach Plan'}</span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Business Type</span>
+                        {isEditingDetails ? (
+                          <select
+                            value={editProposedBusinessType}
+                            onChange={(e) => setEditProposedBusinessType(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          >
+                            <option value="Restaurant">Restaurant</option>
+                            <option value="Cafe">Cafe</option>
+                            <option value="Supermarket">Supermarket</option>
+                            <option value="Retail Store">Retail Store</option>
+                            <option value="Pharmacy">Pharmacy</option>
+                            <option value="Salon / Spa">Salon / Spa</option>
+                            <option value="Gym / Fitness">Gym / Fitness</option>
+                            <option value="Cinema / Entertainment">Cinema / Entertainment</option>
+                            <option value="Bar">Bar</option>
+                            <option value="Office / Coworking">Office / Coworking</option>
+                            <option value="Kiosk">Kiosk</option>
+                          </select>
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.proposed_business_type || '—'}</div>
+                        )}
+                      </div>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Space Required</span>
+                        {isEditingDetails ? (
                           <input
-                            type="file"
-                            disabled={uploadingFile}
-                            onChange={(e) => handleFileUpload(e, setEditPlansForApproval)}
-                            style={{ display: 'none' }}
+                            type="number"
+                            value={editRequiredSpace}
+                            onChange={(e) => setEditRequiredSpace(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                           />
-                        </label>
-                        {editPlansForApproval ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
-                            <CheckCircle size={12} />
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={editPlansForApproval.split('/').pop()}>
-                              {editPlansForApproval.split('/').pop()}
-                            </span>
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.required_space ? `${selectedCase.required_space} sq mtr` : '—'}</div>
+                        )}
+                      </div>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Business Status</span>
+                        {isEditingDetails ? (
+                          <select
+                            value={editBusinessStatus}
+                            onChange={(e) => setEditBusinessStatus(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          >
+                            <option value="New">New</option>
+                            <option value="Existing">Existing</option>
+                          </select>
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.business_status || '—'}</div>
+                        )}
+                      </div>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Budget</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="number"
+                            value={editBudget}
+                            onChange={(e) => setEditBudget(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.budget ? `$${selectedCase.budget.toLocaleString()}` : '—'}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Range & Line of Items (Other Business)</span>
+                      {isEditingDetails ? (
+                        <input
+                          type="text"
+                          value={editProductServiceRange}
+                          onChange={(e) => setEditProductServiceRange(e.target.value)}
+                          placeholder="Specify product catalog/ranges..."
+                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                        />
+                      ) : (
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.product_service_range || '—'}</div>
+                      )}
+                    </div>
+
+                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Work Timeframe & Approvals</span>
+                      {isEditingDetails ? (
+                        <input
+                          type="text"
+                          value={editFitoutApprovalTimeframe}
+                          onChange={(e) => setEditFitoutApprovalTimeframe(e.target.value)}
+                          placeholder="Specify timeframe (e.g. 45 days)"
+                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                        />
+                      ) : (
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_approval_timeframe || '—'}</div>
+                      )}
+                    </div>
+
+                    {/* Menu & Business Pictures Attachment */}
+                    {isEditingDetails ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
+                        {editMenuAndBusinessPictures ? (
+                          <div style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)' }}>
+                            <img
+                              src={editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`}
+                              alt="Menu and Business Pictures"
+                              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                              crossOrigin="use-credentials"
+                            />
+                            <div style={{ position: 'absolute', left: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600, cursor: 'pointer' }}
+                              onClick={() => {
+                                const fullUrl = editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`;
+                                setPreviewDocUrl(fullUrl);
+                                setPreviewDocTitle('Menu & Business Pictures');
+                              }}
+                            >
+                              <Eye size={10} />
+                              <span>Preview</span>
+                            </div>
                             <button
                               type="button"
-                              onClick={() => setEditPlansForApproval('')}
-                              style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditMenuAndBusinessPictures('');
+                              }}
+                              style={{
+                                position: 'absolute',
+                                top: '8px',
+                                right: '8px',
+                                zIndex: 10,
+                                background: 'rgba(239, 68, 68, 0.9)',
+                                color: '#fff',
+                                borderRadius: '50%',
+                                width: '28px',
+                                height: '28px',
+                                border: 'none',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                                transition: 'background 0.2s'
+                              }}
+                              title="Delete Image"
                             >
-                              <X size={12} />
+                              <Trash2 size={13} />
                             </button>
                           </div>
                         ) : (
-                          <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>No file attached</span>
+                          <label style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                            padding: '16px',
+                            border: '1px dashed var(--border-color)',
+                            background: 'var(--bg-secondary)',
+                            borderRadius: '8px',
+                            cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            color: 'var(--text-secondary)',
+                            transition: 'all 0.2s'
+                          }}>
+                            {uploadingFile ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
+                            <span>{uploadingFile ? 'Uploading...' : 'Attach Menu & Business Pictures'}</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              disabled={uploadingFile}
+                              onChange={(e) => handleFileUpload(e, setEditMenuAndBusinessPictures)}
+                              style={{ display: 'none' }}
+                            />
+                          </label>
                         )}
                       </div>
                     ) : (
-                      <div>
-                        {selectedCase.plans_for_approval ? (
+                      selectedCase.menu_and_business_pictures && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
                           <div
                             onClick={() => {
-                              const fullUrl = selectedCase.plans_for_approval.startsWith('http')
-                                ? selectedCase.plans_for_approval
-                                : `${erpnextConfig.url}${selectedCase.plans_for_approval}`;
+                              const fullUrl = selectedCase.menu_and_business_pictures.startsWith('http')
+                                ? selectedCase.menu_and_business_pictures
+                                : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`;
                               setPreviewDocUrl(fullUrl);
-                              setPreviewDocTitle('Plans Submitted for Approval');
+                              setPreviewDocTitle('Menu & Business Pictures');
                             }}
-                            style={{ width: '100%', height: '140px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer', marginTop: '6px' }}
+                            style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer' }}
                           >
-                            {/\.(jpg|jpeg|png|gif|webp)$/i.test(selectedCase.plans_for_approval) ? (
-                              <img
-                                src={selectedCase.plans_for_approval.startsWith('http') ? selectedCase.plans_for_approval : `${erpnextConfig.url}${selectedCase.plans_for_approval}`}
-                                alt="Plans Submitted for Approval"
-                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                                crossOrigin="use-credentials"
-                              />
-                            ) : (
-                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', gap: '8px' }}>
-                                <FileText size={24} style={{ color: 'var(--text-muted)' }} />
-                                <span style={{ fontSize: '11.5px', fontWeight: 600 }}>{selectedCase.plans_for_approval.split('/').pop()}</span>
-                              </div>
-                            )}
+                            <img
+                              src={selectedCase.menu_and_business_pictures.startsWith('http') ? selectedCase.menu_and_business_pictures : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`}
+                              alt="Menu and Business Pictures"
+                              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                              crossOrigin="use-credentials"
+                            />
                             <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
                               <Eye size={10} />
                               <span>Click to Preview</span>
                             </div>
                           </div>
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)', marginTop: '2px' }}>Not Attached</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Facilities Required by Tenant</span>
-                    <textarea
-                      rows={2}
-                      value={caseLocal.booking_facilities_required || ''}
-                      onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_facilities_required', e.target.value)}
-                      placeholder="Describe plumbing, power requirements..."
-                      style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none', resize: 'none' }}
-                    />
-                  </div>
-
-                  {isEditingDetails && (
-                    <button
-                      disabled={updatingDetails}
-                      onClick={handleUpdateCoreDetails}
-                      style={{
-                        background: 'var(--brand-color, #2563eb)',
-                        color: '#fff',
-                        padding: '10px 16px',
-                        borderRadius: '8px',
-                        border: 'none',
-                        fontWeight: 700,
-                        fontSize: '13px',
-                        cursor: updatingDetails ? 'not-allowed' : 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        marginTop: '8px',
-                        boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)'
-                      }}
-                    >
-                      {updatingDetails ? 'Updating...' : 'Save Changes'}
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Stage 3: Company Search Documents */}
-              {activeDetailTab === 'search' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Company Search Audit Checklist</h4>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {documentTypes.map((doc) => {
-                      const docs = caseDocuments[selectedCase.name] || selectedCase.documents || [];
-                      const erpDoc = docs.find(d =>
-                        d.document_type?.toLowerCase().trim() === doc.label.toLowerCase().trim()
-                      );
-                      const fileUrl = erpDoc?.document || '';
-                      const isVerified = !!erpDoc?.verified;
-                      const isExpanded = !!expandedDocs[doc.key];
-
-                      const draftEntry = checklistDrafts[doc.label];
-                      const fileUrlDraft = draftEntry !== undefined ? draftEntry.doc : fileUrl;
-                      const isVerifiedDraft = draftEntry !== undefined ? draftEntry.verified : isVerified;
-
-                      let statusText = 'Pending Upload';
-                      let statusColor = 'var(--text-muted)';
-                      let statusBg = 'rgba(156, 163, 175, 0.1)';
-                      if (fileUrlDraft) {
-                        if (isVerifiedDraft) {
-                          statusText = 'Verified';
-                          statusColor = '#10b981';
-                          statusBg = 'rgba(16, 185, 129, 0.1)';
-                        } else {
-                          statusText = 'Needs Verification';
-                          statusColor = '#d97706';
-                          statusBg = 'rgba(217, 119, 6, 0.1)';
-                        }
-                      }
-
-                      return (
-                        <div
-                          key={doc.key}
-                          style={{
-                            background: 'var(--bg-primary)',
-                            border: '1px solid var(--border-color)',
-                            borderRadius: '10px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            transition: 'all 0.2s ease',
-                            boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
-                            overflow: 'hidden'
-                          }}
-                        >
-                          {/* Header Row - Click to collapse/expand */}
-                          <div
-                            onClick={() => toggleDocExpand(doc.key)}
-                            style={{
-                              padding: '12px 16px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              cursor: 'pointer',
-                              background: isExpanded ? 'var(--bg-secondary)' : 'transparent',
-                              transition: 'background 0.2s ease'
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                              {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
-                              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {doc.label}
-                              </span>
-                              <span style={{
-                                fontSize: '10px',
-                                fontWeight: 700,
-                                padding: '2px 6px',
-                                borderRadius: '4px',
-                                background: statusBg,
-                                color: statusColor,
-                                marginLeft: '8px'
-                              }}>
-                                {statusText}
-                              </span>
-                            </div>
-
-                            {/* Verify toggle stays on header for quick access */}
-                            <label
-                              onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '6px',
-                                cursor: fileUrlDraft ? 'pointer' : 'not-allowed',
-                                fontSize: '11.5px',
-                                fontWeight: 600,
-                                opacity: fileUrlDraft ? 1 : 0.4
-                              }}
-                            >
-                              <input
-                                type="checkbox"
-                                disabled={!fileUrlDraft}
-                                checked={isVerifiedDraft}
-                                onChange={async (e) => {
-                                  const newVal = e.target.checked;
-                                  // Update draft local cache first for instant UI response
-                                  setChecklistDrafts(prev => ({
-                                    ...prev,
-                                    [doc.label]: {
-                                      ...(prev[doc.label] || { doc: fileUrl, verified: isVerified }),
-                                      verified: newVal
-                                    }
-                                  }));
-                                  // Call API immediately
-                                  await saveDocumentToERPNext(doc.label, fileUrlDraft, newVal);
-                                  // Clean up synced local draft
-                                  setChecklistDrafts(prev => {
-                                    const next = { ...prev };
-                                    delete next[doc.label];
-                                    return next;
-                                  });
-                                }}
-                                style={{ accentColor: 'var(--brand-color)' }}
-                              />
-                              <span>Verify</span>
-                            </label>
-                          </div>
-
-                          {/* Expanded Content Panel */}
-                          {isExpanded && (
-                            <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-secondary)' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', justifySelf: 'space-between', gap: '12px' }}>
-                                {/* File details and attachments */}
-                                {fileUrlDraft ? (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                                    <button
-                                      onClick={() => {
-                                        const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                        setPreviewDocUrl(fullUrl);
-                                        setPreviewDocTitle(doc.label);
-                                      }}
-                                      style={{
-                                        background: 'transparent',
-                                        border: 'none',
-                                        color: 'var(--brand-color)',
-                                        fontSize: '12px',
-                                        fontWeight: 600,
-                                        cursor: 'pointer',
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '4px',
-                                        padding: 0,
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        whiteSpace: 'nowrap'
-                                      }}
-                                    >
-                                      <Eye size={13} style={{ flexShrink: 0 }} />
-                                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        Preview: {fileUrlDraft.split('/').pop()}
-                                      </span>
-                                    </button>
-
-                                    <button
-                                      onClick={() => {
-                                        setChecklistDrafts(prev => ({
-                                          ...prev,
-                                          [doc.label]: {
-                                            ...(prev[doc.label] || { doc: fileUrl, verified: isVerified }),
-                                            doc: '',
-                                            verified: false
-                                          }
-                                        }));
-                                      }}
-                                      style={{
-                                        background: 'rgba(239, 68, 68, 0.08)',
-                                        border: 'none',
-                                        borderRadius: '6px',
-                                        color: '#ef4444',
-                                        padding: '6px 10px',
-                                        cursor: 'pointer',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        marginLeft: 'auto'
-                                      }}
-                                      title="Remove File"
-                                    >
-                                      <Trash2 size={13} />
-                                      <span style={{ fontSize: '11px', fontWeight: 600, marginLeft: '4px' }}>Remove</span>
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <label style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    padding: '8px 16px',
-                                    border: '1px solid var(--border-color)',
-                                    background: 'var(--bg-primary)',
-                                    borderRadius: '6px',
-                                    fontSize: '12px',
-                                    fontWeight: 600,
-                                    cursor: uploadingFile ? 'not-allowed' : 'pointer',
-                                    transition: 'all 0.15s ease'
-                                  }}>
-                                    <Paperclip size={14} />
-                                    <span>Attach Document</span>
-                                    <input
-                                      type="file"
-                                      disabled={uploadingFile}
-                                      onChange={(e) => handleFileUpload(e, (url) => {
-                                        setChecklistDrafts(prev => ({
-                                          ...prev,
-                                          [doc.label]: {
-                                            ...(prev[doc.label] || { doc: fileUrl, verified: isVerified }),
-                                            doc: url
-                                          }
-                                        }));
-                                      })}
-                                      style={{ display: 'none' }}
-                                    />
-                                  </label>
-                                )}
-                              </div>
-
-                              {/* Tiny Preview Box */}
-                              {fileUrlDraft && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrlDraft) && (
-                                <div
-                                  onClick={() => {
-                                    const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                    setPreviewDocUrl(fullUrl);
-                                    setPreviewDocTitle(doc.label);
-                                  }}
-                                  style={{ width: '100%', height: '100px', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'pointer' }}
-                                >
-                                  <img
-                                    src={fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`}
-                                    alt={doc.label}
-                                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                                    crossOrigin="use-credentials"
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          )}
                         </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Save Multiple Verifications Button */}
-                  {Object.keys(checklistDrafts).length > 0 && (
-                    <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
+                      )
+                    )}
+                    {isEditingDetails && (
                       <button
-                        onClick={handleSaveChecklist}
-                        disabled={updatingDetails}
+                        disabled={updatingDetails || !editContactLocal.trim() || !editContactName.trim() || !editEmailId.trim()}
+                        onClick={handleUpdateCoreDetails}
                         style={{
-                          flex: 1,
-                          padding: '10px 16px',
-                          fontSize: '13px',
-                          fontWeight: 700,
-                          borderRadius: '8px',
-                          background: 'var(--brand-color, #065f46)',
+                          background: 'var(--brand-color, #2563eb)',
                           color: '#fff',
+                          padding: '10px 16px',
+                          borderRadius: '8px',
                           border: 'none',
-                          cursor: 'pointer',
+                          fontWeight: 700,
+                          fontSize: '13px',
+                          cursor: updatingDetails ? 'not-allowed' : 'pointer',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           gap: '8px',
-                          boxShadow: '0 4px 12px rgba(6, 95, 70, 0.15)',
-                          transition: 'all 0.2s ease'
+                          marginTop: '8px',
+                          boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)'
                         }}
                       >
-                        {updatingDetails ? <Loader2 size={16} className="spin" /> : <CheckCircle size={16} />}
-                        <span>Save Audit Checklist ({Object.keys(checklistDrafts).length})</span>
+                        {updatingDetails ? 'Updating...' : 'Save Changes'}
                       </button>
-                      <button
-                        onClick={() => setChecklistDrafts({})}
-                        disabled={updatingDetails}
-                        style={{
-                          padding: '10px 16px',
-                          fontSize: '13px',
-                          fontWeight: 700,
-                          borderRadius: '8px',
-                          background: 'transparent',
-                          color: 'var(--text-secondary)',
-                          border: '1px solid var(--border-color)',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease'
-                        }}
-                      >
-                        Cancel
-                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Stage 2: Booking Form */}
+                {activeDetailTab === 'booking' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Booking Form Terms & Conditions</h4>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Shop Space & Location</span>
+                        {isEditingDetails ? (
+                          <select
+                            value={editShopSpaceLocation}
+                            onChange={(e) => setEditShopSpaceLocation(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          >
+                            <option value="">Select Location</option>
+                            {districts.map(d => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.shop_space_location || '—'}</div>
+                        )}
+                      </div>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Lease Period(Year)</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="number"
+                            value={editLeasePeriod}
+                            onChange={(e) => setEditLeasePeriod(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_period ? `${selectedCase.lease_period} years` : '—'}</div>
+                        )}
+                      </div>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Charges ($)</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="number"
+                            value={editRentalCharges}
+                            onChange={(e) => setEditRentalCharges(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.rental_charges ? `$${selectedCase.rental_charges.toLocaleString()}` : '—'}</div>
+                        )}
+                      </div>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Promo / Service Charges ($)</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="number"
+                            value={editServicePromoCharges}
+                            onChange={(e) => setEditServicePromoCharges(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.service_promotional_charges ? `$${selectedCase.service_promotional_charges.toLocaleString()}` : '—'}</div>
+                        )}
+                      </div>
                     </div>
-                  )}
-                </div>
-              )}
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Security Deposit / Booking Fee</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="number"
+                            value={editSecurityDepositFee}
+                            onChange={(e) => setEditSecurityDepositFee(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.security_deposit_booking_fee ? `$${selectedCase.security_deposit_booking_fee.toLocaleString()}` : '—'}</div>
+                        )}
+                      </div>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Period (Days)</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="number"
+                            value={editFitoutPeriod}
+                            onChange={(e) => setEditFitoutPeriod(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_period ? `${selectedCase.fitout_period} days` : '—'}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Usage of Demise Premises</span>
+                      {isEditingDetails ? (
+                        <input
+                          type="text"
+                          value={editUsageOfDemisedPremises}
+                          onChange={(e) => setEditUsageOfDemisedPremises(e.target.value)}
+                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                        />
+                      ) : (
+                        <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.usage_of_demised_premises || '—'}</div>
+                      )}
+                    </div>
+
+                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Nature of Business</span>
+                      <input
+                        type="text"
+                        value={caseLocal.booking_nature_of_business || ''}
+                        onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_nature_of_business', e.target.value)}
+                        placeholder="e.g. Retail Clothing Boutique"
+                        style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                      />
+                    </div>
+
+                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Types of Merchandise</span>
+                      <input
+                        type="text"
+                        value={caseLocal.booking_merchandise_types || ''}
+                        onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_merchandise_types', e.target.value)}
+                        placeholder="e.g. Menswear, accessories"
+                        style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Commencement of Lease</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="date"
+                            value={editLeaseCommencementDate}
+                            onChange={(e) => setEditLeaseCommencementDate(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_commencement_date || '—'}</div>
+                        )}
+                      </div>
+                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Vacant Possession Date</span>
+                        {isEditingDetails ? (
+                          <input
+                            type="date"
+                            value={editVacantPossessionDate}
+                            onChange={(e) => setEditVacantPossessionDate(e.target.value)}
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.vacant_possession_date || '—'}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Plans Submitted for Approval Attach field */}
+                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Plans Submitted for Approval</span>
+
+                      {isEditingDetails ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px' }}>
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: '11.5px', fontWeight: 600, cursor: uploadingFile ? 'not-allowed' : 'pointer' }}>
+                            {uploadingFile ? <Loader2 size={12} className="spin" /> : <Paperclip size={12} />}
+                            <span>{uploadingFile ? 'Uploading...' : 'Attach Plan'}</span>
+                            <input
+                              type="file"
+                              disabled={uploadingFile}
+                              onChange={(e) => handleFileUpload(e, setEditPlansForApproval)}
+                              style={{ display: 'none' }}
+                            />
+                          </label>
+                          {editPlansForApproval ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
+                              <CheckCircle size={12} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={editPlansForApproval.split('/').pop()}>
+                                {editPlansForApproval.split('/').pop()}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setEditPlansForApproval('')}
+                                style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px' }}
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          ) : (
+                            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>No file attached</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          {selectedCase.plans_for_approval ? (
+                            <div
+                              onClick={() => {
+                                const fullUrl = selectedCase.plans_for_approval.startsWith('http')
+                                  ? selectedCase.plans_for_approval
+                                  : `${erpnextConfig.url}${selectedCase.plans_for_approval}`;
+                                setPreviewDocUrl(fullUrl);
+                                setPreviewDocTitle('Plans Submitted for Approval');
+                              }}
+                              style={{ width: '100%', height: '140px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer', marginTop: '6px' }}
+                            >
+                              {/\.(jpg|jpeg|png|gif|webp)$/i.test(selectedCase.plans_for_approval) ? (
+                                <img
+                                  src={selectedCase.plans_for_approval.startsWith('http') ? selectedCase.plans_for_approval : `${erpnextConfig.url}${selectedCase.plans_for_approval}`}
+                                  alt="Plans Submitted for Approval"
+                                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                  crossOrigin="use-credentials"
+                                />
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', gap: '8px' }}>
+                                  <FileText size={24} style={{ color: 'var(--text-muted)' }} />
+                                  <span style={{ fontSize: '11.5px', fontWeight: 600 }}>{selectedCase.plans_for_approval.split('/').pop()}</span>
+                                </div>
+                              )}
+                              <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
+                                <Eye size={10} />
+                                <span>Click to Preview</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)', marginTop: '2px' }}>Not Attached</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Facilities Required by Tenant</span>
+                      <textarea
+                        rows={2}
+                        value={caseLocal.booking_facilities_required || ''}
+                        onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_facilities_required', e.target.value)}
+                        placeholder="Describe plumbing, power requirements..."
+                        style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none', resize: 'none' }}
+                      />
+                    </div>
+
+                    {isEditingDetails && (
+                      <button
+                        disabled={updatingDetails || !editContactLocal.trim() || !editContactName.trim() || !editEmailId.trim()}
+                        onClick={handleUpdateCoreDetails}
+                        style={{
+                          background: 'var(--brand-color, #2563eb)',
+                          color: '#fff',
+                          padding: '10px 16px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          fontWeight: 700,
+                          fontSize: '13px',
+                          cursor: updatingDetails ? 'not-allowed' : 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '8px',
+                          marginTop: '8px',
+                          boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)'
+                        }}
+                      >
+                        {updatingDetails ? 'Updating...' : 'Save Changes'}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Stage 3: Company Search Documents */}
+                {activeDetailTab === 'search' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Company Search Audit Checklist</h4>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {documentTypes.map((doc) => {
+                        const docs = caseDocuments[selectedCase.name] || selectedCase.documents || [];
+                        const erpDoc = docs.find(d =>
+                          d.document_type?.toLowerCase().trim() === doc.label.toLowerCase().trim()
+                        );
+                        const fileUrl = erpDoc?.document || '';
+                        const isVerified = !!erpDoc?.verified;
+                        const isExpanded = !!expandedDocs[doc.key];
+
+                        const draftEntry = checklistDrafts[doc.label];
+                        const fileUrlDraft = draftEntry !== undefined ? draftEntry.doc : fileUrl;
+                        const isVerifiedDraft = draftEntry !== undefined ? draftEntry.verified : isVerified;
+
+                        let statusText = 'Pending Upload';
+                        let statusColor = 'var(--text-muted)';
+                        let statusBg = 'rgba(156, 163, 175, 0.1)';
+                        if (fileUrlDraft) {
+                          if (isVerifiedDraft) {
+                            statusText = 'Verified';
+                            statusColor = '#10b981';
+                            statusBg = 'rgba(16, 185, 129, 0.1)';
+                          } else {
+                            statusText = 'Needs Verification';
+                            statusColor = '#d97706';
+                            statusBg = 'rgba(217, 119, 6, 0.1)';
+                          }
+                        }
+
+                        return (
+                          <div
+                            key={doc.key}
+                            style={{
+                              background: 'var(--bg-primary)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '10px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                              overflow: 'hidden'
+                            }}
+                          >
+                            {/* Header Row - Click to collapse/expand */}
+                            <div
+                              onClick={() => toggleDocExpand(doc.key)}
+                              style={{
+                                padding: '12px 16px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                cursor: 'pointer',
+                                background: isExpanded ? 'var(--bg-secondary)' : 'transparent',
+                                transition: 'background 0.2s ease'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                                {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
+                                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {doc.label}
+                                </span>
+                                <span style={{
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  background: statusBg,
+                                  color: statusColor,
+                                  marginLeft: '8px'
+                                }}>
+                                  {statusText}
+                                </span>
+                              </div>
+
+                              {/* Verify toggle stays on header for quick access */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <label
+                                  onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    cursor: fileUrlDraft ? 'pointer' : 'not-allowed',
+                                    fontSize: '11.5px',
+                                    fontWeight: 600,
+                                    opacity: fileUrlDraft ? 1 : 0.4
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    disabled={!fileUrlDraft}
+                                    checked={isVerifiedDraft}
+                                    onChange={(e) => {
+                                      const newVal = e.target.checked;
+                                      setChecklistDrafts(prev => {
+                                        const currentDraft = prev[doc.label] || { doc: fileUrl, verified: isVerified };
+                                        return {
+                                          ...prev,
+                                          [doc.label]: {
+                                            ...currentDraft,
+                                            verified: newVal
+                                          }
+                                        };
+                                      });
+                                    }}
+                                    style={{ accentColor: 'var(--brand-color)' }}
+                                  />
+                                  <span>Verify Draft</span>
+                                </label>
+
+                                {fileUrlDraft && (
+                                  <button
+                                    type="button"
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      const targetVerified = !isVerifiedDraft;
+                                      await saveDocumentToERPNext(doc.label, fileUrlDraft, targetVerified);
+                                      setChecklistDrafts(prev => {
+                                        const next = { ...prev };
+                                        delete next[doc.label];
+                                        return next;
+                                      });
+                                    }}
+                                    style={{
+                                      background: 'transparent',
+                                      border: 'none',
+                                      color: 'var(--brand-color)',
+                                      cursor: 'pointer',
+                                      fontSize: '11px',
+                                      fontWeight: 700,
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      padding: '4px 8px',
+                                      borderRadius: '4px',
+                                      border: '1px solid var(--border-color)',
+                                      transition: 'all 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.background = 'var(--bg-secondary)';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.background = 'transparent';
+                                    }}
+                                  >
+                                    {isVerifiedDraft ? <ShieldAlert size={12} style={{ color: '#d97706' }} /> : <ShieldCheck size={12} />}
+                                    <span>{isVerifiedDraft ? 'Unverify Instantly' : 'Verify Instantly'}</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Expanded Content Panel */}
+                            {isExpanded && (
+                              <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-secondary)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifySelf: 'space-between', gap: '12px' }}>
+                                  {/* File details and attachments */}
+                                  {fileUrlDraft ? (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                                      <button
+                                        onClick={() => {
+                                          const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                          setPreviewDocUrl(fullUrl);
+                                          setPreviewDocTitle(doc.label);
+                                        }}
+                                        style={{
+                                          background: 'transparent',
+                                          border: 'none',
+                                          color: 'var(--brand-color)',
+                                          fontSize: '12px',
+                                          fontWeight: 600,
+                                          cursor: 'pointer',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          padding: 0,
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                          whiteSpace: 'nowrap'
+                                        }}
+                                      >
+                                        <Eye size={13} style={{ flexShrink: 0 }} />
+                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                          Preview: {fileUrlDraft.split('/').pop()}
+                                        </span>
+                                      </button>
+
+                                      <button
+                                        onClick={() => {
+                                          setChecklistDrafts(prev => ({
+                                            ...prev,
+                                            [doc.label]: {
+                                              ...(prev[doc.label] || { doc: fileUrl, verified: isVerified }),
+                                              doc: '',
+                                              verified: false
+                                            }
+                                          }));
+                                        }}
+                                        style={{
+                                          background: 'rgba(239, 68, 68, 0.08)',
+                                          border: 'none',
+                                          borderRadius: '6px',
+                                          color: '#ef4444',
+                                          padding: '6px 10px',
+                                          cursor: 'pointer',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          marginLeft: 'auto'
+                                        }}
+                                        title="Remove File"
+                                      >
+                                        <Trash2 size={13} />
+                                        <span style={{ fontSize: '11px', fontWeight: 600, marginLeft: '4px' }}>Remove</span>
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <label style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      padding: '8px 16px',
+                                      border: '1px solid var(--border-color)',
+                                      background: 'var(--bg-primary)',
+                                      borderRadius: '6px',
+                                      fontSize: '12px',
+                                      fontWeight: 600,
+                                      cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                                      transition: 'all 0.15s ease'
+                                    }}>
+                                      <Paperclip size={14} />
+                                      <span>Attach Document</span>
+                                      <input
+                                        type="file"
+                                        disabled={uploadingFile}
+                                        onChange={(e) => handleFileUpload(e, (url) => {
+                                          setChecklistDrafts(prev => ({
+                                            ...prev,
+                                            [doc.label]: {
+                                              ...(prev[doc.label] || { doc: fileUrl, verified: isVerified }),
+                                              doc: url
+                                            }
+                                          }));
+                                        })}
+                                        style={{ display: 'none' }}
+                                      />
+                                    </label>
+                                  )}
+                                </div>
+
+                                {/* Tiny Preview Box */}
+                                {fileUrlDraft && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrlDraft) && (
+                                  <div
+                                    onClick={() => {
+                                      const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                      setPreviewDocUrl(fullUrl);
+                                      setPreviewDocTitle(doc.label);
+                                    }}
+                                    style={{ width: '100%', height: '100px', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'pointer' }}
+                                  >
+                                    <img
+                                      src={fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`}
+                                      alt={doc.label}
+                                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                      crossOrigin="use-credentials"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Save Multiple Verifications Button */}
+                    {Object.keys(checklistDrafts).length > 0 && (
+                      <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
+                        <button
+                          onClick={handleSaveChecklist}
+                          disabled={updatingDetails}
+                          style={{
+                            flex: 1,
+                            padding: '10px 16px',
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            borderRadius: '8px',
+                            background: 'var(--brand-color, #065f46)',
+                            color: '#fff',
+                            border: 'none',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                            boxShadow: '0 4px 12px rgba(6, 95, 70, 0.15)',
+                            transition: 'all 0.2s ease'
+                          }}
+                        >
+                          {updatingDetails ? <Loader2 size={16} className="spin" /> : <CheckCircle size={16} />}
+                          <span>Save Audit Checklist ({Object.keys(checklistDrafts).length})</span>
+                        </button>
+                        <button
+                          onClick={() => setChecklistDrafts({})}
+                          disabled={updatingDetails}
+                          style={{
+                            padding: '10px 16px',
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            borderRadius: '8px',
+                            background: 'transparent',
+                            color: 'var(--text-secondary)',
+                            border: '1px solid var(--border-color)',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+              </div>
 
             </div>
-
-          </div>
-        );
-      })()}
+          );
+        })()}
+      </div>
 
       {/* Start Onboarding Modal */}
       {showModal && (
@@ -2391,78 +2824,192 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
               {activeFormTab === 'basic' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '52vh', overflowY: 'auto', paddingRight: '6px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Name</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. John Doe"
-                      value={contactName}
-                      onChange={(e) => setContactName(e.target.value)}
-                      style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Company Name</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Acme Corp"
-                      value={companyName}
-                      onChange={(e) => setCompanyName(e.target.value)}
-                      style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Email ID</label>
-                    <input
-                      type="email"
-                      placeholder="e.g. john@example.com"
-                      value={emailId}
-                      onChange={(e) => setEmailId(e.target.value)}
-                      style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Number</label>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <select
-                        value={contactPrefix}
-                        onChange={(e) => setContactPrefix(e.target.value)}
-                        style={{
-                          padding: '10px 12px',
-                          fontSize: '13px',
-                          borderRadius: '8px',
-                          border: '1px solid var(--border-color)',
-                          background: 'var(--bg-secondary)',
-                          color: 'var(--text-primary)',
-                          outline: 'none',
-                          cursor: 'pointer',
-                          width: '100px'
-                        }}
-                      >
-                        {COUNTRY_CODES.map(c => (
-                          <option key={c.prefix} value={c.prefix}>
-                            {c.flag} {c.prefix}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="tel"
-                        placeholder="Local number"
-                        value={contactLocal}
-                        onChange={(e) => setContactLocal(e.target.value.replace(/\D/g, ''))}
-                        style={{
-                          flex: 1,
-                          padding: '10px 14px',
-                          fontSize: '13px',
-                          borderRadius: '8px',
-                          border: '1px solid var(--border-color)',
-                          background: 'var(--bg-secondary)',
-                          color: 'var(--text-primary)',
-                          outline: 'none'
-                        }}
-                      />
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+
+                    {/* Left Column */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Type</label>
+                        <select
+                          value={type}
+                          onChange={(e) => setType(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none', cursor: 'pointer' }}
+                        >
+                          <option value="Company">Company</option>
+                          <option value="Individual">Individual</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Name *</label>
+                        <input
+                          type="text"
+                          placeholder="Contact Name"
+                          value={contactName}
+                          onChange={(e) => setContactName(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Email ID *</label>
+                        <input
+                          type="email"
+                          placeholder="e.g. email@example.com"
+                          value={emailId}
+                          onChange={(e) => setEmailId(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Number *</label>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <select
+                            value={contactPrefix}
+                            onChange={(e) => setContactPrefix(e.target.value)}
+                            style={{
+                              padding: '10px 12px',
+                              fontSize: '13px',
+                              borderRadius: '8px',
+                              border: '1px solid var(--border-color)',
+                              background: 'var(--bg-secondary)',
+                              color: 'var(--text-primary)',
+                              outline: 'none',
+                              cursor: 'pointer',
+                              width: '100px'
+                            }}
+                          >
+                            {COUNTRY_CODES.map(c => (
+                              <option key={c.prefix} value={c.prefix}>
+                                {c.flag} {c.prefix}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="tel"
+                            placeholder="Contact Number"
+                            value={contactLocal}
+                            onChange={(e) => setContactLocal(e.target.value.replace(/\D/g, ''))}
+                            style={{
+                              flex: 1,
+                              padding: '10px 14px',
+                              fontSize: '13px',
+                              borderRadius: '8px',
+                              border: '1px solid var(--border-color)',
+                              background: 'var(--bg-secondary)',
+                              color: 'var(--text-primary)',
+                              outline: 'none'
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Company Name</label>
+                        <input
+                          type="text"
+                          placeholder="Company Name"
+                          value={companyName}
+                          onChange={(e) => setCompanyName(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Company VAT ID</label>
+                        <input
+                          type="text"
+                          placeholder="Company VAT ID"
+                          value={companyVatId}
+                          onChange={(e) => setCompanyVatId(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
                     </div>
+
+                    {/* Right Column */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minHeight: '38px', marginTop: '22px' }}>
+                        <input
+                          type="checkbox"
+                          id="isInternalCustomer"
+                          checked={isInternalCustomer}
+                          onChange={(e) => setIsInternalCustomer(e.target.checked)}
+                          style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                        />
+                        <label htmlFor="isInternalCustomer" style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer' }}>Is Internal Customer?</label>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Date of Birth</label>
+                        <input
+                          type="date"
+                          value={dateOfBirth}
+                          onChange={(e) => setDateOfBirth(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Address Line 1</label>
+                        <input
+                          type="text"
+                          placeholder="Address Line 1"
+                          value={addressLine1}
+                          onChange={(e) => setAddressLine1(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Address Line 2</label>
+                        <input
+                          type="text"
+                          placeholder="Address Line 2"
+                          value={addressLine2}
+                          onChange={(e) => setAddressLine2(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>City</label>
+                        <input
+                          type="text"
+                          placeholder="City"
+                          value={city}
+                          onChange={(e) => setCity(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>State</label>
+                        <input
+                          type="text"
+                          placeholder="State"
+                          value={state}
+                          onChange={(e) => setState(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Country</label>
+                        <input
+                          type="text"
+                          placeholder="Country"
+                          value={country}
+                          onChange={(e) => setCountry(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+                    </div>
+
                   </div>
+
                 </div>
               )}
 
@@ -2870,7 +3417,23 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                         else if (activeFormTab === 'proposal') setActiveFormTab('booking');
                         else if (activeFormTab === 'booking') setActiveFormTab('search');
                       }}
-                      style={{ flex: 1, padding: '10px', fontSize: '13px', fontWeight: 600, border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--bg-secondary)', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                      style={{
+                        flex: 1,
+                        padding: '10px',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        border: '1.5px solid var(--brand-color, #2563eb)',
+                        borderRadius: '6px',
+                        background: 'var(--bg-accent-alpha, rgba(37, 99, 235, 0.08))',
+                        color: 'var(--brand-color, #2563eb)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        boxShadow: '0 2px 6px rgba(37, 99, 235, 0.05)',
+                        transition: 'all 0.2s ease'
+                      }}
                     >
                       <span>Save & Next</span>
                       <ArrowRight size={14} />
@@ -2878,8 +3441,23 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                   )}
                   <button
                     type="submit"
-                    disabled={submitting || uploadingFile}
-                    style={{ flex: 1, padding: '10px', fontSize: '13px', fontWeight: 600, border: 'none', borderRadius: '6px', background: 'var(--brand-color, #2563eb)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                    disabled={submitting || uploadingFile || !isFormValid}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      border: 'none',
+                      borderRadius: '6px',
+                      background: (submitting || uploadingFile || !isFormValid) ? 'var(--border-color, #d1d5db)' : 'var(--brand-color, #2563eb)',
+                      color: (submitting || uploadingFile || !isFormValid) ? 'var(--text-muted, #9ca3af)' : '#fff',
+                      cursor: (submitting || uploadingFile || !isFormValid) ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      transition: 'all 0.2s ease'
+                    }}
                   >
                     {submitting ? 'Creating...' : 'Submit'}
                   </button>
@@ -2890,6 +3468,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           </div>
         </div>
       )}
+
+
 
       {/* Lightbox / Document Preview Modal */}
       {previewDocUrl && (
@@ -2905,7 +3485,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
             alignItems: 'center',
             justifyContent: 'center',
             background: 'rgba(15, 23, 42, 0.75)',
-            backdropFilter: 'blur(8px)',
+            backdropFilter: 'blur(2px)',
             padding: '24px'
           }}
           onClick={() => setPreviewDocUrl(null)}
