@@ -55,27 +55,47 @@ const COUNTRY_CODES = [
 
 const parsePhoneNumber = (fullNumber) => {
   if (!fullNumber) return { prefix: '+679', local: '' };
-  const sortedCodes = [...COUNTRY_CODES].sort((a, b) => b.prefix.length - a.prefix.length);
+  
   const normalized = fullNumber.toString().trim();
-  for (const c of sortedCodes) {
-    if (normalized.startsWith(c.prefix)) {
-      const local = normalized.slice(c.prefix.length).trim();
-      return { prefix: c.prefix, local };
+  
+  // Only parse prefix if it starts with a plus (legacy prefixed data)
+  if (normalized.startsWith('+')) {
+    const cleanNumber = normalized.replace(/[^\d+]/g, '');
+    const sortedCodes = [...COUNTRY_CODES].sort((a, b) => b.prefix.length - a.prefix.length);
+    for (const c of sortedCodes) {
+      if (cleanNumber.startsWith(c.prefix)) {
+        const local = cleanNumber.slice(c.prefix.length);
+        return { prefix: c.prefix, local };
+      }
     }
   }
-  return { prefix: '+679', local: normalized };
+  
+  // Otherwise, treat the entire string as the local number under the default +679 prefix
+  return { prefix: '+679', local: normalized.replace(/\D/g, '') };
 };
 
 const normalizeFijiPhone = (value) => {
   if (!value) return "";
-  let phone = value.toString().trim();
-  phone = phone.replace(/[^\d+]/g, "");
-  if (phone.startsWith("679")) {
-    phone = "+" + phone;
+  let phone = value.toString().trim().replace(/[^\d+]/g, "");
+  
+  if (!phone.startsWith('+')) {
+    for (const c of COUNTRY_CODES) {
+      const prefixWithoutPlus = c.prefix.replace('+', '');
+      if (phone.startsWith(prefixWithoutPlus)) {
+        phone = '+' + phone;
+        break;
+      }
+    }
   }
-  if (phone.startsWith("0")) {
-    phone = "+679" + phone.substring(1);
+  
+  if (!phone.startsWith('+')) {
+    if (phone.startsWith('0')) {
+      phone = '+679' + phone.substring(1);
+    } else {
+      phone = '+679' + phone;
+    }
   }
+  
   return phone;
 };
 
@@ -115,6 +135,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 5;
   const [caseDocuments, setCaseDocuments] = useState({});
+  const [workflowState, setWorkflowState] = useState(null);
+  const [loadingWorkflow, setLoadingWorkflow] = useState(false);
 
   // Edit mode states for Business Proposal and Booking Form
   const [isEditingDetails, setIsEditingDetails] = useState(false);
@@ -271,6 +293,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     setSelectedCase(item);
     setActiveDetailTab('proposal');
     setIsEditingDetails(false);
+    setWorkflowState(null);
+    fetchWorkflowActions(item.name);
 
     if (!erpnextConfig?.url) return;
     try {
@@ -316,6 +340,134 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     } catch (err) {
       console.warn("Failed to fetch detailed onboarding record:", err);
     }
+  };
+
+  const fetchWorkflowActions = async (onboardingName) => {
+    if (!erpnextConfig?.url || !onboardingName) return;
+    setLoadingWorkflow(true);
+    try {
+      const res = await fetch(`${erpnextConfig.url}/api/method/get_tenant_onboarding_workflow_actions`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
+        },
+        body: JSON.stringify({
+          tenant_onboarding: onboardingName
+        })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        console.log("Workflow actions response:", json);
+        setWorkflowState(json.message || null);
+      } else {
+        console.warn("Failed to fetch workflow actions:", res.status);
+        setWorkflowState(null);
+      }
+    } catch (err) {
+      console.error("Error fetching workflow actions:", err);
+      setWorkflowState(null);
+    } finally {
+      setLoadingWorkflow(false);
+    }
+  };
+
+  const handleWorkflowAction = async (actionName, nextState) => {
+    if (!selectedCase || !erpnextConfig?.url) return;
+    if (!confirm(`Are you sure you want to perform action "${actionName}"?`)) return;
+
+    setLoadingWorkflow(true);
+    try {
+      const res = await fetch(`${erpnextConfig.url}/api/method/update_tenant_onboarding_workflow`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
+        },
+        body: JSON.stringify({
+          tenant_onboarding: selectedCase.name,
+          action: actionName
+        })
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        const success = json?.message?.success;
+        if (success) {
+          alert(`Action "${actionName}" applied successfully!`);
+          // Refresh details and master list
+          await handleSelectCase(selectedCase);
+          await fetchWorkflowActions(selectedCase.name);
+          await fetchOnboardings();
+        } else {
+          alert(`Failed to apply action: ${json?.message?.error || 'Unknown error'}`);
+        }
+      } else {
+        const errorMsg = await extractErrorMessage(res);
+        alert(`Failed to apply action: ${errorMsg}`);
+      }
+    } catch (err) {
+      console.error("Error applying workflow action:", err);
+      alert(`Error applying workflow action: ${err.message}`);
+    } finally {
+      setLoadingWorkflow(false);
+    }
+  };
+
+  const getActionButtonStyle = (actionName) => {
+    const name = (actionName || '').toLowerCase();
+    if (name.includes('reject') || name.includes('cancel') || name.includes('deny')) {
+      return {
+        background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+        boxShadow: '0 4px 10px rgba(239, 68, 68, 0.2)'
+      };
+    }
+    if (name.includes('approve') || name.includes('accept') || name.includes('complete') || name.includes('convert')) {
+      return {
+        background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+        boxShadow: '0 4px 10px rgba(16, 185, 129, 0.2)'
+      };
+    }
+    return {
+      background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+      boxShadow: '0 4px 10px rgba(37, 99, 235, 0.2)'
+    };
+  };
+
+  const getStateBadgeStyle = (stateName) => {
+    const name = (stateName || '').toLowerCase();
+    if (name.includes('approve') || name.includes('complete') || name.includes('success')) {
+      return {
+        bg: 'rgba(16, 185, 129, 0.08)',
+        border: '1.5px solid rgba(16, 185, 129, 0.2)',
+        color: '#10b981',
+        dot: '#10b981'
+      };
+    }
+    if (name.includes('pending') || name.includes('approval') || name.includes('review')) {
+      return {
+        bg: 'rgba(245, 158, 11, 0.08)',
+        border: '1.5px solid rgba(245, 158, 11, 0.2)',
+        color: '#f59e0b',
+        dot: '#f59e0b'
+      };
+    }
+    if (name.includes('reject') || name.includes('cancel') || name.includes('deny')) {
+      return {
+        bg: 'rgba(239, 68, 68, 0.08)',
+        border: '1.5px solid rgba(239, 68, 68, 0.2)',
+        color: '#ef4444',
+        dot: '#ef4444'
+      };
+    }
+    return {
+      bg: 'rgba(59, 130, 246, 0.08)',
+      border: '1.5px solid rgba(59, 130, 246, 0.2)',
+      color: '#3b82f6',
+      dot: '#3b82f6'
+    };
   };
 
 
@@ -422,7 +574,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       }
 
       // 2. Fetch Parent Tenant Onboardings
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding?fields=%5B%22name%22%2C%22proposed_business_type%22%2C%22budget%22%2C%22required_space%22%2C%22shop_space_location%22%2C%22lease_period%22%2C%22usage_of_demised_premises%22%2C%22business_status%22%2C%22owner%22%2C%22creation%22%2C%22menu_and_business_pictures%22%2C%22fitout_period%22%2C%22rental_charges%22%2C%22security_deposit_booking_fee%22%2C%22service_promotional_charges%22%2C%22product_service_range%22%2C%22fitout_approval_timeframe%22%2C%22contact_name%22%2C%22email_id%22%2C%22contact_number%22%2C%22company_name%22%2C%22lease_commencement_date%22%2C%22vacant_possession_date%22%2C%22plans_for_approval%22%2C%22docstatus%22%5D&limit_page_length=1000&order_by=creation%20desc`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding?fields=%5B%22name%22%2C%22proposed_business_type%22%2C%22budget%22%2C%22required_space%22%2C%22shop_space_location%22%2C%22lease_period%22%2C%22usage_of_demised_premises%22%2C%22business_status%22%2C%22owner%22%2C%22creation%22%2C%22menu_and_business_pictures%22%2C%22fitout_period%22%2C%22rental_charges%22%2C%22security_deposit_booking_fee%22%2C%22service_promotional_charges%22%2C%22product_service_range%22%2C%22fitout_approval_timeframe%22%2C%22contact_name%22%2C%22email_id%22%2C%22contact_number%22%2C%22company_name%22%2C%22lease_commencement_date%22%2C%22vacant_possession_date%22%2C%22plans_for_approval%22%2C%22workflow_state%22%2C%22docstatus%22%5D&limit_page_length=1000&order_by=creation%20desc`, {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' }
       });
@@ -683,10 +835,6 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const handleUpdateCoreDetails = async () => {
     if (!selectedCase || !erpnextConfig?.url) return;
 
-    if (!editContactLocal.trim()) {
-      alert("Contact Number cannot be empty.");
-      return;
-    }
     if (!editContactName.trim()) {
       alert("Contact Name cannot be empty.");
       return;
@@ -694,6 +842,51 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     if (!editEmailId.trim()) {
       alert("Email ID cannot be empty.");
       return;
+    }
+
+    // Phone number validation based on country prefix to avoid server validation crash
+    if (editContactLocal.trim()) {
+      const cleanedLocal = editContactLocal.replace(/\D/g, '');
+      if (editContactPrefix === '+679') {
+        if (cleanedLocal.length !== 7) {
+          alert("Fiji phone number must be exactly 7 digits.");
+          return;
+        }
+        if (!/^[2356789]/.test(cleanedLocal)) {
+          alert("Fiji phone number must start with 2, 3, 5, 6, 7, 8, or 9.");
+          return;
+        }
+      }
+      if (editContactPrefix === '+91') {
+        if (cleanedLocal.length !== 10) {
+          alert("India phone number must be exactly 10 digits.");
+          return;
+        }
+        if (!/^[6789]/.test(cleanedLocal)) {
+          alert("India mobile number must start with 6, 7, 8, or 9.");
+          return;
+        }
+      }
+      if (editContactPrefix === '+1') {
+        if (cleanedLocal.length !== 10) {
+          alert("US phone number must be exactly 10 digits.");
+          return;
+        }
+        if (!/^[23456789]/.test(cleanedLocal)) {
+          alert("US area code cannot start with 0 or 1.");
+          return;
+        }
+      }
+      if (editContactPrefix === '+65') {
+        if (cleanedLocal.length !== 8) {
+          alert("Singapore phone number must be exactly 8 digits.");
+          return;
+        }
+        if (!/^[3689]/.test(cleanedLocal)) {
+          alert("Singapore phone number must start with 3, 6, 8, or 9.");
+          return;
+        }
+      }
     }
 
     setUpdatingDetails(true);
@@ -714,7 +907,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       fitout_approval_timeframe: editFitoutApprovalTimeframe,
       contact_name: editContactName,
       email_id: editEmailId,
-      contact_number: normalizeFijiPhone(`${editContactPrefix}${editContactLocal.trim()}`),
+      contact_number: editContactLocal.trim(),
       company_name: editCompanyName,
       menu_and_business_pictures: editMenuAndBusinessPictures,
       lease_commencement_date: editLeaseCommencementDate,
@@ -747,6 +940,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       if (res.ok) {
         const json = await res.json();
         console.log("Core details update response:", json);
+        console.log("Successfully submitted Tenant Onboarding payload:", payload);
         const detail = json.data || json;
         if (detail) {
           setSelectedCase(prev => {
@@ -924,7 +1118,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         product_service_range: rangeLineItems,
         contact_name: contactName,
         email_id: emailId,
-        contact_number: normalizeFijiPhone(`${contactPrefix}${contactLocal.trim()}`),
+        contact_number: contactLocal.trim(),
         company_name: companyName,
         lease_commencement_date: leaseCommencement,
         vacant_possession_date: vacantPossessionDate,
@@ -1148,7 +1342,6 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const isFormValid =
     contactName.trim() !== '' &&
     emailId.trim() !== '' &&
-    contactLocal.trim() !== '' &&
     proposedBusinessType.trim() !== '' &&
     businessStatus.trim() !== '';
 
@@ -1298,16 +1491,30 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             {new Date(c.creation).toLocaleDateString()}
                           </span>
                         </div>
-                        <span style={{
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          padding: '3px 8px',
-                          borderRadius: '12px',
-                          background: c.business_status === 'Completed' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(234, 179, 8, 0.12)',
-                          color: c.business_status === 'Completed' ? '#10b981' : '#d97706'
-                        }}>
-                          {c.business_status}
-                        </span>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          {c.workflow_state && (
+                            <span style={{
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              padding: '3px 8px',
+                              borderRadius: '12px',
+                              background: 'rgba(37, 99, 235, 0.08)',
+                              color: 'var(--brand-color, #2563eb)'
+                            }}>
+                              {c.workflow_state}
+                            </span>
+                          )}
+                          <span style={{
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            padding: '3px 8px',
+                            borderRadius: '12px',
+                            background: c.business_status === 'Completed' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(234, 179, 8, 0.12)',
+                            color: c.business_status === 'Completed' ? '#10b981' : '#d97706'
+                          }}>
+                            {c.business_status}
+                          </span>
+                        </div>
                       </div>
 
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', fontSize: '12.5px' }}>
@@ -1450,7 +1657,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           return (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
 
-              {/* Header with Wavy Pattern and Close Button */}
+              {/* Header with Wavy Pattern and Flow Layout */}
               <div style={{
                 padding: '24px 24px 16px 24px',
                 borderBottom: '1px solid var(--border-color)',
@@ -1459,129 +1666,12 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 backgroundPosition: 'center',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '14px',
-                position: 'relative'
+                gap: '16px'
               }}>
 
-                <div style={{ position: 'absolute', top: '20px', right: '24px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  {activeDetailTab !== 'search' && (
-                    <button
-                      onClick={() => {
-                        if (isEditingDetails) {
-                          setIsEditingDetails(false);
-                        } else {
-                          setEditProposedBusinessType(selectedCase.proposed_business_type || '');
-                          setEditRequiredSpace(selectedCase.required_space || '');
-                          setEditBudget(selectedCase.budget || '');
-                          setEditLeasePeriod(selectedCase.lease_period || '');
-                          setEditShopSpaceLocation(selectedCase.shop_space_location || '');
-                          setEditRentalCharges(selectedCase.rental_charges || '');
-                          setEditServicePromoCharges(selectedCase.service_promotional_charges || '');
-                          setEditSecurityDepositFee(selectedCase.security_deposit_booking_fee || '');
-                          setEditFitoutPeriod(selectedCase.fitout_period || '');
-                          setEditUsageOfDemisedPremises(selectedCase.usage_of_demised_premises || '');
-                          setEditBusinessStatus(selectedCase.business_status || 'New');
-                          setEditProductServiceRange(selectedCase.product_service_range || '');
-                          setEditFitoutApprovalTimeframe(selectedCase.fitout_approval_timeframe || '');
-                          setEditContactName(selectedCase.contact_name || '');
-                          setEditEmailId(selectedCase.email_id || '');
-                          const parsedPhone = parsePhoneNumber(selectedCase.contact_number);
-                          setEditContactPrefix(parsedPhone.prefix);
-                          setEditContactLocal(parsedPhone.local);
-                          setEditCompanyName(selectedCase.company_name || '');
-                          setEditMenuAndBusinessPictures(selectedCase.menu_and_business_pictures || '');
-                          setEditLeaseCommencementDate(selectedCase.lease_commencement_date || '');
-                          setEditVacantPossessionDate(selectedCase.vacant_possession_date || '');
-                          setEditPlansForApproval(selectedCase.plans_for_approval || '');
-                          setEditType(selectedCase.type || 'Company');
-                          setEditCompanyVatId(selectedCase.company_vat_id || '');
-                          setEditIsInternalCustomer(!!selectedCase.is_internal_customer);
-                          setEditDateOfBirth(selectedCase.date_of_birth || '');
-                          setEditAddressLine1(selectedCase.address_line1 || '');
-                          setEditAddressLine2(selectedCase.address_line2 || '');
-                          setEditCity(selectedCase.city || '');
-                          setEditState(selectedCase.state || '');
-                          setEditCountry(selectedCase.country || 'Fiji');
-                          setIsEditingDetails(true);
-                        }
-                      }}
-                      style={{
-                        background: isEditingDetails ? 'rgba(239, 68, 68, 0.08)' : 'rgba(37, 99, 235, 0.08)',
-                        border: 'none',
-                        borderRadius: '6px',
-                        color: isEditingDetails ? '#ef4444' : 'var(--brand-color)',
-                        padding: '6px 10px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        fontSize: '12px',
-                        fontWeight: 600
-                      }}
-                    >
-                      {isEditingDetails ? <X size={13} /> : <Edit size={13} />}
-                      <span>{isEditingDetails ? 'Cancel' : 'Edit Details'}</span>
-                    </button>
-                  )}
-
-                  {selectedCase.docstatus !== 1 ? (
-                    <button
-                      onClick={handleConvertCustomerClick}
-                      style={{
-                        background: 'var(--brand-color, #2563eb)',
-                        border: 'none',
-                        borderRadius: '6px',
-                        color: '#fff',
-                        padding: '6px 12px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        boxShadow: '0 2px 6px rgba(37, 99, 235, 0.15)'
-                      }}
-                    >
-                      <UserCheck size={13} />
-                      <span>Convert Customer</span>
-                    </button>
-                  ) : (
-                    <span style={{
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      padding: '4px 10px',
-                      borderRadius: '6px',
-                      background: 'rgba(22, 163, 74, 0.1)',
-                      color: '#16a34a',
-                      border: '1px solid rgba(22, 163, 74, 0.3)',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}>
-                      <ShieldCheck size={13} />
-                      <span>Converted to Customer</span>
-                    </span>
-                  )}
-
-                  <button
-                    onClick={() => setSelectedCase(null)}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#0f172a',
-                      cursor: 'pointer',
-                      padding: 4,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                  >
-                    <X size={20} />
-                  </button>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div>
+                {/* Row 1: ID Badge, Current Workflow State & Exit Button */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{
                       fontSize: '12px',
                       fontWeight: 700,
@@ -1590,23 +1680,195 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       background: 'rgba(74, 222, 128, 0.1)',
                       color: '#16a34a',
                       border: '1px solid rgba(74, 222, 128, 0.3)',
-                      display: 'inline-block',
                       fontFamily: 'monospace'
                     }}>
                       {selectedCase.name}
                     </span>
+
+                    {/* Current State Badge */}
+                    {(() => {
+                      const currentState = workflowState?.current_state || selectedCase.workflow_state || 'Drafted';
+                      const badge = getStateBadgeStyle(currentState);
+                      return (
+                        <div style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '4px 12px',
+                          borderRadius: '20px',
+                          background: badge.bg,
+                          border: badge.border,
+                          color: badge.color,
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.02)'
+                        }}>
+                          <span style={{
+                            width: '6px',
+                            height: '6px',
+                            borderRadius: '50%',
+                            background: badge.dot,
+                            boxShadow: `0 0 8px ${badge.dot}`
+                          }} />
+                          <span>{currentState}</span>
+                        </div>
+                      );
+                    })()}
                   </div>
+                  
+                  <button
+                    onClick={() => setSelectedCase(null)}
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.05)',
+                      border: 'none',
+                      borderRadius: '50%',
+                      width: '28px',
+                      height: '28px',
+                      color: '#0f172a',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(15, 23, 42, 0.1)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(15, 23, 42, 0.05)'}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                {/* Row 2: Title & Action Buttons (Parallel) */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '12px' }}>
                   <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Compliance Audit</h2>
+                  
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    {activeDetailTab !== 'search' && (
+                      <button
+                        onClick={() => {
+                          if (isEditingDetails) {
+                            setIsEditingDetails(false);
+                          } else {
+                            setEditProposedBusinessType(selectedCase.proposed_business_type || '');
+                            setEditRequiredSpace(selectedCase.required_space || '');
+                            setEditBudget(selectedCase.budget || '');
+                            setEditLeasePeriod(selectedCase.lease_period || '');
+                            setEditShopSpaceLocation(selectedCase.shop_space_location || '');
+                            setEditRentalCharges(selectedCase.rental_charges || '');
+                            setEditServicePromoCharges(selectedCase.service_promotional_charges || '');
+                            setEditSecurityDepositFee(selectedCase.security_deposit_booking_fee || '');
+                            setEditFitoutPeriod(selectedCase.fitout_period || '');
+                            setEditUsageOfDemisedPremises(selectedCase.usage_of_demised_premises || '');
+                            setEditBusinessStatus(selectedCase.business_status || 'New');
+                            setEditProductServiceRange(selectedCase.product_service_range || '');
+                            setEditFitoutApprovalTimeframe(selectedCase.fitout_approval_timeframe || '');
+                            setEditContactName(selectedCase.contact_name || '');
+                            setEditEmailId(selectedCase.email_id || '');
+                            const parsedPhone = parsePhoneNumber(selectedCase.contact_number);
+                            setEditContactPrefix(parsedPhone.prefix);
+                            setEditContactLocal(parsedPhone.local);
+                            setEditCompanyName(selectedCase.company_name || '');
+                            setEditMenuAndBusinessPictures(selectedCase.menu_and_business_pictures || '');
+                            setEditLeaseCommencementDate(selectedCase.lease_commencement_date || '');
+                            setEditVacantPossessionDate(selectedCase.vacant_possession_date || '');
+                            setEditPlansForApproval(selectedCase.plans_for_approval || '');
+                            setEditType(selectedCase.type || 'Company');
+                            setEditCompanyVatId(selectedCase.company_vat_id || '');
+                            setEditIsInternalCustomer(!!selectedCase.is_internal_customer);
+                            setEditDateOfBirth(selectedCase.date_of_birth || '');
+                            setEditAddressLine1(selectedCase.address_line1 || '');
+                            setEditAddressLine2(selectedCase.address_line2 || '');
+                            setEditCity(selectedCase.city || '');
+                            setEditState(selectedCase.state || '');
+                            setEditCountry(selectedCase.country || 'Fiji');
+                            setIsEditingDetails(true);
+                          }
+                        }}
+                        style={{
+                          background: isEditingDetails ? 'rgba(239, 68, 68, 0.08)' : 'rgba(37, 99, 235, 0.08)',
+                          border: 'none',
+                          borderRadius: '20px',
+                          color: isEditingDetails ? '#ef4444' : 'var(--brand-color)',
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          fontSize: '11px',
+                          fontWeight: 700
+                        }}
+                      >
+                        {isEditingDetails ? <X size={12} /> : <Edit size={12} />}
+                        <span>{isEditingDetails ? 'Cancel' : 'Edit Details'}</span>
+                      </button>
+                    )}
+
+                    {/* Next State / Action Trigger */}
+                    {workflowState?.next_actions?.map((act, idx) => {
+                      if (!act.allowed) return null;
+                      const actionStyle = getActionButtonStyle(act.action);
+                      return (
+                        <button
+                          key={idx}
+                          disabled={loadingWorkflow}
+                          onClick={() => handleWorkflowAction(act.action, act.next_state)}
+                          style={{
+                            background: actionStyle.background,
+                            border: 'none',
+                            borderRadius: '20px',
+                            color: '#fff',
+                            padding: '6px 14px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: loadingWorkflow ? 'not-allowed' : 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            boxShadow: actionStyle.boxShadow,
+                            transition: 'all 0.2s ease',
+                            height: '28px'
+                          }}
+                        >
+                          <span>{act.action}</span>
+                        </button>
+                      );
+                    })}
+
+                    {selectedCase.docstatus === 1 && (
+                      <span style={{
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        padding: '6px 12px',
+                        borderRadius: '20px',
+                        background: 'rgba(16, 185, 129, 0.08)',
+                        color: '#10b981',
+                        border: '1.5px solid rgba(16, 185, 129, 0.2)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}>
+                        <ShieldCheck size={12} />
+                        <span>Converted to Customer</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Stage wise Navigation Tabs */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-                  <div style={{ display: 'flex', gap: '8px', flex: 1 }}>
+                  <div style={{
+                    display: 'flex',
+                    gap: '4px',
+                    background: 'var(--bg-secondary, #f1f5f9)',
+                    padding: '4px',
+                    borderRadius: '10px',
+                    flex: 1
+                  }}>
                     {[
                       { id: 'basic', label: 'Basic Details' },
-                      { id: 'proposal', label: 'Business Proposal' },
-                      { id: 'booking', label: 'Booking Form' },
-                      { id: 'search', label: 'Company Search' }
+                      { id: 'proposal', label: 'Proposal' },
+                      { id: 'booking', label: 'Booking' },
+                      { id: 'search', label: 'Search' }
                     ].map((tab) => {
                       const isActive = activeDetailTab === tab.id;
                       return (
@@ -1614,19 +1876,21 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           key={tab.id}
                           onClick={() => setActiveDetailTab(tab.id)}
                           style={{
-                            padding: '10px 18px',
-                            fontSize: '12.5px',
+                            flex: 1,
+                            padding: '8px 10px',
+                            fontSize: '12px',
                             fontWeight: 700,
                             borderRadius: '8px',
-                            border: isActive ? 'none' : '1px solid #e2e8f0',
-                            background: isActive ? '#005c3d' : '#f8fafc',
-                            color: isActive ? '#ffffff' : '#334155',
+                            border: 'none',
+                            background: isActive ? 'var(--bg-primary, #ffffff)' : 'transparent',
+                            color: isActive ? 'var(--brand-color, #2563eb)' : 'var(--text-secondary, #64748b)',
                             cursor: 'pointer',
-                            transition: 'all 0.15s ease',
-                            boxShadow: isActive ? '0 4px 10px rgba(0, 92, 61, 0.15)' : 'none',
+                            transition: 'all 0.2s ease',
+                            boxShadow: isActive ? '0 2px 8px rgba(0, 0, 0, 0.05)' : 'none',
                             display: 'inline-flex',
                             alignItems: 'center',
-                            justifyContent: 'center'
+                            justifyContent: 'center',
+                            whiteSpace: 'nowrap'
                           }}
                         >
                           {tab.label}
@@ -1654,6 +1918,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 </div>
 
               </div>
+
+
 
               {/* TAB CONTENT */}
               <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', flex: 1 }}>
@@ -2864,7 +3130,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       </div>
 
                       <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Number *</label>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Number</label>
                         <div style={{ display: 'flex', gap: '8px' }}>
                           <select
                             value={contactPrefix}
