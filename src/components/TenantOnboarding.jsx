@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   UserCheck,
   Search,
@@ -56,47 +56,127 @@ const COUNTRY_CODES = [
 const parsePhoneNumber = (fullNumber) => {
   if (!fullNumber) return { prefix: '+679', local: '' };
   
-  const normalized = fullNumber.toString().trim();
+  let normalized = fullNumber.toString().trim();
+  const sortedCodes = [...COUNTRY_CODES].sort((a, b) => b.prefix.length - a.prefix.length);
   
-  // Only parse prefix if it starts with a plus (legacy prefixed data)
-  if (normalized.startsWith('+')) {
-    const cleanNumber = normalized.replace(/[^\d+]/g, '');
-    const sortedCodes = [...COUNTRY_CODES].sort((a, b) => b.prefix.length - a.prefix.length);
+  let detectedPrefix = '+679';
+  let stripping = true;
+  while (stripping) {
+    stripping = false;
     for (const c of sortedCodes) {
-      if (cleanNumber.startsWith(c.prefix)) {
-        const local = cleanNumber.slice(c.prefix.length);
-        return { prefix: c.prefix, local };
-      }
-    }
-  }
-  
-  // Otherwise, treat the entire string as the local number under the default +679 prefix
-  return { prefix: '+679', local: normalized.replace(/\D/g, '') };
-};
-
-const normalizeFijiPhone = (value) => {
-  if (!value) return "";
-  let phone = value.toString().trim().replace(/[^\d+]/g, "");
-  
-  if (!phone.startsWith('+')) {
-    for (const c of COUNTRY_CODES) {
-      const prefixWithoutPlus = c.prefix.replace('+', '');
-      if (phone.startsWith(prefixWithoutPlus)) {
-        phone = '+' + phone;
+      if (normalized.startsWith(c.prefix)) {
+        detectedPrefix = c.prefix;
+        normalized = normalized.slice(c.prefix.length).trim();
+        if (normalized.startsWith('-')) {
+          normalized = normalized.slice(1).trim();
+        }
+        stripping = true;
         break;
       }
     }
   }
   
-  if (!phone.startsWith('+')) {
-    if (phone.startsWith('0')) {
-      phone = '+679' + phone.substring(1);
-    } else {
-      phone = '+679' + phone;
-    }
-  }
-  
-  return phone;
+  const local = normalized.replace(/\D/g, '');
+  return { prefix: detectedPrefix, local };
+};
+
+const PhoneInputWithDropdown = ({ value, onChange, disabled }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const dropdownRef = useRef(null);
+
+  const parsed = parsePhoneNumber(value);
+  const currentCode = COUNTRY_CODES.find(c => c.prefix === parsed.prefix) || COUNTRY_CODES[0];
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredCodes = COUNTRY_CODES.filter(c => 
+    c.name.toLowerCase().includes(search.toLowerCase()) || 
+    c.prefix.includes(search)
+  );
+
+  return (
+    <div style={{ position: 'relative', display: 'flex', width: '100%', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-secondary)', padding: '4px' }} ref={dropdownRef}>
+      <div 
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', cursor: disabled ? 'default' : 'pointer', background: 'var(--bg-primary)', borderRadius: '6px', border: '1px solid var(--border-color)', userSelect: 'none' }}
+      >
+        <span style={{ fontSize: '16px' }}>{currentCode.flag}</span>
+        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{currentCode.prefix}</span>
+        <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
+        <input
+          type="tel"
+          placeholder="Local number"
+          value={parsed.local}
+          disabled={disabled}
+          onChange={(e) => {
+            const newLocal = e.target.value.replace(/\D/g, '');
+            // Sends the format as '+91-1234567890' exactly as Frappe Phone expects
+            onChange(`${currentCode.prefix}-${newLocal}`);
+          }}
+          style={{
+            flex: 1,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--text-primary)',
+            fontSize: '13px',
+            padding: '0 10px',
+            outline: 'none',
+            width: '100%'
+          }}
+        />
+      </div>
+
+      {isOpen && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '4px', width: '260px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 100, padding: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', background: 'var(--bg-secondary)', borderRadius: '6px' }}>
+            <Search size={14} style={{ color: 'var(--text-muted)' }} />
+            <input 
+              autoFocus
+              type="text"
+              placeholder="Search for countries..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ border: 'none', background: 'transparent', outline: 'none', fontSize: '13px', width: '100%', color: 'var(--text-primary)' }}
+            />
+          </div>
+          <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+            {filteredCodes.map(c => (
+              <div 
+                key={c.prefix}
+                onClick={() => {
+                  onChange(`${c.prefix}-${parsed.local}`);
+                  setIsOpen(false);
+                  setSearch('');
+                }}
+                style={{ padding: '8px 10px', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', borderRadius: '4px' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-secondary)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                <span style={{ fontSize: '16px' }}>{c.flag}</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-primary)', flex: 1 }}>{c.name}</span>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>({c.prefix})</span>
+              </div>
+            ))}
+            {filteredCodes.length === 0 && (
+              <div style={{ padding: '10px', fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>No countries found</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 const extractErrorMessage = async (res) => {
@@ -857,6 +937,18 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           return;
         }
       }
+      if (editContactPrefix === '+61') {
+        if (cleanedLocal.length !== 9) {
+          alert("Australia phone number must be exactly 9 digits.");
+          return;
+        }
+      }
+      if (editContactPrefix === '+64') {
+        if (cleanedLocal.length < 8 || cleanedLocal.length > 9) {
+          alert("New Zealand phone number must be 8 or 9 digits.");
+          return;
+        }
+      }
       if (editContactPrefix === '+91') {
         if (cleanedLocal.length !== 10) {
           alert("India phone number must be exactly 10 digits.");
@@ -907,7 +999,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       fitout_approval_timeframe: editFitoutApprovalTimeframe,
       contact_name: editContactName,
       email_id: editEmailId,
-      contact_number: editContactLocal.trim(),
+      contact_number: editContactLocal.trim() ? `${editContactPrefix}-${editContactLocal.trim()}` : "",
       company_name: editCompanyName,
       menu_and_business_pictures: editMenuAndBusinessPictures,
       lease_commencement_date: editLeaseCommencementDate,
@@ -1086,6 +1178,63 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     e.preventDefault();
     if (!proposedBusinessType || !erpnextConfig?.url) return;
 
+    // Phone number validation based on country prefix to avoid server validation crash
+    if (contactLocal.trim()) {
+      const cleanedLocal = contactLocal.replace(/\D/g, '');
+      if (contactPrefix === '+679') {
+        if (cleanedLocal.length !== 7) {
+          alert("Fiji phone number must be exactly 7 digits.");
+          return;
+        }
+        if (!/^[2356789]/.test(cleanedLocal)) {
+          alert("Fiji phone number must start with 2, 3, 5, 6, 7, 8, or 9.");
+          return;
+        }
+      }
+      if (contactPrefix === '+61') {
+        if (cleanedLocal.length !== 9) {
+          alert("Australia phone number must be exactly 9 digits.");
+          return;
+        }
+      }
+      if (contactPrefix === '+64') {
+        if (cleanedLocal.length < 8 || cleanedLocal.length > 9) {
+          alert("New Zealand phone number must be 8 or 9 digits.");
+          return;
+        }
+      }
+      if (contactPrefix === '+91') {
+        if (cleanedLocal.length !== 10) {
+          alert("India phone number must be exactly 10 digits.");
+          return;
+        }
+        if (!/^[6789]/.test(cleanedLocal)) {
+          alert("India mobile number must start with 6, 7, 8, or 9.");
+          return;
+        }
+      }
+      if (contactPrefix === '+1') {
+        if (cleanedLocal.length !== 10) {
+          alert("US phone number must be exactly 10 digits.");
+          return;
+        }
+        if (!/^[23456789]/.test(cleanedLocal)) {
+          alert("US area code cannot start with 0 or 1.");
+          return;
+        }
+      }
+      if (contactPrefix === '+65') {
+        if (cleanedLocal.length !== 8) {
+          alert("Singapore phone number must be exactly 8 digits.");
+          return;
+        }
+        if (!/^[3689]/.test(cleanedLocal)) {
+          alert("Singapore phone number must start with 3, 6, 8, or 9.");
+          return;
+        }
+      }
+    }
+
     setSubmitting(true);
     try {
       // Build child table documents payload
@@ -1118,7 +1267,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         product_service_range: rangeLineItems,
         contact_name: contactName,
         email_id: emailId,
-        contact_number: contactLocal.trim(),
+        contact_number: contactLocal.trim() ? `${contactPrefix}-${contactLocal.trim()}` : "",
         company_name: companyName,
         lease_commencement_date: leaseCommencement,
         vacant_possession_date: vacantPossessionDate,
@@ -1975,48 +2124,21 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                         )}
                       </div>
 
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Number</span>
-                        {isEditingDetails ? (
-                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
-                            <select
-                              value={editContactPrefix}
-                              onChange={(e) => setEditContactPrefix(e.target.value)}
-                              style={{
-                                border: 'none',
-                                background: 'transparent',
-                                color: 'var(--text-primary)',
-                                fontSize: '13px',
-                                fontWeight: 600,
-                                outline: 'none',
-                                cursor: 'pointer',
-                                padding: 0
-                              }}
-                            >
-                              {COUNTRY_CODES.map(c => (
-                                <option key={c.prefix} value={c.prefix}>
-                                  {c.flag} {c.prefix}
-                                </option>
-                              ))}
-                            </select>
-                            <input
-                              type="tel"
-                              value={editContactLocal}
-                              onChange={(e) => setEditContactLocal(e.target.value.replace(/\D/g, ''))}
-                              placeholder="Local number"
-                              style={{
-                                flex: 1,
-                                border: 'none',
-                                background: 'transparent',
-                                color: 'var(--text-primary)',
-                                fontSize: '13px',
-                                fontWeight: 600,
-                                outline: 'none',
-                                padding: 0
-                              }}
-                            />
-                          </div>
-                        ) : (
+                      {isEditingDetails ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '4px' }}>Contact Number</span>
+                          <PhoneInputWithDropdown
+                            value={editContactLocal ? `${editContactPrefix}-${editContactLocal}` : ""}
+                            onChange={(newVal) => {
+                              const parsed = parsePhoneNumber(newVal);
+                              setEditContactPrefix(parsed.prefix);
+                              setEditContactLocal(parsed.local);
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Number</span>
                           <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                             {(() => {
                               const parsed = parsePhoneNumber(selectedCase.contact_number);
@@ -2030,8 +2152,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               );
                             })()}
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
 
                       {/* New Basic Details Fields */}
                       <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -3131,45 +3253,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                       <div>
                         <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Number</label>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <select
-                            value={contactPrefix}
-                            onChange={(e) => setContactPrefix(e.target.value)}
-                            style={{
-                              padding: '10px 12px',
-                              fontSize: '13px',
-                              borderRadius: '8px',
-                              border: '1px solid var(--border-color)',
-                              background: 'var(--bg-secondary)',
-                              color: 'var(--text-primary)',
-                              outline: 'none',
-                              cursor: 'pointer',
-                              width: '100px'
-                            }}
-                          >
-                            {COUNTRY_CODES.map(c => (
-                              <option key={c.prefix} value={c.prefix}>
-                                {c.flag} {c.prefix}
-                              </option>
-                            ))}
-                          </select>
-                          <input
-                            type="tel"
-                            placeholder="Contact Number"
-                            value={contactLocal}
-                            onChange={(e) => setContactLocal(e.target.value.replace(/\D/g, ''))}
-                            style={{
-                              flex: 1,
-                              padding: '10px 14px',
-                              fontSize: '13px',
-                              borderRadius: '8px',
-                              border: '1px solid var(--border-color)',
-                              background: 'var(--bg-secondary)',
-                              color: 'var(--text-primary)',
-                              outline: 'none'
-                            }}
-                          />
-                        </div>
+                        <PhoneInputWithDropdown
+                          value={contactLocal ? `${contactPrefix}-${contactLocal}` : ""}
+                          onChange={(newVal) => {
+                            const parsed = parsePhoneNumber(newVal);
+                            setContactPrefix(parsed.prefix);
+                            setContactLocal(parsed.local);
+                          }}
+                        />
                       </div>
 
                       <div>
