@@ -307,7 +307,12 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       <div className="grid-2col" style={{ gridTemplateColumns: selectedInvoice ? '55% calc(45% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
         
         {/* Invoices List */}
-        <div className="card-panel" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card-panel" style={{
+          padding: 0,
+          overflow: 'hidden',
+          filter: selectedInvoice ? 'blur(4px)' : 'none',
+          transition: 'filter 0.3s ease'
+        }}>
           <div className="table-container">
             <table className="custom-table">
               <thead>

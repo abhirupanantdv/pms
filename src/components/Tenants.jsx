@@ -12,7 +12,7 @@
 // // // // //       setTenantAddress('');
 // // // // //       return;
 // // // // //     }
-    
+
 // // // // //     // Set default/existing address if present
 // // // // //     setTenantAddress(selectedTenant.address || 'Address not specified');
 
@@ -121,7 +121,7 @@
 // // // // //     if (!name || !email || !phone || !propertyId || !leaseStart || !leaseEnd) return;
 
 // // // // //     const matchedProp = properties.find(p => p.id === propertyId);
-    
+
 // // // // //     onAddTenant({
 // // // // //       id: `TEN-${Math.floor(100 + Math.random() * 900)}`,
 // // // // //       name,
@@ -168,7 +168,7 @@
 
 // // // // //       {/* Split Details Layout */}
 // // // // //       <div className="grid-2col" style={{ gridTemplateColumns: selectedTenant ? '60% calc(40% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
-        
+
 // // // // //         {/* Tenants List */}
 // // // // //         <div className="card-panel" style={{ padding: 0, overflow: 'hidden' }}>
 // // // // //           <div className="table-container">
@@ -266,7 +266,7 @@
 // // // // //             {/* Contact Details Card */}
 // // // // //             <div style={{ background: 'var(--bg-tertiary)', padding: 16, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 12 }}>
 // // // // //               <h3 style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 2 }}>Contact Verification</h3>
-              
+
 // // // // //               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
 // // // // //                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
 // // // // //                   <Mail size={16} style={{ color: 'var(--text-secondary)' }} />
@@ -360,7 +360,7 @@
 // // // // //                     </select>
 // // // // //                   </div>
 // // // // //                 </div>
-                
+
 // // // // //                 <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
 // // // // //                   <div className="form-group">
 // // // // //                     <label className="form-label">Email Address</label>
@@ -417,7 +417,7 @@
 // // // // //                   </div>
 // // // // //                 </div>
 // // // // //               </div>
-              
+
 // // // // //               <div className="modal-footer">
 // // // // //                 <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
 // // // // //                 <button type="submit" className="btn btn-primary">Add Tenant</button>
@@ -2620,10 +2620,18 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
     setCurrentPage(1);
   }, [tenants.length]);
 
-  const totalPages = Math.ceil(tenants.length / itemsPerPage);
+  const sortedTenants = [...tenants].sort((a, b) => {
+    if (a._pending && !b._pending) return -1;
+    if (!a._pending && b._pending) return 1;
+    const dateA = new Date(a.modified || a.creation || 0);
+    const dateB = new Date(b.modified || b.creation || 0);
+    return dateB - dateA;
+  });
+
+  const totalPages = Math.ceil(sortedTenants.length / itemsPerPage);
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = tenants.slice(indexOfFirstItem, indexOfLastItem);
+  const currentItems = sortedTenants.slice(indexOfFirstItem, indexOfLastItem);
 
   const renderPaginationControls = () => {
     if (totalPages <= 1) return null;
@@ -2722,7 +2730,7 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
 
   return (
     <div>
-      <div className="view-header">
+      {/* <div className="view-header">
         <div>
           <h1 className="view-title">Tenants Directory</h1>
           <p className="view-subtitle">Customer records synced with ERPNext.</p>
@@ -2730,12 +2738,16 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
         <button className="btn btn-primary" onClick={() => setShowModal(true)}>
           <Plus size={16} /> Register Tenant
         </button>
-      </div>
+      </div> */}
 
       <div className="grid-2col" style={{ gridTemplateColumns: selectedTenant ? '60% calc(40% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
 
-        {/* List view - columns match real Customer doctype fields */}
-        <div className="card-panel" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card-panel" style={{
+          padding: 0,
+          overflow: 'hidden',
+          filter: selectedTenant ? 'blur(4px)' : 'none',
+          transition: 'filter 0.3s ease'
+        }}>
           <div className="table-container">
             <table className="custom-table">
               <thead>
@@ -2830,7 +2842,7 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
             {/* Profile Info Section */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <h3 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 2px 0', fontWeight: 700 }}>Profile Details</h3>
-              
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Is Internal?</span>
@@ -2906,11 +2918,11 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
             {/* System Info Section */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid var(--border-color)', paddingTop: 14 }}>
               <h3 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 2px 0', fontWeight: 700 }}>System Information</h3>
-              
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '11px', color: 'var(--text-secondary)' }}>
                 <div>
                   <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Created On</span>
-                  <span>{selectedTenant.creation || '—'}</span>
+                  <span>{selectedTenant.creation ? selectedTenant.creation.split('.')[0] : '—'}</span>
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Owner</span>
@@ -2918,7 +2930,7 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Last Modified</span>
-                  <span>{selectedTenant.modified || '—'}</span>
+                  <span>{selectedTenant.modified ? selectedTenant.modified.split('.')[0] : '—'}</span>
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Modified By</span>

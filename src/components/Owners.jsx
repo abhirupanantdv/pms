@@ -186,7 +186,12 @@ export default function Owners({ owners, erpnextConfig }) {
       <div className="grid-2col" style={{ gridTemplateColumns: selectedOwner ? '60% calc(40% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
 
         {/* Vendors/Suppliers List */}
-        <div className="card-panel" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card-panel" style={{
+          padding: 0,
+          overflow: 'hidden',
+          filter: selectedOwner ? 'blur(4px)' : 'none',
+          transition: 'filter 0.3s ease'
+        }}>
           <div className="table-container">
             <table className="custom-table">
               <thead>

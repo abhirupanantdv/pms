@@ -3196,7 +3196,12 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
       <div className="grid-2col" style={{ gridTemplateColumns: selectedBookingId ? '60% calc(40% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
 
         {/* Booking Table Card */}
-        <div className="card-panel" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card-panel" style={{
+          padding: 0,
+          overflow: 'hidden',
+          filter: selectedBookingId ? 'blur(4px)' : 'none',
+          transition: 'filter 0.3s ease'
+        }}>
           <div className="table-container">
             <table className="custom-table">
               <thead>

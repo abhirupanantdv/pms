@@ -963,7 +963,12 @@ export default function HRMS({ employees, setEmployees, onCreateEmployee, depart
       {activeTab === 'employees' && (
         <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: selectedEmpId ? '65% calc(35% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
           {/* Main Table Directory Card */}
-          <div className="card-panel" style={{ padding: 0, overflow: 'hidden' }}>
+          <div className="card-panel" style={{
+            padding: 0,
+            overflow: 'hidden',
+            filter: selectedEmpId ? 'blur(4px)' : 'none',
+            transition: 'filter 0.3s ease'
+          }}>
             {/* Directory toolbar with filter and searches */}
             <div style={{ padding: '16px 24px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 260 }}>

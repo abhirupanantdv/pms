@@ -1,18 +1,23 @@
 {
   "index.html": {
-    "file": "assets/index-C1gOaLRN.js",
+    "file": "assets/index-BMv43UMW.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
     "css": [
-      "assets/index-Csak3otw.css"
+      "assets/index-fpi9ApVR.css"
     ],
     "assets": [
+      "assets/new-house-6oOLwp4_.png",
       "assets/home-D8J3-NJd.png"
     ]
   },
   "src/assets/home.png": {
     "file": "assets/home-D8J3-NJd.png",
     "src": "src/assets/home.png"
+  },
+  "src/assets/new-house.png": {
+    "file": "assets/new-house-6oOLwp4_.png",
+    "src": "src/assets/new-house.png"
   }
 }

@@ -4124,7 +4124,15 @@ export default function Maintenance({
 
           <div className="grid-2col" style={{ gridTemplateColumns: selectedSchedule ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
             {viewMode === 'list' && (
-              <div className="card-panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', overflow: 'hidden' }}>
+              <div className="card-panel" style={{
+                padding: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                overflow: 'hidden',
+                filter: selectedSchedule ? 'blur(4px)' : 'none',
+                transition: 'filter 0.3s ease'
+              }}>
                 <div className="table-container" style={{ flex: 1, overflowY: 'auto' }}>
                   <table className="custom-table">
                     <thead><tr><th>Schedule ID</th><th>Type</th><th>Tenant / Partner</th><th>Unit Name</th><th>Periodicity</th><th>Status</th></tr></thead>
@@ -4277,7 +4285,11 @@ export default function Maintenance({
             <span style={{ fontSize: 14, fontWeight: 700 }}>Maintenance Task list</span>
           </div>
           <div className="grid-2col" style={{ gridTemplateColumns: selectedWorkOrder ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
-            <div className="card-panel" style={{ padding: 0 }}>
+            <div className="card-panel" style={{
+              padding: 0,
+              filter: selectedWorkOrder ? 'blur(4px)' : 'none',
+              transition: 'filter 0.3s ease'
+            }}>
               <div className="table-container">
                 <table className="custom-table">
                   <thead><tr><th>ID</th><th>Property</th><th>Category</th><th>Estimated Cost</th><th>Status</th></tr></thead>
@@ -4383,7 +4395,10 @@ export default function Maintenance({
       {/* ── SECTION 3: TECHNICIANS ── */}
       {activeSection === 'technician' && (
         <div className="grid-2col" style={{ gridTemplateColumns: selectedTechnician ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
-          <div className="card-panel">
+          <div className="card-panel" style={{
+            filter: selectedTechnician ? 'blur(4px)' : 'none',
+            transition: 'filter 0.3s ease'
+          }}>
             <h3 style={{ fontSize: 15, marginBottom: 14 }}>Active Technicians Directory</h3>
             <div className="table-container">
               <table className="custom-table">
@@ -4413,7 +4428,10 @@ export default function Maintenance({
       {/* ── SECTION 4: VENDORS ── */}
       {activeSection === 'vendor' && (
         <div className="grid-2col" style={{ gridTemplateColumns: selectedVendor ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
-          <div className="card-panel">
+          <div className="card-panel" style={{
+            filter: selectedVendor ? 'blur(4px)' : 'none',
+            transition: 'filter 0.3s ease'
+          }}>
             <h3 style={{ fontSize: 15, marginBottom: 14 }}>Vendor Directory & Quotations Log</h3>
             <div className="table-container">
               <table className="custom-table">

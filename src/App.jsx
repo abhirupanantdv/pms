@@ -3429,7 +3429,7 @@ export default function App() {
         // }
         try {
           const res = await fetch(
-            `${ERPNEXT_CONFIG.url}/api/resource/Customer?fields=["*"]&limit_page_length=200`,
+            `${ERPNEXT_CONFIG.url}/api/resource/Customer?fields=["*"]&limit_page_length=200&order_by=modified desc`,
             {
               credentials: "include",
               headers: {

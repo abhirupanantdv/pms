@@ -729,7 +729,13 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
           {issueViewMode === 'list' ? (
             <div className="grid-2col" style={{ gridTemplateColumns: selectedTicketId ? '1.2fr 2fr' : '1fr', gap: 20 }}>
               {/* Ticket list view sidebar */}
-              <div className="card-panel" style={{ padding: 0, display: 'flex', flexDirection: 'column' }}>
+              <div className="card-panel" style={{
+                padding: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                filter: selectedTicketId ? 'blur(4px)' : 'none',
+                transition: 'filter 0.3s ease'
+              }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border-color)', marginBottom: 10 }}>
                   <h3 style={{ fontSize: '0.95rem', margin: 0 }}>Open Issues ({openTickets.length})</h3>
                   <button

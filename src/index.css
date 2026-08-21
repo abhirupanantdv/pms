@@ -104,7 +104,7 @@ h1, h2, h3, h4, h5, h6 {
   height: 100vh;
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: 1000;
   padding: 24px 16px;
 }
 
@@ -465,7 +465,7 @@ h1, h2, h3, h4, h5, h6 {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 1100;
   padding: 20px;
 }
 

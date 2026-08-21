@@ -27,7 +27,8 @@ import {
   ChevronRight,
   ClipboardList,
   Edit,
-  RefreshCw
+  RefreshCw,
+  Info
 } from 'lucide-react';
 
 const documentTypes = [
@@ -55,10 +56,10 @@ const COUNTRY_CODES = [
 
 const parsePhoneNumber = (fullNumber) => {
   if (!fullNumber) return { prefix: '+679', local: '' };
-  
+
   let normalized = fullNumber.toString().trim();
   const sortedCodes = [...COUNTRY_CODES].sort((a, b) => b.prefix.length - a.prefix.length);
-  
+
   let detectedPrefix = '+679';
   let stripping = true;
   while (stripping) {
@@ -75,7 +76,7 @@ const parsePhoneNumber = (fullNumber) => {
       }
     }
   }
-  
+
   const local = normalized.replace(/\D/g, '');
   return { prefix: detectedPrefix, local };
 };
@@ -98,14 +99,14 @@ const PhoneInputWithDropdown = ({ value, onChange, disabled }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const filteredCodes = COUNTRY_CODES.filter(c => 
-    c.name.toLowerCase().includes(search.toLowerCase()) || 
+  const filteredCodes = COUNTRY_CODES.filter(c =>
+    c.name.toLowerCase().includes(search.toLowerCase()) ||
     c.prefix.includes(search)
   );
 
   return (
     <div style={{ position: 'relative', display: 'flex', width: '100%', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-secondary)', padding: '4px' }} ref={dropdownRef}>
-      <div 
+      <div
         onClick={() => !disabled && setIsOpen(!isOpen)}
         style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', cursor: disabled ? 'default' : 'pointer', background: 'var(--bg-primary)', borderRadius: '6px', border: '1px solid var(--border-color)', userSelect: 'none' }}
       >
@@ -142,7 +143,7 @@ const PhoneInputWithDropdown = ({ value, onChange, disabled }) => {
         <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '4px', width: '260px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 100, padding: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', background: 'var(--bg-secondary)', borderRadius: '6px' }}>
             <Search size={14} style={{ color: 'var(--text-muted)' }} />
-            <input 
+            <input
               autoFocus
               type="text"
               placeholder="Search for countries..."
@@ -153,7 +154,7 @@ const PhoneInputWithDropdown = ({ value, onChange, disabled }) => {
           </div>
           <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
             {filteredCodes.map(c => (
-              <div 
+              <div
                 key={c.prefix}
                 onClick={() => {
                   onChange(`${c.prefix}-${parsed.local}`);
@@ -204,6 +205,1012 @@ const extractErrorMessage = async (res) => {
     console.warn("Failed parsing error json:", e);
   }
   return message;
+};
+
+const isFieldRequired = (field, formValues = {}) => {
+  if (!field) return false;
+  const selectedType = formValues?.type || '';
+
+  // If conditionally hidden based on Type, it is not required
+  if (field.fieldname === 'date_of_birth' && selectedType !== 'Individual') {
+    return false;
+  }
+  if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
+    return false;
+  }
+
+  if (selectedType === 'Company') {
+    if (field.fieldname === 'company_name' || field.fieldname === 'company_vat_id' || field.fieldname === 'company_tin_id' || field.fieldname === 'tax_id') {
+      return true;
+    }
+  }
+
+  if (selectedType === 'Individual') {
+    if (field.fieldname === 'date_of_birth') {
+      return true;
+    }
+  }
+
+  return field.reqd === 1 || field.reqd === '1' || field.reqd === true;
+};
+
+const isPhoneField = (field) => {
+  if (!field) return false;
+  const fieldtype = field.fieldtype;
+  return fieldtype === 'Phone' ||
+    (fieldtype === 'Data' && (
+      field.fieldname.toLowerCase().includes('phone') ||
+      field.fieldname.toLowerCase().includes('mobile') ||
+      field.fieldname.toLowerCase().includes('contact_number')
+    ));
+};
+
+const validatePhoneValue = (phoneVal, label) => {
+  if (!phoneVal) return true;
+  const parsed = parsePhoneNumber(phoneVal);
+  const prefix = parsed.prefix;
+  const cleanedLocal = parsed.local.replace(/\D/g, '');
+
+  if (!cleanedLocal) return true;
+
+  if (prefix === '+679') {
+    if (cleanedLocal.length !== 7) {
+      alert(`${label}: Fiji phone number must be exactly 7 digits.`);
+      return false;
+    }
+    if (!/^[2356789]/.test(cleanedLocal)) {
+      alert(`${label}: Fiji phone number must start with 2, 3, 5, 6, 7, 8, or 9.`);
+      return false;
+    }
+  }
+  if (prefix === '+61') {
+    if (cleanedLocal.length !== 9) {
+      alert(`${label}: Australia phone number must be exactly 9 digits.`);
+      return false;
+    }
+  }
+  if (prefix === '+64') {
+    if (cleanedLocal.length < 8 || cleanedLocal.length > 9) {
+      alert(`${label}: New Zealand phone number must be 8 or 9 digits.`);
+      return false;
+    }
+  }
+  if (prefix === '+91') {
+    if (cleanedLocal.length !== 10) {
+      alert(`${label}: India phone number must be exactly 10 digits.`);
+      return false;
+    }
+    if (!/^[6789]/.test(cleanedLocal)) {
+      alert(`${label}: India mobile number must start with 6, 7, 8, or 9.`);
+      return false;
+    }
+  }
+  if (prefix === '+1') {
+    if (cleanedLocal.length !== 10) {
+      alert(`${label}: US phone number must be exactly 10 digits.`);
+      return false;
+    }
+    if (!/^[23456789]/.test(cleanedLocal)) {
+      alert(`${label}: US area code cannot start with 0 or 1.`);
+      return false;
+    }
+  }
+  if (prefix === '+65') {
+    if (cleanedLocal.length !== 8) {
+      alert(`${label}: Singapore phone number must be exactly 8 digits.`);
+      return false;
+    }
+    if (!/^[3689]/.test(cleanedLocal)) {
+      alert(`${label}: Singapore phone number must start with 3, 6, 8, or 9.`);
+      return false;
+    }
+  }
+  return true;
+};
+
+const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkOptions, getDocTypeFields, erpnextConfig, getCsrfToken, formValues = {}, isNew = false }) => {
+  const fieldtype = field.fieldtype;
+  let label = field.label || field.fieldname;
+  if (label === 'Required Space' || label === 'Required Space (sq mtr)' || label === 'Space Required') {
+    label = 'Required Space(Sqm)';
+  }
+  if (label === 'Rental Budget' || label === 'Rental Budget ($)' || label === 'Budget') {
+    label = 'Rental Budget(FJD)';
+  }
+  const isRequired = isFieldRequired(field, formValues);
+  const isReadOnly = !!field.read_only;
+
+  const [childFields, setChildFields] = useState([]);
+  const [loadingChild, setLoadingChild] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState({});
+
+  // Fetch Link options dynamically
+  useEffect(() => {
+    if (fieldtype === 'Link' && field.options) {
+      fetchLinkOptions(field.options);
+    }
+  }, [fieldtype, field.options]);
+
+  // Default values initialization for Select and Link fields
+  useEffect(() => {
+    if ((fieldtype === 'Select' || fieldtype === 'Link') && field.default && (value === undefined || value === null || value === '')) {
+      if (field.fieldname !== 'type') {
+        onChange(field.default);
+      }
+    }
+  }, [fieldtype, field.default, value, onChange]);
+
+  // Fetch child table schema dynamically if type is Table
+  useEffect(() => {
+    if (fieldtype === 'Table' && field.options && getDocTypeFields) {
+      setLoadingChild(true);
+      getDocTypeFields(field.options).then(fields => {
+        if (Array.isArray(fields)) {
+          setChildFields(fields.filter(f => f.hidden !== 1));
+        }
+        setLoadingChild(false);
+      }).catch(err => {
+        console.warn("Failed to load child fields for " + field.options, err);
+        setLoadingChild(false);
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fieldtype, field.options]);
+
+  // Style for label
+  const labelStyle = {
+    display: 'block',
+    fontSize: '11.5px',
+    fontWeight: 600,
+    color: 'var(--text-secondary)',
+    marginBottom: '5px'
+  };
+
+  // Standard input style
+  const inputStyle = {
+    width: '100%',
+    padding: '10px 14px',
+    fontSize: '13px',
+    borderRadius: '8px',
+    border: '1px solid var(--border-color)',
+    background: 'var(--bg-secondary)',
+    color: 'var(--text-primary)',
+    outline: 'none'
+  };
+
+  // Select input style
+  const selectStyle = {
+    ...inputStyle,
+    cursor: 'pointer'
+  };
+
+  // Textarea input style
+  const textareaStyle = {
+    ...inputStyle,
+    padding: '12px 14px',
+    resize: 'vertical'
+  };
+
+  const isPhone = fieldtype === 'Phone' ||
+    (fieldtype === 'Data' && (
+      field.fieldname.toLowerCase().includes('phone') ||
+      field.fieldname.toLowerCase().includes('mobile') ||
+      field.fieldname.toLowerCase().includes('contact_number')
+    ));
+
+  if (isPhone) {
+    return (
+      <div>
+        <label style={labelStyle}>
+          {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+        </label>
+        <PhoneInputWithDropdown
+          value={value || ''}
+          onChange={onChange}
+          disabled={isReadOnly}
+        />
+      </div>
+    );
+  }
+
+  // Render based on field type
+  switch (fieldtype) {
+    case 'Section Break':
+      return (
+        <div style={{ width: '100%', borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '12px', gridColumn: '1 / -1' }}>
+          <h4 style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0 }}>
+            {label}
+          </h4>
+        </div>
+      );
+
+    case 'Column Break':
+      return null;
+
+    case 'Heading':
+      return (
+        <div style={{ width: '100%', paddingTop: '8px', gridColumn: '1 / -1' }}>
+          <h5 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', margin: 0, borderBottom: '1px solid var(--border-color)', paddingBottom: '4px' }}>
+            {label}
+          </h5>
+        </div>
+      );
+
+    case 'Color':
+      return (
+        <div>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <input
+            type="color"
+            value={value || '#000000'}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isReadOnly}
+            style={{ ...inputStyle, padding: '2px 8px', height: '40px', cursor: 'pointer' }}
+          />
+        </div>
+      );
+
+    case 'Datetime':
+      return (
+        <div>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <input
+            type="datetime-local"
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isReadOnly}
+            style={inputStyle}
+          />
+        </div>
+      );
+
+    case 'Time':
+      return (
+        <div>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <input
+            type="time"
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isReadOnly}
+            style={inputStyle}
+          />
+        </div>
+      );
+
+    case 'Read Only':
+      return (
+        <div>
+          <label style={labelStyle}>{label}</label>
+          <input
+            type="text"
+            value={value || ''}
+            disabled
+            style={{ ...inputStyle, background: 'var(--bg-tertiary)', color: 'var(--text-muted)', cursor: 'not-allowed' }}
+          />
+        </div>
+      );
+
+    case 'Signature':
+      return (
+        <div style={{ gridColumn: 'span 2' }}>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <input
+              type="text"
+              placeholder="Signature / Draw (URL or data URI)"
+              value={value || ''}
+              onChange={(e) => onChange(e.target.value)}
+              disabled={isReadOnly}
+              style={{ ...inputStyle, flex: 1 }}
+            />
+            <button
+              type="button"
+              disabled={isReadOnly}
+              style={{
+                padding: '10px 16px',
+                fontSize: '12px',
+                fontWeight: 600,
+                borderRadius: '8px',
+                border: '1px solid var(--border-color)',
+                background: 'var(--bg-primary)',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer'
+              }}
+              onClick={() => {
+                const val = prompt(`Enter signature text or link for ${label}:`);
+                if (val !== null) onChange(val);
+              }}
+            >
+              Sign Document
+            </button>
+          </div>
+        </div>
+      );
+
+    case 'Check':
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '8px 0', gridColumn: 'span 2' }}>
+          <input
+            type="checkbox"
+            id={field.fieldname}
+            checked={!!value}
+            onChange={(e) => onChange(e.target.checked ? 1 : 0)}
+            disabled={isReadOnly}
+            style={{
+              width: '18px',
+              height: '18px',
+              accentColor: 'var(--brand-color)',
+              cursor: 'pointer',
+              borderRadius: '4px'
+            }}
+          />
+          <label htmlFor={field.fieldname} style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+        </div>
+      );
+
+    case 'Select':
+      return (
+        <div>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <select
+            value={value !== undefined && value !== null && value !== '' ? value : (field.fieldname === 'type' ? '' : (field.default || ''))}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isReadOnly}
+            style={selectStyle}
+          >
+            <option value="">-- Select {label} --</option>
+            {field.options && field.options.split('\n').filter(Boolean).map(opt => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        </div>
+      );
+
+    case 'Link':
+      const linkedOptions = linkOptionsCache[field.options] || [];
+      return (
+        <div>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <select
+            value={value !== undefined && value !== null && value !== '' ? value : (field.fieldname === 'type' ? '' : (field.default || ''))}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isReadOnly}
+            style={selectStyle}
+          >
+            <option value="">-- Select {label} (Link) --</option>
+            {linkedOptions.map(opt => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        </div>
+      );
+
+    case 'Date':
+      return (
+        <div>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <input
+            type="date"
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isReadOnly}
+            style={inputStyle}
+          />
+        </div>
+      );
+
+    case 'Small Text':
+    case 'Text':
+    case 'Long Text':
+    case 'Code':
+      return (
+        <div style={{ gridColumn: 'span 2' }}>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <textarea
+            rows={3}
+            placeholder={`Enter ${label}...`}
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isReadOnly}
+            style={textareaStyle}
+          />
+        </div>
+      );
+
+    case 'Int':
+    case 'Float':
+    case 'Currency':
+    case 'Percent':
+      return (
+        <div>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <input
+            type="number"
+            step={fieldtype === 'Int' ? '1' : 'any'}
+            placeholder="0"
+            value={value === undefined || value === null ? '' : value}
+            onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
+            disabled={isReadOnly}
+            style={inputStyle}
+          />
+        </div>
+      );
+
+    case 'Password':
+      return (
+        <div>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <input
+            type="password"
+            placeholder="••••••••"
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isReadOnly}
+            style={inputStyle}
+          />
+        </div>
+      );
+
+    case 'Attach':
+    case 'Attach Image':
+      return (
+        <div style={{ gridColumn: 'span 2' }}>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 16px',
+                borderRadius: '8px',
+                border: '1px solid var(--border-color)',
+                background: 'var(--bg-secondary)',
+                color: 'var(--text-secondary)',
+                fontSize: '12.5px',
+                fontWeight: 600,
+                cursor: uploading || isReadOnly ? 'not-allowed' : 'pointer',
+                transition: 'all 0.2s ease',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+              }}
+            >
+              {uploading ? <Loader2 size={14} className="spin" /> : <Paperclip size={14} />}
+              <span>{uploading ? 'Uploading...' : 'Choose File'}</span>
+              <input
+                type="file"
+                disabled={uploading || isReadOnly}
+                onChange={async (e) => {
+                  const file = e.target.files[0];
+                  if (!file || !erpnextConfig?.url) return;
+
+                  setUploading(true);
+                  const formData = new FormData();
+                  formData.append('file', file);
+                  formData.append('is_private', '0');
+
+                  try {
+                    const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
+                      method: 'POST',
+                      credentials: 'include',
+                      headers: {
+                        'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
+                      },
+                      body: formData
+                    });
+                    if (res.ok) {
+                      const json = await res.json();
+                      const fileUrl = json.message?.file_url || json.file_url;
+                      if (fileUrl) {
+                        onChange(fileUrl);
+                      } else {
+                        alert("Upload succeeded but file URL not returned.");
+                      }
+                    } else {
+                      alert("File upload failed.");
+                    }
+                  } catch (err) {
+                    console.error("Error uploading file:", err);
+                    alert("Error uploading file.");
+                  } finally {
+                    setUploading(false);
+                  }
+                }}
+                style={{ display: 'none' }}
+              />
+            </label>
+
+            {value ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                <CheckCircle size={14} style={{ color: '#10b981' }} />
+                <span style={{ fontSize: '12px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {String(value).split('/').pop()}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onChange('')}
+                  disabled={isReadOnly}
+                  style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px', fontWeight: 600, padding: 0 }}
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No file chosen</span>
+            )}
+          </div>
+        </div>
+      );
+
+    case 'Table':
+      if (field.fieldname === 'company_search_documents') {
+        const docList = Array.isArray(value) ? value : [];
+
+        const standardTypes = [
+          { key: 'inc', label: 'True Certified copies of Incorporation' },
+          { key: 'moa', label: 'Memorandum of Associations Company' },
+          { key: 'name_cert', label: 'Business name registration certificate.' },
+          { key: 'directors_rep', label: 'Directors Reports' },
+          { key: 'tin_letter', label: 'Tin Letter' },
+          { key: 'bus_reg_cert', label: 'Business Registration Certificate' },
+          { key: 'birth_cert', label: 'Birth Certificate' },
+          { key: 'passport_photo', label: 'Passport photo of Directors' },
+          { key: 'tin_comp_indiv', label: 'Tin Letter Company and Individual' },
+          { key: 'photo_id', label: 'Photo ID Card' }
+        ];
+
+        // Map standard items
+        const standardDocsMapped = standardTypes.map(st => {
+          const found = docList.find(d =>
+            d.document_type?.toLowerCase().trim() === st.label.toLowerCase().trim()
+          );
+          return {
+            key: st.key,
+            label: st.label,
+            docObj: found,
+            isStandard: true
+          };
+        });
+
+        // Map custom items
+        const standardLabelsLower = new Set(standardTypes.map(st => st.label.toLowerCase().trim()));
+        const customDocsMapped = docList
+          .filter(d => d.document_type && !standardLabelsLower.has(d.document_type.toLowerCase().trim()))
+          .map((d, index) => ({
+            key: `custom_${index}`,
+            label: d.document_type,
+            docObj: d,
+            isStandard: false
+          }));
+
+        const combinedDocs = [...standardDocsMapped, ...customDocsMapped];
+
+        const handleUpdateItemDoc = (label, url) => {
+          const existingIdx = docList.findIndex(d => d.document_type?.toLowerCase().trim() === label.toLowerCase().trim());
+          if (existingIdx !== -1) {
+            const updated = docList.map((d, idx) => {
+              if (idx === existingIdx) {
+                return { ...d, document: url };
+              }
+              return d;
+            });
+            onChange(updated);
+          } else {
+            const newRow = { document_type: label, document: url, verified: 0 };
+            onChange([...docList, newRow]);
+          }
+        };
+
+        const handleToggleItemVerified = (label, verifiedVal) => {
+          const existingIdx = docList.findIndex(d => d.document_type?.toLowerCase().trim() === label.toLowerCase().trim());
+          if (existingIdx !== -1) {
+            const updated = docList.map((d, idx) => {
+              if (idx === existingIdx) {
+                return { ...d, verified: verifiedVal ? 1 : 0 };
+              }
+              return d;
+            });
+            onChange(updated);
+          } else {
+            const newRow = { document_type: label, document: '', verified: verifiedVal ? 1 : 0 };
+            onChange([...docList, newRow]);
+          }
+        };
+
+        return (
+          <div style={{ gridColumn: 'span 2', display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '8px' }}>
+            {!isNew && (
+              <h4 style={{ margin: '0 0 4px 0', fontSize: '13px', color: 'var(--brand-color, #2563eb)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 700 }}>
+                Company Search Audit Checklist
+              </h4>
+            )}
+            {combinedDocs.map((item) => {
+              const fileUrl = item.docObj?.document || '';
+              const isVerified = !!item.docObj?.verified;
+              const isExpanded = !!localExpanded[item.key];
+
+              let statusText = 'Pending Upload';
+              let statusColor = 'var(--text-muted, #94a3b8)';
+              let statusBg = 'rgba(156, 163, 175, 0.1)';
+              if (fileUrl) {
+                if (isVerified) {
+                  statusText = 'Verified';
+                  statusColor = '#10b981';
+                  statusBg = 'rgba(16, 185, 129, 0.1)';
+                } else {
+                  statusText = 'Needs Verification';
+                  statusColor = '#d97706';
+                  statusBg = 'rgba(217, 119, 6, 0.1)';
+                }
+              }
+
+              return (
+                <div
+                  key={item.key}
+                  style={{
+                    background: 'var(--bg-primary, #ffffff)',
+                    border: '1px solid var(--border-color, #e2e8f0)',
+                    borderRadius: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    transition: 'all 0.2s ease',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                    overflow: 'hidden'
+                  }}
+                >
+                  {/* Header Row - Click to collapse/expand */}
+                  <div
+                    onClick={() => setLocalExpanded(prev => ({ ...prev, [item.key]: !prev[item.key] }))}
+                    style={{
+                      padding: '12px 16px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      cursor: 'pointer',
+                      background: isExpanded ? 'var(--bg-secondary, #f8fafc)' : 'transparent',
+                      transition: 'background 0.2s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                      {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary, #0f172a)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {item.label}
+                      </span>
+                      <span style={{
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        background: statusBg,
+                        color: statusColor,
+                        marginLeft: '8px'
+                      }}>
+                        {statusText}
+                      </span>
+                    </div>
+
+                    {/* Verify toggle checkbox */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <label
+                        onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          cursor: fileUrl ? 'pointer' : 'not-allowed',
+                          fontSize: '11.5px',
+                          fontWeight: 600,
+                          opacity: fileUrl ? 1 : 0.4,
+                          color: 'var(--text-secondary, #475569)'
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          disabled={!fileUrl}
+                          checked={isVerified}
+                          onChange={(e) => handleToggleItemVerified(item.label, e.target.checked)}
+                          style={{ accentColor: 'var(--brand-color, #2563eb)' }}
+                        />
+                        <span>Verify Draft</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Expanded Content Panel */}
+                  {isExpanded && (
+                    <div style={{
+                      padding: '16px',
+                      borderTop: '1px solid var(--border-color, #e2e8f0)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px',
+                      background: 'var(--bg-secondary, #f8fafc)'
+                    }}>
+                      {fileUrl ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const fullUrl = fileUrl.startsWith('http') ? fileUrl : `${erpnextConfig.url}${fileUrl}`;
+                              window.open(fullUrl, '_blank');
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'var(--brand-color, #2563eb)',
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: 0,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            <Eye size={13} style={{ flexShrink: 0 }} />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              Preview: {fileUrl.split('/').pop()}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateItemDoc(item.label, '')}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#ef4444',
+                              cursor: 'pointer',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              padding: '4px 8px',
+                              borderRadius: '4px',
+                              border: '1px solid var(--border-color, #e2e8f0)',
+                              marginLeft: 'auto',
+                              transition: 'all 0.2s'
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.05)'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <label style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                            padding: '8px 16px',
+                            border: '1px solid var(--border-color, #cbd5e1)',
+                            background: 'var(--bg-primary, #ffffff)',
+                            borderRadius: '8px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: uploading || isReadOnly ? 'not-allowed' : 'pointer',
+                            width: 'fit-content',
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                            transition: 'all 0.2s'
+                          }}>
+                            {uploading ? <Loader2 size={14} className="spin" /> : <Paperclip size={14} />}
+                            <span>{uploading ? 'Uploading...' : 'Attach Document'}</span>
+                            <input
+                              type="file"
+                              disabled={uploading || isReadOnly}
+                              onChange={async (e) => {
+                                const file = e.target.files[0];
+                                if (!file || !erpnextConfig?.url) return;
+
+                                setUploading(true);
+                                const formData = new FormData();
+                                formData.append('file', file);
+                                formData.append('is_private', '0');
+
+                                try {
+                                  const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
+                                    method: 'POST',
+                                    credentials: 'include',
+                                    headers: {
+                                      'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
+                                    },
+                                    body: formData
+                                  });
+                                  if (res.ok) {
+                                    const json = await res.json();
+                                    const fileUrl = json.message?.file_url || json.file_url;
+                                    if (fileUrl) {
+                                      handleUpdateItemDoc(item.label, fileUrl);
+                                    } else {
+                                      alert("Upload succeeded but file URL not returned.");
+                                    }
+                                  } else {
+                                    alert("File upload failed.");
+                                  }
+                                } catch (err) {
+                                  console.error("Error uploading file:", err);
+                                  alert("Error uploading file.");
+                                } finally {
+                                  setUploading(false);
+                                }
+                              }}
+                              style={{ display: 'none' }}
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      }
+
+      const rows = Array.isArray(value) ? value : [];
+      return (
+        <div style={{ gridColumn: 'span 2', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px', background: 'var(--bg-primary)', marginTop: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--brand-color)' }}>
+              📋 {label} ({field.options})
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                const newRow = {};
+                childFields.forEach(cf => {
+                  if (cf.fieldname) newRow[cf.fieldname] = cf.default || '';
+                });
+                onChange([...rows, newRow]);
+              }}
+              style={{
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                borderRadius: '8px',
+                background: 'var(--bg-accent-alpha, rgba(37, 99, 235, 0.08))',
+                color: 'var(--brand-color)',
+                border: '1.5px solid var(--brand-color)',
+                cursor: 'pointer'
+              }}
+            >
+              + Add Row
+            </button>
+          </div>
+
+          {loadingChild ? (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '12px' }}>Loading child table structure...</div>
+          ) : rows.length === 0 ? (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '20px', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+              No rows added yet. Click "+ Add Row" to add item records.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {rows.map((row, rowIndex) => (
+                <div
+                  key={rowIndex}
+                  style={{
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px',
+                    padding: '16px 12px 12px 12px',
+                    background: 'var(--bg-secondary)',
+                    position: 'relative',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px'
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const updated = rows.filter((_, idx) => idx !== rowIndex);
+                      onChange(updated);
+                    }}
+                    style={{
+                      position: 'absolute',
+                      top: '8px',
+                      right: '8px',
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#ef4444',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      fontWeight: 600
+                    }}
+                  >
+                    Remove
+                  </button>
+
+                  <div style={{ display: 'flex', gap: '16px', alignItems: 'center', marginTop: '8px', flexWrap: 'wrap', paddingRight: '60px' }}>
+                    {childFields.map(cf => {
+                      const val = row[cf.fieldname];
+                      const setVal = (newVal) => {
+                        const updated = rows.map((r, idx) => {
+                          if (idx === rowIndex) {
+                            return { ...r, [cf.fieldname]: newVal };
+                          }
+                          return r;
+                        });
+                        onChange(updated);
+                      };
+
+                      return (
+                        <div
+                          key={cf.fieldname}
+                          style={{
+                            flex: cf.fieldtype === 'Check' ? '0 0 auto' : '1',
+                            minWidth: cf.fieldtype === 'Check' ? 'auto' : '160px',
+                            alignSelf: cf.fieldtype === 'Check' ? 'flex-end' : 'auto',
+                            marginBottom: cf.fieldtype === 'Check' ? '8px' : '0'
+                          }}
+                        >
+                          <DynamicFormField
+                            field={cf}
+                            value={val}
+                            onChange={setVal}
+                            linkOptionsCache={linkOptionsCache}
+                            fetchLinkOptions={fetchLinkOptions}
+                            getDocTypeFields={getDocTypeFields}
+                            erpnextConfig={erpnextConfig}
+                            getCsrfToken={getCsrfToken}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+
+    default: // Data, Autocomplete, Read Only, etc.
+      return (
+        <div>
+          <label style={labelStyle}>
+            {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+          </label>
+          <input
+            type="text"
+            placeholder={`Enter ${label}...`}
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isReadOnly}
+            style={inputStyle}
+          />
+        </div>
+      );
+  }
 };
 
 export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
@@ -257,6 +1264,41 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const [updatingDetails, setUpdatingDetails] = useState(false);
   const [checklistDrafts, setChecklistDrafts] = useState({});
 
+  const [alertModal, setAlertModal] = useState({ show: false, title: '', message: '', type: 'info' });
+  const showAlert = (message, type = 'info', title = '') => {
+    const defaultTitle = type === 'error' ? 'Error' : (type === 'success' ? 'Success' : 'Notification');
+    setAlertModal({
+      show: true,
+      title: title || defaultTitle,
+      message: message,
+      type: type
+    });
+  };
+
+  const alert = (message, type = 'info') => {
+    let detectedType = type;
+    if (type === 'info') {
+      const lower = String(message).toLowerCase();
+      if (lower.includes('fail') || lower.includes('error') || lower.includes('invalid') || lower.includes('cannot') || lower.includes('must') || lower.includes('should') || lower.includes('required') || lower.includes('empty')) {
+        detectedType = 'error';
+      } else if (lower.includes('success') || lower.includes('succeeded') || lower.includes('successfully')) {
+        detectedType = 'success';
+      }
+    }
+    showAlert(message, detectedType);
+  };
+
+  const [confirmModal, setConfirmModal] = useState({ show: false, message: '', resolve: null });
+  const confirm = (message) => {
+    return new Promise((resolve) => {
+      setConfirmModal({
+        show: true,
+        message,
+        resolve
+      });
+    });
+  };
+
   useEffect(() => {
     setChecklistDrafts({});
   }, [selectedCase?.name]);
@@ -303,7 +1345,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 setSelectedCase(prev => ({
                   ...prev,
                   ...detail,
-                  documents: docList
+                  documents: docList,
+                  company_search_documents: docList
                 }));
               }
             }
@@ -345,9 +1388,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     ? !!previewDraftEntry.verified
     : !!currentPreviewErpDoc?.verified;
 
-  const isPreviewCompanySearchDoc = documentTypes.some(doc =>
-    doc.label.toLowerCase().trim() === previewDocTitle?.toLowerCase().trim()
-  );
+  const isPreviewCompanySearchDoc = previewDocTitle &&
+    previewDocTitle !== 'Menu & Business Pictures' &&
+    previewDocTitle !== 'Plans Submitted for Approval';
 
   // Expand/collapse states for Company Search documents
   const [expandedDocs, setExpandedDocs] = useState({});
@@ -399,7 +1442,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
               return {
                 ...prev,
                 ...detail,
-                documents: docList
+                documents: docList,
+                company_search_documents: docList
               };
             }
             return prev;
@@ -410,7 +1454,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
               return {
                 ...c,
                 ...detail,
-                documents: docList
+                documents: docList,
+                company_search_documents: docList
               };
             }
             return c;
@@ -455,7 +1500,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
   const handleWorkflowAction = async (actionName, nextState) => {
     if (!selectedCase || !erpnextConfig?.url) return;
-    if (!confirm(`Are you sure you want to perform action "${actionName}"?`)) return;
+    if (!(await confirm(`Are you sure you want to "${actionName}"?`))) return;
 
     setLoadingWorkflow(true);
     try {
@@ -474,15 +1519,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
       if (res.ok) {
         const json = await res.json();
-        const success = json?.message?.success;
-        if (success) {
+        const error = json?.message?.error;
+        if (!error) {
           alert(`Action "${actionName}" applied successfully!`);
           // Refresh details and master list
           await handleSelectCase(selectedCase);
           await fetchWorkflowActions(selectedCase.name);
           await fetchOnboardings();
         } else {
-          alert(`Failed to apply action: ${json?.message?.error || 'Unknown error'}`);
+          alert(`Failed to apply action: ${error}`);
         }
       } else {
         const errorMsg = await extractErrorMessage(res);
@@ -571,6 +1616,38 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const [contactLocal, setContactLocal] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [districts, setDistricts] = useState([]);
+  const [countries, setCountries] = useState([]);
+
+  // Dynamic Metadata-Driven Form fields states
+  const [doctypeFields, setDoctypeFields] = useState([]);
+  const [useDynamicForm, setUseDynamicForm] = useState(true);
+  const [dynamicFormValues, setDynamicFormValues] = useState({});
+  const [linkOptionsCache, setLinkOptionsCache] = useState({});
+  const [activeDynamicTabIdx, setActiveDynamicTabIdx] = useState(0);
+  const [childSchemasCache, setChildSchemasCache] = useState({});
+
+  const fetchLinkOptions = async (linkDoctype) => {
+    if (!linkDoctype || !erpnextConfig?.url || linkOptionsCache[linkDoctype]) return;
+    try {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/${encodeURIComponent(linkDoctype)}?fields=%5B%22name%22%5D&limit_page_length=1000`, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const list = json.data || json;
+        if (Array.isArray(list)) {
+          const optionsList = list.map(item => item.name || item.title || item.id);
+          setLinkOptionsCache(prev => ({
+            ...prev,
+            [linkDoctype]: optionsList
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch link options for DocType ${linkDoctype}:`, err);
+    }
+  };
 
   // New basic details fields
   const [type, setType] = useState('Company');
@@ -707,6 +1784,62 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     }
   };
 
+  const fetchCountries = async () => {
+    if (!erpnextConfig?.url) return;
+    try {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Country?fields=%5B%22name%22%5D&limit_page_length=1000`, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const list = json.data || json;
+        if (Array.isArray(list)) {
+          setCountries(list.map(c => c.name));
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to fetch countries:", err);
+    }
+  };
+
+  const getDocTypeFields = async (doctype) => {
+    try {
+      const baseUrl = erpnextConfig?.url || '';
+      const url = `${baseUrl}/api/method/frappe.desk.form.load.getdoctype?doctype=${encodeURIComponent(doctype)}`;
+      const response = await fetch(url, {
+        credentials: 'include',
+        headers: {
+          "Content-Type": "application/json",
+          "X-Frappe-CSRF-Token": erpnextConfig?.csrfToken || window.csrf_token || ""
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch DocType fields (${response.status})`);
+      }
+
+      const data = await response.json();
+      console.log("DocType Fields Response for " + doctype + ":", data);
+
+      const docs = data.message?.docs || data.docs || [];
+      const fields = docs?.[0]?.fields || [];
+      setChildSchemasCache(prev => ({
+        ...prev,
+        [doctype]: fields
+      }));
+      return fields;
+    } catch (error) {
+      console.error(
+        "Failed to fetch DocType fields:",
+        error.message
+      );
+      return [];
+    }
+  };
+
+
+
   const fetchWorkflowDoctype = async () => {
     if (!erpnextConfig?.url) return;
     try {
@@ -735,14 +1868,31 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   useEffect(() => {
     fetchOnboardings();
     fetchDistricts();
+    fetchCountries();
     fetchWorkflowDoctype();
+    getDocTypeFields("Tenant Onboarding").then(fields => {
+      if (Array.isArray(fields) && fields.length > 0) {
+        setDoctypeFields(fields);
+        const defaults = {};
+        fields.forEach(field => {
+          if (field.default !== undefined && field.default !== null) {
+            if (field.fieldname === 'type') {
+              defaults[field.fieldname] = '';
+            } else {
+              defaults[field.fieldname] = field.default;
+            }
+          }
+        });
+        setDynamicFormValues(defaults);
+      }
+    });
   }, [erpnextConfig]);
 
   // Handle saving (attaching, updating, verifying or deleting) a document directly in ERPNext's child table
   const saveDocumentToERPNext = async (docLabel, fileUrl, verifiedVal) => {
     if (!selectedCase || !erpnextConfig?.url) return;
 
-    let currentDocs = [...(selectedCase.documents || [])];
+    let currentDocs = [...(caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [])];
     const idx = currentDocs.findIndex(d =>
       d.document_type?.toLowerCase().trim() === docLabel.toLowerCase().trim()
     );
@@ -805,7 +1955,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
               return {
                 ...prev,
                 ...detail,
-                documents: docList
+                documents: docList,
+                company_search_documents: docList
               };
             }
             return prev;
@@ -826,7 +1977,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     if (!selectedCase || !erpnextConfig?.url) return;
     setUpdatingDetails(true);
 
-    let currentDocs = [...(selectedCase.documents || [])];
+    let currentDocs = [...(caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [])];
 
     // Merge drafts into currentDocs
     Object.entries(checklistDrafts).forEach(([docLabel, draftVal]) => {
@@ -891,7 +2042,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
               return {
                 ...prev,
                 ...detail,
-                documents: docList
+                documents: docList,
+                company_search_documents: docList
               };
             }
             return prev;
@@ -915,105 +2067,73 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const handleUpdateCoreDetails = async () => {
     if (!selectedCase || !erpnextConfig?.url) return;
 
-    if (!editContactName.trim()) {
-      alert("Contact Name cannot be empty.");
-      return;
-    }
-    if (!editEmailId.trim()) {
-      alert("Email ID cannot be empty.");
-      return;
-    }
+    // Validate required dynamic fields
+    const visibleFields = doctypeFields.filter(f => f.hidden !== 1 && f.fieldname !== 'naming_series' && f.fieldname !== 'amended_from' && f.fieldname !== 'workflow_state');
+    for (const field of visibleFields) {
+      const val = dynamicFormValues[field.fieldname];
+      if (isFieldRequired(field, dynamicFormValues)) {
+        if (val === undefined || val === null || String(val).trim() === '') {
+          alert(`${field.label || field.fieldname} is required.`);
+          return;
+        }
+      }
 
-    // Phone number validation based on country prefix to avoid server validation crash
-    if (editContactLocal.trim()) {
-      const cleanedLocal = editContactLocal.replace(/\D/g, '');
-      if (editContactPrefix === '+679') {
-        if (cleanedLocal.length !== 7) {
-          alert("Fiji phone number must be exactly 7 digits.");
-          return;
-        }
-        if (!/^[2356789]/.test(cleanedLocal)) {
-          alert("Fiji phone number must start with 2, 3, 5, 6, 7, 8, or 9.");
-          return;
-        }
+      if (isPhoneField(field) && val) {
+        const isValid = validatePhoneValue(val, field.label || field.fieldname);
+        if (!isValid) return;
       }
-      if (editContactPrefix === '+61') {
-        if (cleanedLocal.length !== 9) {
-          alert("Australia phone number must be exactly 9 digits.");
-          return;
-        }
-      }
-      if (editContactPrefix === '+64') {
-        if (cleanedLocal.length < 8 || cleanedLocal.length > 9) {
-          alert("New Zealand phone number must be 8 or 9 digits.");
-          return;
-        }
-      }
-      if (editContactPrefix === '+91') {
-        if (cleanedLocal.length !== 10) {
-          alert("India phone number must be exactly 10 digits.");
-          return;
-        }
-        if (!/^[6789]/.test(cleanedLocal)) {
-          alert("India mobile number must start with 6, 7, 8, or 9.");
-          return;
-        }
-      }
-      if (editContactPrefix === '+1') {
-        if (cleanedLocal.length !== 10) {
-          alert("US phone number must be exactly 10 digits.");
-          return;
-        }
-        if (!/^[23456789]/.test(cleanedLocal)) {
-          alert("US area code cannot start with 0 or 1.");
-          return;
-        }
-      }
-      if (editContactPrefix === '+65') {
-        if (cleanedLocal.length !== 8) {
-          alert("Singapore phone number must be exactly 8 digits.");
-          return;
-        }
-        if (!/^[3689]/.test(cleanedLocal)) {
-          alert("Singapore phone number must start with 3, 6, 8, or 9.");
-          return;
+
+      // If table field is present, validate its rows
+      if (field.fieldtype === 'Table') {
+        const rows = dynamicFormValues[field.fieldname];
+        if (Array.isArray(rows)) {
+          const childFieldsSchema = childSchemasCache[field.options];
+          if (childFieldsSchema) {
+            const requiredChildFields = childFieldsSchema.filter(cf => isFieldRequired(cf) && cf.hidden !== 1);
+            for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+              const row = rows[rIdx];
+              // 1. Standard required child fields check
+              for (const cf of requiredChildFields) {
+                const rowVal = row[cf.fieldname];
+                if (rowVal === undefined || rowVal === null || String(rowVal).trim() === '') {
+                  alert(`Row ${rIdx + 1}: ${cf.label || cf.fieldname} is required inside ${field.label || field.fieldname}.`);
+                  return;
+                }
+              }
+              // 2. Custom check: if document file is uploaded, document_type is mandatory
+              if (row.document && String(row.document).trim() !== '') {
+                if (!row.document_type || String(row.document_type).trim() === '') {
+                  alert(`Row ${rIdx + 1}: Document Type is mandatory when a file is uploaded.`);
+                  return;
+                }
+              }
+              // 3. Child table phone number validation
+              for (const cf of childFieldsSchema) {
+                const rowVal = row[cf.fieldname];
+                if (isPhoneField(cf) && rowVal) {
+                  const isValid = validatePhoneValue(rowVal, `Row ${rIdx + 1}: ${cf.label || cf.fieldname}`);
+                  if (!isValid) return;
+                }
+              }
+            }
+          }
         }
       }
     }
 
     setUpdatingDetails(true);
 
+    const cleanedValues = { ...dynamicFormValues };
+    const selectedType = cleanedValues.type || '';
+    if (selectedType !== 'Individual') {
+      cleanedValues.date_of_birth = null;
+    }
+    if (selectedType !== 'Company') {
+      cleanedValues.date_of_incorporation = null;
+    }
+
     const payload = {
-      proposed_business_type: editProposedBusinessType,
-      required_space: editRequiredSpace ? parseFloat(editRequiredSpace) : 0,
-      budget: editBudget ? parseFloat(editBudget) : 0,
-      business_status: editBusinessStatus,
-      shop_space_location: editShopSpaceLocation,
-      lease_period: editLeasePeriod ? parseInt(editLeasePeriod) : 0,
-      rental_charges: editRentalCharges ? parseFloat(editRentalCharges) : 0,
-      service_promotional_charges: editServicePromoCharges ? parseFloat(editServicePromoCharges) : 0,
-      security_deposit_booking_fee: editSecurityDepositFee ? parseFloat(editSecurityDepositFee) : 0,
-      fitout_period: editFitoutPeriod ? parseInt(editFitoutPeriod) : 0,
-      usage_of_demised_premises: editUsageOfDemisedPremises,
-      product_service_range: editProductServiceRange,
-      fitout_approval_timeframe: editFitoutApprovalTimeframe,
-      contact_name: editContactName,
-      email_id: editEmailId,
-      contact_number: editContactLocal.trim() ? `${editContactPrefix}-${editContactLocal.trim()}` : "",
-      company_name: editCompanyName,
-      menu_and_business_pictures: editMenuAndBusinessPictures,
-      lease_commencement_date: editLeaseCommencementDate,
-      vacant_possession_date: editVacantPossessionDate,
-      plans_for_approval: editPlansForApproval,
-      type: editType,
-      company_vat_id: editCompanyVatId,
-      is_internal_customer: editIsInternalCustomer ? 1 : 0,
-      date_of_birth: editDateOfBirth,
-      address_line1: editAddressLine1,
-      address_line2: editAddressLine2,
-      city: editCity,
-      state: editState,
-      country: editCountry
+      ...cleanedValues
     };
 
     console.log("Core details update payload:", payload);
@@ -1064,8 +2184,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         alert(errorMsg);
       }
     } catch (err) {
-      console.error("Error updating onboarding details:", err);
-      alert(err.message || "Error updating onboarding details.");
+      console.error(err);
+      alert("An error occurred while updating details.");
     } finally {
       setUpdatingDetails(false);
     }
@@ -1124,6 +2244,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   };
 
   const resetFormFields = () => {
+    setActiveDynamicTabIdx(0);
+    const defaults = {};
+    doctypeFields.forEach(field => {
+      if (field.default !== undefined && field.default !== null) {
+        defaults[field.fieldname] = field.default;
+      }
+    });
+    setDynamicFormValues(defaults);
     setContactName('');
     setEmailId('');
     setContactPrefix('+679');
@@ -1176,10 +2304,11 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   // Handle Starting Onboarding process (POST request to ERPNext)
   const handleStartOnboarding = async (e) => {
     e.preventDefault();
-    if (!proposedBusinessType || !erpnextConfig?.url) return;
+    if (!erpnextConfig?.url) return;
+    if (!useDynamicForm && !proposedBusinessType) return;
 
     // Phone number validation based on country prefix to avoid server validation crash
-    if (contactLocal.trim()) {
+    if (!useDynamicForm && contactLocal.trim()) {
       const cleanedLocal = contactLocal.replace(/\D/g, '');
       if (contactPrefix === '+679') {
         if (cleanedLocal.length !== 7) {
@@ -1251,38 +2380,119 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         }
       });
 
-      const payload = {
-        proposed_business_type: proposedBusinessType,
-        required_space: requiredSpace ? parseFloat(requiredSpace) : 0,
-        budget: budget ? parseFloat(budget) : 0,
-        lease_period: leasePeriod ? parseInt(leasePeriod) : 0,
-        shop_space_location: shopSpaceLocation,
-        usage_of_demised_premises: usageOfDemisedPremises,
-        business_status: businessStatus,
-        menu_and_business_pictures: menuAndBusinessPictures,
-        fitout_period: fitoutPeriod ? parseInt(fitoutPeriod) : 0,
-        rental_charges: rentalCharges ? parseFloat(rentalCharges) : 0,
-        security_deposit_booking_fee: securityDepositFee ? parseFloat(securityDepositFee) : 0,
-        service_promotional_charges: servicePromoCharges ? parseFloat(servicePromoCharges) : 0,
-        product_service_range: rangeLineItems,
-        contact_name: contactName,
-        email_id: emailId,
-        contact_number: contactLocal.trim() ? `${contactPrefix}-${contactLocal.trim()}` : "",
-        company_name: companyName,
-        lease_commencement_date: leaseCommencement,
-        vacant_possession_date: vacantPossessionDate,
-        plans_for_approval: plansForApproval,
-        company_search_documents: childDocs,
-        type: type,
-        company_vat_id: companyVatId,
-        is_internal_customer: isInternalCustomer ? 1 : 0,
-        date_of_birth: dateOfBirth,
-        address_line1: addressLine1,
-        address_line2: addressLine2,
-        city: city,
-        state: state,
-        country: country
-      };
+      let payload;
+      if (useDynamicForm) {
+        // Validate required dynamic fields
+        const visibleFields = doctypeFields.filter(f => f.hidden !== 1 && f.fieldname !== 'naming_series' && f.fieldname !== 'amended_from' && f.fieldname !== 'workflow_state');
+        for (const field of visibleFields) {
+          const val = dynamicFormValues[field.fieldname];
+          if (isFieldRequired(field, dynamicFormValues)) {
+            if (val === undefined || val === null || String(val).trim() === '') {
+              alert(`${field.label || field.fieldname} is required.`);
+              setSubmitting(false);
+              return;
+            }
+          }
+
+          if (isPhoneField(field) && val) {
+            const isValid = validatePhoneValue(val, field.label || field.fieldname);
+            if (!isValid) {
+              setSubmitting(false);
+              return;
+            }
+          }
+
+          // If table field is present, validate its rows
+          if (field.fieldtype === 'Table') {
+            const rows = dynamicFormValues[field.fieldname];
+            if (Array.isArray(rows)) {
+              const childFieldsSchema = childSchemasCache[field.options];
+              if (childFieldsSchema) {
+                const requiredChildFields = childFieldsSchema.filter(cf => isFieldRequired(cf) && cf.hidden !== 1);
+                for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+                  const row = rows[rIdx];
+                  // 1. Standard required child fields check
+                  for (const cf of requiredChildFields) {
+                    const rowVal = row[cf.fieldname];
+                    if (rowVal === undefined || rowVal === null || String(rowVal).trim() === '') {
+                      alert(`Row ${rIdx + 1}: ${cf.label || cf.fieldname} is required inside ${field.label || field.fieldname}.`);
+                      setSubmitting(false);
+                      return;
+                    }
+                  }
+                  // 2. Custom check: if document file is uploaded, document_type is mandatory
+                  if (row.document && String(row.document).trim() !== '') {
+                    if (!row.document_type || String(row.document_type).trim() === '') {
+                      alert(`Row ${rIdx + 1}: Document Type is mandatory when a file is uploaded.`);
+                      setSubmitting(false);
+                      return;
+                    }
+                  }
+                  // 3. Child table phone number validation
+                  for (const cf of childFieldsSchema) {
+                    const rowVal = row[cf.fieldname];
+                    if (isPhoneField(cf) && rowVal) {
+                      const isValid = validatePhoneValue(rowVal, `Row ${rIdx + 1}: ${cf.label || cf.fieldname}`);
+                      if (!isValid) {
+                        setSubmitting(false);
+                        return;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        const cleanedValues = { ...dynamicFormValues };
+        const selectedType = cleanedValues.type || '';
+        if (selectedType !== 'Individual') {
+          delete cleanedValues.date_of_birth;
+        }
+        if (selectedType !== 'Company') {
+          delete cleanedValues.date_of_incorporation;
+        }
+
+        payload = {
+          doctype: 'Tenant Onboarding',
+          company_search_documents: childDocs,
+          ...cleanedValues
+        };
+      } else {
+        payload = {
+          proposed_business_type: proposedBusinessType,
+          required_space: requiredSpace ? parseFloat(requiredSpace) : 0,
+          budget: budget ? parseFloat(budget) : 0,
+          lease_period: leasePeriod ? parseInt(leasePeriod) : 0,
+          shop_space_location: shopSpaceLocation,
+          usage_of_demised_premises: usageOfDemisedPremises,
+          business_status: businessStatus,
+          menu_and_business_pictures: menuAndBusinessPictures,
+          fitout_period: fitoutPeriod ? parseInt(fitoutPeriod) : 0,
+          rental_charges: rentalCharges ? parseFloat(rentalCharges) : 0,
+          security_deposit_booking_fee: securityDepositFee ? parseFloat(securityDepositFee) : 0,
+          service_promotional_charges: servicePromoCharges ? parseFloat(servicePromoCharges) : 0,
+          product_service_range: rangeLineItems,
+          contact_name: contactName,
+          email_id: emailId,
+          contact_number: contactLocal.trim() ? `${contactPrefix}-${contactLocal.trim()}` : "",
+          company_name: companyName,
+          lease_commencement_date: leaseCommencement || null,
+          vacant_possession_date: vacantPossessionDate || null,
+          plans_for_approval: plansForApproval,
+          company_search_documents: childDocs,
+          type: type,
+          company_vat_id: companyVatId,
+          is_internal_customer: isInternalCustomer ? 1 : 0,
+          date_of_birth: dateOfBirth || null,
+          address_line_1: addressLine1,
+          address_line_2: addressLine2,
+          city: city,
+          state: state,
+          country: country
+        };
+      }
 
       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding`, {
         method: 'POST',
@@ -1388,7 +2598,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       message = `Some documents are not verified. Do you still want to convert ${selectedCase.company_name || selectedCase.name} into Customer?`;
     }
 
-    if (confirm(message)) {
+    if (await confirm(message)) {
       await handleConvertToCustomer(selectedCase.name);
     }
   };
@@ -1488,11 +2698,54 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     return Math.round((completed / checks.length) * 100);
   };
 
-  const isFormValid =
+  const isFormValid = useDynamicForm ? (() => {
+    if (doctypeFields.length === 0) return false;
+    const visibleFields = doctypeFields.filter(f => f.hidden !== 1 && f.fieldname !== 'naming_series' && f.fieldname !== 'amended_from' && f.fieldname !== 'workflow_state');
+    for (const field of visibleFields) {
+      const val = dynamicFormValues[field.fieldname];
+      if (isFieldRequired(field, dynamicFormValues)) {
+        if (val === undefined || val === null || String(val).trim() === '') {
+          return false;
+        }
+      }
+
+      // If table field is present, validate its rows
+      if (field.fieldtype === 'Table') {
+        const rows = val;
+        // If the table itself is required, it must have at least one row
+        if (isFieldRequired(field, dynamicFormValues) && (!Array.isArray(rows) || rows.length === 0)) {
+          return false;
+        }
+        if (Array.isArray(rows) && rows.length > 0) {
+          const childFieldsSchema = childSchemasCache[field.options];
+          if (childFieldsSchema) {
+            const requiredChildFields = childFieldsSchema.filter(cf => isFieldRequired(cf) && cf.hidden !== 1);
+            for (const row of rows) {
+              for (const cf of requiredChildFields) {
+                const rowVal = row[cf.fieldname];
+                if (rowVal === undefined || rowVal === null || String(rowVal).trim() === '') {
+                  return false;
+                }
+              }
+              // Custom requirement: if document file is uploaded, document_type is mandatory
+              if (row.document && String(row.document).trim() !== '') {
+                if (!row.document_type || String(row.document_type).trim() === '') {
+                  return false;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return true;
+  })() : (
     contactName.trim() !== '' &&
     emailId.trim() !== '' &&
     proposedBusinessType.trim() !== '' &&
-    businessStatus.trim() !== '';
+    businessStatus.trim() !== '' &&
+    (type !== 'Company' || (companyName.trim() !== '' && companyVatId.trim() !== ''))
+  );
 
   return (
     <div style={{ display: 'flex', background: 'var(--bg-secondary)', minHeight: '100vh', width: '100%' }}>
@@ -1540,7 +2793,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
               <span>Reload</span>
             </button>
             <button
-              onClick={() => { setShowModal(true); setActiveFormTab('basic'); }}
+              onClick={() => { resetFormFields(); setShowModal(true); setActiveFormTab('basic'); }}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -1672,8 +2925,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           <strong style={{ color: 'var(--text-primary)' }}>{c.proposed_business_type || '—'}</strong>
                         </div>
                         <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Required Space: </span>
-                          <strong style={{ color: 'var(--text-primary)' }}>{c.required_space ? `${c.required_space} sq mtr` : '—'}</strong>
+                          <span style={{ color: 'var(--text-muted)' }}>Required Space(Sqm): </span>
+                          <strong style={{ color: 'var(--text-primary)' }}>{c.required_space ? `${c.required_space} Sqm` : '—'}</strong>
                         </div>
                         <div>
                           <span style={{ color: 'var(--text-muted)' }}>Location: </span>
@@ -1776,9 +3029,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
             left: 0,
             right: 0,
             bottom: 0,
-            background: 'rgba(15, 23, 42, 0.05)',
-            backdropFilter: 'blur(1.5px)',
-            WebkitBackdropFilter: 'blur(1.5px)',
+            background: 'rgba(15, 23, 42, 0.3)',
+            backdropFilter: 'blur(5px)',
+            WebkitBackdropFilter: 'blur(5px)',
             zIndex: 998,
             animation: 'fadeIn 0.2s ease-out'
           }}
@@ -1864,7 +3117,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       );
                     })()}
                   </div>
-                  
+
                   <button
                     onClick={() => setSelectedCase(null)}
                     style={{
@@ -1890,46 +3143,16 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 {/* Row 2: Title & Action Buttons (Parallel) */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '12px' }}>
                   <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Compliance Audit</h2>
-                  
+
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                    {activeDetailTab !== 'search' && (
+                    {activeDetailTab !== 'documents' && (
                       <button
                         onClick={() => {
                           if (isEditingDetails) {
                             setIsEditingDetails(false);
                           } else {
-                            setEditProposedBusinessType(selectedCase.proposed_business_type || '');
-                            setEditRequiredSpace(selectedCase.required_space || '');
-                            setEditBudget(selectedCase.budget || '');
-                            setEditLeasePeriod(selectedCase.lease_period || '');
-                            setEditShopSpaceLocation(selectedCase.shop_space_location || '');
-                            setEditRentalCharges(selectedCase.rental_charges || '');
-                            setEditServicePromoCharges(selectedCase.service_promotional_charges || '');
-                            setEditSecurityDepositFee(selectedCase.security_deposit_booking_fee || '');
-                            setEditFitoutPeriod(selectedCase.fitout_period || '');
-                            setEditUsageOfDemisedPremises(selectedCase.usage_of_demised_premises || '');
-                            setEditBusinessStatus(selectedCase.business_status || 'New');
-                            setEditProductServiceRange(selectedCase.product_service_range || '');
-                            setEditFitoutApprovalTimeframe(selectedCase.fitout_approval_timeframe || '');
-                            setEditContactName(selectedCase.contact_name || '');
-                            setEditEmailId(selectedCase.email_id || '');
-                            const parsedPhone = parsePhoneNumber(selectedCase.contact_number);
-                            setEditContactPrefix(parsedPhone.prefix);
-                            setEditContactLocal(parsedPhone.local);
-                            setEditCompanyName(selectedCase.company_name || '');
-                            setEditMenuAndBusinessPictures(selectedCase.menu_and_business_pictures || '');
-                            setEditLeaseCommencementDate(selectedCase.lease_commencement_date || '');
-                            setEditVacantPossessionDate(selectedCase.vacant_possession_date || '');
-                            setEditPlansForApproval(selectedCase.plans_for_approval || '');
-                            setEditType(selectedCase.type || 'Company');
-                            setEditCompanyVatId(selectedCase.company_vat_id || '');
-                            setEditIsInternalCustomer(!!selectedCase.is_internal_customer);
-                            setEditDateOfBirth(selectedCase.date_of_birth || '');
-                            setEditAddressLine1(selectedCase.address_line1 || '');
-                            setEditAddressLine2(selectedCase.address_line2 || '');
-                            setEditCity(selectedCase.city || '');
-                            setEditState(selectedCase.state || '');
-                            setEditCountry(selectedCase.country || 'Fiji');
+                            setDynamicFormValues({ ...selectedCase });
+                            setActiveDynamicTabIdx(0);
                             setIsEditingDetails(true);
                           }
                         }}
@@ -1953,7 +3176,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                     )}
 
                     {/* Next State / Action Trigger */}
-                    {workflowState?.next_actions?.map((act, idx) => {
+                    {!isEditingDetails && workflowState?.next_actions?.filter(act => {
+                      const current = (workflowState?.current_state || selectedCase.workflow_state || '').toLowerCase();
+                      const action = (act.action || '').toLowerCase();
+                      if (current === 'approved' && action.includes('approve')) return false;
+                      if (current === 'cancelled' && action.includes('cancel')) return false;
+                      if (current === 'rejected' && action.includes('reject')) return false;
+                      return true;
+                    }).map((act, idx) => {
                       if (!act.allowed) return null;
                       const actionStyle = getActionButtonStyle(act.action);
                       return (
@@ -2004,67 +3234,69 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 </div>
 
                 {/* Stage wise Navigation Tabs */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-                  <div style={{
-                    display: 'flex',
-                    gap: '4px',
-                    background: 'var(--bg-secondary, #f1f5f9)',
-                    padding: '4px',
-                    borderRadius: '10px',
-                    flex: 1
-                  }}>
-                    {[
-                      { id: 'basic', label: 'Basic Details' },
-                      { id: 'proposal', label: 'Proposal' },
-                      { id: 'booking', label: 'Booking' },
-                      { id: 'search', label: 'Search' }
-                    ].map((tab) => {
-                      const isActive = activeDetailTab === tab.id;
-                      return (
-                        <button
-                          key={tab.id}
-                          onClick={() => setActiveDetailTab(tab.id)}
-                          style={{
-                            flex: 1,
-                            padding: '8px 10px',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            borderRadius: '8px',
-                            border: 'none',
-                            background: isActive ? 'var(--bg-primary, #ffffff)' : 'transparent',
-                            color: isActive ? 'var(--brand-color, #2563eb)' : 'var(--text-secondary, #64748b)',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s ease',
-                            boxShadow: isActive ? '0 2px 8px rgba(0, 0, 0, 0.05)' : 'none',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            whiteSpace: 'nowrap'
-                          }}
-                        >
-                          {tab.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Circular Status Indicator */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {!isEditingDetails && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
                     <div style={{
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: '50%',
-                      background: 'rgba(22, 163, 74, 0.08)',
-                      border: '1.5px solid #16a34a',
                       display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#16a34a'
+                      gap: '4px',
+                      background: 'var(--bg-secondary, #f1f5f9)',
+                      padding: '4px',
+                      borderRadius: '10px',
+                      flex: 1
                     }}>
-                      <CheckCircle2 size={16} />
+                      {[
+                        { id: 'basic', label: 'Basic Details' },
+                        { id: 'proposal', label: 'Business Proposal' },
+                        { id: 'booking', label: 'Booking Details' },
+                        { id: 'documents', label: 'Documents ' }
+                      ].map((tab) => {
+                        const isActive = activeDetailTab === tab.id;
+                        return (
+                          <button
+                            key={tab.id}
+                            onClick={() => setActiveDetailTab(tab.id)}
+                            style={{
+                              flex: 1,
+                              padding: '8px 10px',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              borderRadius: '8px',
+                              border: 'none',
+                              background: isActive ? 'var(--bg-primary, #ffffff)' : 'transparent',
+                              color: isActive ? 'var(--brand-color, #2563eb)' : 'var(--text-secondary, #64748b)',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              boxShadow: isActive ? '0 2px 8px rgba(0, 0, 0, 0.05)' : 'none',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            {tab.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Circular Status Indicator */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div style={{
+                        width: '32px',
+                        height: '32px',
+                        borderRadius: '50%',
+                        background: 'rgba(22, 163, 74, 0.08)',
+                        border: '1.5px solid #16a34a',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#16a34a'
+                      }}>
+                        <CheckCircle2 size={16} />
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
               </div>
 
@@ -2072,1088 +3304,1567 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
               {/* TAB CONTENT */}
               <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', flex: 1 }}>
+                {isEditingDetails ? (() => {
+                  const dynamicSections = [];
+                  let currentSec = { title: 'Basic Info', fields: [] };
 
-                {/* Basic Details */}
-                {activeDetailTab === 'basic' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Basic Onboarding Details</h4>
+                  doctypeFields
+                    .filter(f => f.hidden !== 1 && f.fieldname !== 'naming_series' && f.fieldname !== 'amended_from' && f.fieldname !== 'workflow_state')
+                    .forEach(f => {
+                      if (f.fieldtype === 'Section Break') {
+                        if (currentSec.fields.length > 0) {
+                          dynamicSections.push(currentSec);
+                        }
+                        currentSec = { title: f.label || 'Details', fields: [] };
+                      } else if (f.fieldtype !== 'Column Break') {
+                        currentSec.fields.push(f);
+                      }
+                    });
+                  if (currentSec.fields.length > 0) {
+                    dynamicSections.push(currentSec);
+                  }
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Person</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="text"
-                            value={editContactName}
-                            onChange={(e) => setEditContactName(e.target.value)}
-                            placeholder="e.g. John Doe"
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.contact_name || '—'}</div>
-                        )}
-                      </div>
+                  const activeSections = dynamicSections.length > 0 ? dynamicSections : [{ title: 'Form', fields: doctypeFields }];
+                  const safeTabIdx = Math.min(activeDynamicTabIdx, activeSections.length - 1);
 
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Company Name</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="text"
-                            value={editCompanyName}
-                            onChange={(e) => setEditCompanyName(e.target.value)}
-                            placeholder="e.g. Acme Corp"
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_name || '—'}</div>
-                        )}
-                      </div>
-
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Email ID</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="email"
-                            value={editEmailId}
-                            onChange={(e) => setEditEmailId(e.target.value)}
-                            placeholder="e.g. john@example.com"
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.email_id || '—'}</div>
-                        )}
-                      </div>
-
-                      {isEditingDetails ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '4px' }}>Contact Number</span>
-                          <PhoneInputWithDropdown
-                            value={editContactLocal ? `${editContactPrefix}-${editContactLocal}` : ""}
-                            onChange={(newVal) => {
-                              const parsed = parsePhoneNumber(newVal);
-                              setEditContactPrefix(parsed.prefix);
-                              setEditContactLocal(parsed.local);
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      {/* Dynamic Tabs Headers */}
+                      <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-tertiary)', padding: '4px', borderRadius: '8px', overflowX: 'auto' }}>
+                        {activeSections.map((sec, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setActiveDynamicTabIdx(idx)}
+                            style={{
+                              padding: '8px 12px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              borderRadius: '6px',
+                              border: 'none',
+                              background: safeTabIdx === idx ? 'var(--bg-secondary)' : 'transparent',
+                              color: safeTabIdx === idx ? 'var(--brand-color)' : 'var(--text-secondary)',
+                              boxShadow: safeTabIdx === idx ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              transition: 'all 0.2s ease'
                             }}
-                          />
-                        </div>
-                      ) : (
-                        <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Number</span>
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          >
+                            {sec.title}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Dynamic Fields for the Active Section */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingRight: '6px' }}>
+                        {activeSections[safeTabIdx]?.fields
+                          .filter(field => {
+                            if (field.fieldname === 'company_search_documents') return false;
+                            const selectedType = dynamicFormValues['type'] || '';
+                            if (field.fieldname === 'date_of_birth' && selectedType !== 'Individual') {
+                              return false;
+                            }
+                            if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
+                              return false;
+                            }
+                            return true;
+                          })
+                          .map(field => (
+                            <DynamicFormField
+                              key={field.fieldname}
+                              field={field}
+                              value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+                              onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
+                              linkOptionsCache={linkOptionsCache}
+                              fetchLinkOptions={fetchLinkOptions}
+                              getDocTypeFields={getDocTypeFields}
+                              erpnextConfig={erpnextConfig}
+                              getCsrfToken={getCsrfToken}
+                              formValues={dynamicFormValues}
+                            />
+                          ))}
+                      </div>
+
+                      {/* Unified Checklist UI for Company Search tab inside dynamic edit panel */}
+                      {activeSections[safeTabIdx]?.fields.some(f => f.fieldname === 'company_search_documents') && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+                          <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Company Search Audit Checklist</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             {(() => {
-                              const parsed = parsePhoneNumber(selectedCase.contact_number);
-                              const matched = COUNTRY_CODES.find(c => c.prefix === parsed.prefix);
-                              return (
-                                <>
-                                  <span style={{ fontSize: '15px', lineHeight: 1 }}>{matched?.flag || '🇫🇯'}</span>
-                                  <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{parsed.prefix}</span>
-                                  <span>{parsed.local || '—'}</span>
-                                </>
-                              );
+                              const docs = caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [];
+
+                              // Map standard static checklist items
+                              const standardDocs = documentTypes.map(doc => {
+                                const erpDoc = docs.find(d =>
+                                  d.document_type?.toLowerCase().trim() === doc.label.toLowerCase().trim()
+                                );
+                                return {
+                                  key: doc.key,
+                                  label: doc.label,
+                                  erpDoc: erpDoc,
+                                  isStandard: true
+                                };
+                              });
+
+                              // Map custom dynamic checklist items
+                              const standardLabelsLower = new Set(documentTypes.map(d => d.label.toLowerCase().trim()));
+                              const customDocs = docs
+                                .filter(d => d.document_type && !standardLabelsLower.has(d.document_type.toLowerCase().trim()))
+                                .map((d, index) => ({
+                                  key: `custom_${index}_${d.name || d.document_type}`,
+                                  label: d.document_type,
+                                  erpDoc: d,
+                                  isStandard: false
+                                }));
+
+                              const combinedDocsList = [...standardDocs, ...customDocs];
+
+                              return combinedDocsList.map((docItem) => {
+                                const erpDoc = docItem.erpDoc;
+                                const fileUrl = erpDoc?.document || '';
+                                const isVerified = !!erpDoc?.verified;
+                                const isExpanded = !!expandedDocs[docItem.key];
+
+                                const draftEntry = checklistDrafts[docItem.label];
+                                const fileUrlDraft = draftEntry !== undefined ? draftEntry.doc : fileUrl;
+                                const isVerifiedDraft = draftEntry !== undefined ? draftEntry.verified : isVerified;
+
+                                let statusText = 'Pending Upload';
+                                let statusColor = 'var(--text-muted)';
+                                let statusBg = 'rgba(156, 163, 175, 0.1)';
+                                if (fileUrlDraft) {
+                                  if (isVerifiedDraft) {
+                                    statusText = 'Verified';
+                                    statusColor = '#10b981';
+                                    statusBg = 'rgba(16, 185, 129, 0.1)';
+                                  } else {
+                                    statusText = 'Needs Verification';
+                                    statusColor = '#d97706';
+                                    statusBg = 'rgba(217, 119, 6, 0.1)';
+                                  }
+                                }
+
+                                return (
+                                  <div
+                                    key={docItem.key}
+                                    style={{
+                                      background: 'var(--bg-primary)',
+                                      border: '1px solid var(--border-color)',
+                                      borderRadius: '10px',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      transition: 'all 0.2s ease',
+                                      boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                                      overflow: 'hidden'
+                                    }}
+                                  >
+                                    {/* Header Row - Click to collapse/expand */}
+                                    <div
+                                      onClick={() => toggleDocExpand(docItem.key)}
+                                      style={{
+                                        padding: '12px 16px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        cursor: 'pointer',
+                                        background: isExpanded ? 'var(--bg-secondary)' : 'transparent',
+                                        transition: 'background 0.2s ease'
+                                      }}
+                                    >
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                                        {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
+                                        <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                          {docItem.label}
+                                        </span>
+                                        <span style={{
+                                          fontSize: '10px',
+                                          fontWeight: 700,
+                                          padding: '2px 6px',
+                                          borderRadius: '4px',
+                                          background: statusBg,
+                                          color: statusColor,
+                                          marginLeft: '8px'
+                                        }}>
+                                          {statusText}
+                                        </span>
+                                      </div>
+
+                                      {/* Verify toggle stays on header for quick access */}
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <label
+                                          onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            cursor: fileUrlDraft ? 'pointer' : 'not-allowed',
+                                            fontSize: '11.5px',
+                                            fontWeight: 600,
+                                            opacity: fileUrlDraft ? 1 : 0.4
+                                          }}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            disabled={!fileUrlDraft}
+                                            checked={isVerifiedDraft}
+                                            onChange={(e) => {
+                                              const newVal = e.target.checked;
+                                              setChecklistDrafts(prev => {
+                                                const currentDraft = prev[docItem.label] || { doc: fileUrl, verified: isVerified };
+                                                return {
+                                                  ...prev,
+                                                  [docItem.label]: {
+                                                    ...currentDraft,
+                                                    verified: newVal
+                                                  }
+                                                };
+                                              });
+                                            }}
+                                            style={{ accentColor: 'var(--brand-color)' }}
+                                          />
+                                          <span>Verify Draft</span>
+                                        </label>
+
+                                        {fileUrlDraft && (
+                                          <button
+                                            type="button"
+                                            onClick={async (e) => {
+                                              e.stopPropagation();
+                                              const targetVerified = !isVerifiedDraft;
+                                              await saveDocumentToERPNext(docItem.label, fileUrlDraft, targetVerified);
+                                              setChecklistDrafts(prev => {
+                                                const next = { ...prev };
+                                                delete next[docItem.label];
+                                                return next;
+                                              });
+                                            }}
+                                            style={{
+                                              background: 'transparent',
+                                              border: 'none',
+                                              color: 'var(--brand-color)',
+                                              cursor: 'pointer',
+                                              fontSize: '11px',
+                                              fontWeight: 700,
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              gap: '4px',
+                                              padding: '4px 8px',
+                                              borderRadius: '4px',
+                                              border: '1px solid var(--border-color)',
+                                              transition: 'all 0.2s'
+                                            }}
+                                            onMouseEnter={(e) => {
+                                              e.currentTarget.style.background = 'var(--bg-secondary)';
+                                            }}
+                                            onMouseLeave={(e) => {
+                                              e.currentTarget.style.background = 'transparent';
+                                            }}
+                                          >
+                                            {isVerifiedDraft ? <ShieldAlert size={12} style={{ color: '#d97706' }} /> : <ShieldCheck size={12} />}
+                                            <span>{isVerifiedDraft ? 'Unverify Instantly' : 'Verify Instantly'}</span>
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Expanded Content Panel */}
+                                    {isExpanded && (
+                                      <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-secondary)' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifySelf: 'space-between', gap: '12px' }}>
+                                          {/* File details and attachments */}
+                                          {fileUrlDraft ? (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                                              <button
+                                                onClick={() => {
+                                                  const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                                  setPreviewDocUrl(fullUrl);
+                                                  setPreviewDocTitle(docItem.label);
+                                                }}
+                                                style={{
+                                                  background: 'transparent',
+                                                  border: 'none',
+                                                  color: 'var(--brand-color)',
+                                                  fontSize: '12px',
+                                                  fontWeight: 600,
+                                                  cursor: 'pointer',
+                                                  display: 'inline-flex',
+                                                  alignItems: 'center',
+                                                  gap: '4px',
+                                                  padding: 0,
+                                                  overflow: 'hidden',
+                                                  textOverflow: 'ellipsis',
+                                                  whiteSpace: 'nowrap'
+                                                }}
+                                              >
+                                                <Eye size={13} style={{ flexShrink: 0 }} />
+                                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                  Preview: {fileUrlDraft.split('/').pop()}
+                                                </span>
+                                              </button>
+
+                                              <button
+                                                onClick={() => {
+                                                  setChecklistDrafts(prev => ({
+                                                    ...prev,
+                                                    [docItem.label]: {
+                                                      ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
+                                                      doc: '',
+                                                      verified: false
+                                                    }
+                                                  }));
+                                                }}
+                                                style={{
+                                                  background: 'rgba(239, 68, 68, 0.08)',
+                                                  border: 'none',
+                                                  borderRadius: '6px',
+                                                  color: '#ef4444',
+                                                  padding: '6px 10px',
+                                                  cursor: 'pointer',
+                                                  display: 'flex',
+                                                  alignItems: 'center',
+                                                  justifyContent: 'center',
+                                                  marginLeft: 'auto'
+                                                }}
+                                                title="Remove File"
+                                              >
+                                                <Trash2 size={13} />
+                                                <span style={{ fontSize: '11px', fontWeight: 600, marginLeft: '4px' }}>Remove</span>
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <label style={{
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '6px',
+                                              padding: '8px 16px',
+                                              border: '1px solid var(--border-color)',
+                                              background: 'var(--bg-primary)',
+                                              borderRadius: '6px',
+                                              fontSize: '12px',
+                                              fontWeight: 600,
+                                              cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                                              transition: 'all 0.15s ease'
+                                            }}>
+                                              <Paperclip size={14} />
+                                              <span>Attach Document</span>
+                                              <input
+                                                type="file"
+                                                disabled={uploadingFile}
+                                                onChange={(e) => handleFileUpload(e, (url) => {
+                                                  setChecklistDrafts(prev => ({
+                                                    ...prev,
+                                                    [docItem.label]: {
+                                                      ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
+                                                      doc: url
+                                                    }
+                                                  }));
+                                                })}
+                                                style={{ display: 'none' }}
+                                              />
+                                            </label>
+                                          )}
+                                        </div>
+
+                                        {/* Tiny Preview Box */}
+                                        {fileUrlDraft && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrlDraft) && (
+                                          <div
+                                            onClick={() => {
+                                              const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                              setPreviewDocUrl(fullUrl);
+                                              setPreviewDocTitle(docItem.label);
+                                            }}
+                                            style={{ width: '100%', height: '100px', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'pointer' }}
+                                          >
+                                            <img
+                                              src={fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`}
+                                              alt={docItem.label}
+                                              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                              crossOrigin="use-credentials"
+                                            />
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              });
                             })()}
                           </div>
                         </div>
                       )}
 
-                      {/* New Basic Details Fields */}
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Customer Type</span>
-                        {isEditingDetails ? (
-                          <select
-                            value={editType}
-                            onChange={(e) => setEditType(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none', cursor: 'pointer' }}
-                          >
-                            <option value="Company">Company</option>
-                            <option value="Individual">Individual</option>
-                          </select>
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.type || 'Company'}</div>
-                        )}
+                      {/* Action buttons */}
+                      <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingDetails(false)}
+                          disabled={updatingDetails}
+                          style={{ flex: 1, padding: '10px', fontSize: '13px', fontWeight: 600, border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleUpdateCoreDetails}
+                          disabled={updatingDetails}
+                          style={{
+                            flex: 1,
+                            padding: '10px',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            border: 'none',
+                            borderRadius: '6px',
+                            background: updatingDetails ? 'var(--text-muted, #64748b)' : 'var(--brand-color, #2563eb)',
+                            color: '#fff',
+                            cursor: updatingDetails ? 'not-allowed' : 'pointer',
+                            boxShadow: '0 4px 12px rgba(37, 99, 235, 0.2)'
+                          }}
+                        >
+                          {updatingDetails ? 'Updating...' : 'Save Changes'}
+                        </button>
                       </div>
+                    </div>
+                  );
+                })() : (
+                  <>
+                    {/* Basic Details */}
+                    {activeDetailTab === 'basic' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Basic Onboarding Details</h4>
 
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Company TIN ID</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="text"
-                            value={editCompanyVatId}
-                            onChange={(e) => setEditCompanyVatId(e.target.value)}
-                            placeholder="VAT ID"
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_vat_id || '—'}</div>
-                        )}
-                      </div>
-
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Is Internal Customer?</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="checkbox"
-                            checked={editIsInternalCustomer}
-                            onChange={(e) => setEditIsInternalCustomer(e.target.checked)}
-                            style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: selectedCase.is_internal_customer ? '#16a34a' : 'var(--text-muted)' }}>
-                            {selectedCase.is_internal_customer ? 'Yes' : 'No'}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          {/* Customer Type */}
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Customer Type</span>
+                            {isEditingDetails ? (
+                              <select
+                                value={editType}
+                                onChange={(e) => setEditType(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none', cursor: 'pointer' }}
+                              >
+                                <option value="Company">Company</option>
+                                <option value="Individual">Individual</option>
+                              </select>
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.type || 'Company'}</div>
+                            )}
                           </div>
-                        )}
-                      </div>
 
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Date of Birth</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="date"
-                            value={editDateOfBirth}
-                            onChange={(e) => setEditDateOfBirth(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.date_of_birth || '—'}</div>
-                        )}
-                      </div>
+                          {(() => {
+                            const currentType = isEditingDetails ? editType : (selectedCase.type || 'Company');
 
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Address Line 1</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="text"
-                            value={editAddressLine1}
-                            onChange={(e) => setEditAddressLine1(e.target.value)}
-                            placeholder="Line 1"
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line1 || '—'}</div>
-                        )}
-                      </div>
+                            const rCompanyNameField = (
+                              <div key="company_name" style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{editType === 'Company' ? 'Company Name *' : 'Company Name'}</span>
+                                {isEditingDetails ? (
+                                  <input
+                                    type="text"
+                                    value={editCompanyName}
+                                    onChange={(e) => setEditCompanyName(e.target.value)}
+                                    placeholder="e.g. Acme Corp"
+                                    style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                                  />
+                                ) : (
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_name || '—'}</div>
+                                )}
+                              </div>
+                            );
 
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Address Line 2</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="text"
-                            value={editAddressLine2}
-                            onChange={(e) => setEditAddressLine2(e.target.value)}
-                            placeholder="Line 2"
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line2 || '—'}</div>
-                        )}
-                      </div>
+                            const rCompanyTinField = (
+                              <div key="company_tin" style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{editType === 'Company' ? 'Company TIN ID *' : 'Company TIN ID'}</span>
+                                {isEditingDetails ? (
+                                  <input
+                                    type="text"
+                                    value={editCompanyVatId}
+                                    onChange={(e) => setEditCompanyVatId(e.target.value)}
+                                    placeholder="VAT ID"
+                                    style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                                  />
+                                ) : (
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_vat_id || '—'}</div>
+                                )}
+                              </div>
+                            );
 
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>City</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="text"
-                            value={editCity}
-                            onChange={(e) => setEditCity(e.target.value)}
-                            placeholder="City"
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.city || '—'}</div>
-                        )}
-                      </div>
+                            const rContactNameField = (
+                              <div key="contact_name" style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Person</span>
+                                {isEditingDetails ? (
+                                  <input
+                                    type="text"
+                                    value={editContactName}
+                                    onChange={(e) => setEditContactName(e.target.value)}
+                                    placeholder="e.g. John Doe"
+                                    style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                                  />
+                                ) : (
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.contact_name || '—'}</div>
+                                )}
+                              </div>
+                            );
 
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>State</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="text"
-                            value={editState}
-                            onChange={(e) => setEditState(e.target.value)}
-                            placeholder="State"
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.state || '—'}</div>
-                        )}
-                      </div>
+                            const rEmailIdField = (
+                              <div key="email_id" style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Email ID</span>
+                                {isEditingDetails ? (
+                                  <input
+                                    type="email"
+                                    value={editEmailId}
+                                    onChange={(e) => setEditEmailId(e.target.value)}
+                                    placeholder="e.g. john@example.com"
+                                    style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                                  />
+                                ) : (
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.email_id || '—'}</div>
+                                )}
+                              </div>
+                            );
 
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Country</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="text"
-                            value={editCountry}
-                            onChange={(e) => setEditCountry(e.target.value)}
-                            placeholder="Country"
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.country || '—'}</div>
-                        )}
-                      </div>
-                    </div>
+                            const rContactNumberField = isEditingDetails ? (
+                              <div key="contact_number" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '4px' }}>Contact Number</span>
+                                <PhoneInputWithDropdown
+                                  value={editContactLocal ? `${editContactPrefix}-${editContactLocal}` : ""}
+                                  onChange={(newVal) => {
+                                    const parsed = parsePhoneNumber(newVal);
+                                    setEditContactPrefix(parsed.prefix);
+                                    setEditContactLocal(parsed.local);
+                                  }}
+                                />
+                              </div>
+                            ) : (
+                              <div key="contact_number" style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Contact Number</span>
+                                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  {(() => {
+                                    const parsed = parsePhoneNumber(selectedCase.contact_number);
+                                    const matched = COUNTRY_CODES.find(c => c.prefix === parsed.prefix);
+                                    return (
+                                      <>
+                                        <span style={{ fontSize: '15px', lineHeight: 1 }}>{matched?.flag || '🇫🇯'}</span>
+                                        <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{parsed.prefix}</span>
+                                        <span>{parsed.local || '—'}</span>
+                                      </>
+                                    );
+                                  })()}
+                                </div>
+                              </div>
+                            );
 
-                    {isEditingDetails && (
-                      <button
-                        disabled={updatingDetails || !editContactLocal.trim() || !editContactName.trim() || !editEmailId.trim()}
-                        onClick={handleUpdateCoreDetails}
-                        style={{
-                          background: 'var(--brand-color, #2563eb)',
-                          color: '#fff',
-                          padding: '10px 16px',
-                          borderRadius: '8px',
-                          border: 'none',
-                          fontWeight: 700,
-                          fontSize: '13px',
-                          cursor: updatingDetails ? 'not-allowed' : 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '8px',
-                          marginTop: '8px',
-                          boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)'
-                        }}
-                      >
-                        {updatingDetails ? 'Updating...' : 'Save Changes'}
-                      </button>
-                    )}
-                  </div>
-                )}
+                            return currentType === 'Company' ? (
+                              <>
+                                {rCompanyNameField}
+                                {rCompanyTinField}
+                                {rContactNameField}
+                                {rEmailIdField}
+                                {rContactNumberField}
+                              </>
+                            ) : (
+                              <>
+                                {rContactNameField}
+                                {rEmailIdField}
+                                {rContactNumberField}
+                                {rCompanyNameField}
+                                {rCompanyTinField}
+                              </>
+                            );
+                          })()}
 
-                {/* Stage 1: Business Proposal */}
-                {activeDetailTab === 'proposal' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Business Proposal Fields</h4>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Is Internal Customer?</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="checkbox"
+                                checked={editIsInternalCustomer}
+                                onChange={(e) => setEditIsInternalCustomer(e.target.checked)}
+                                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: selectedCase.is_internal_customer ? '#16a34a' : 'var(--text-muted)' }}>
+                                {selectedCase.is_internal_customer ? 'Yes' : 'No'}
+                              </div>
+                            )}
+                          </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Business Type</span>
-                        {isEditingDetails ? (
-                          <select
-                            value={editProposedBusinessType}
-                            onChange={(e) => setEditProposedBusinessType(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          >
-                            <option value="Restaurant">Restaurant</option>
-                            <option value="Cafe">Cafe</option>
-                            <option value="Supermarket">Supermarket</option>
-                            <option value="Retail Store">Retail Store</option>
-                            <option value="Pharmacy">Pharmacy</option>
-                            <option value="Salon / Spa">Salon / Spa</option>
-                            <option value="Gym / Fitness">Gym / Fitness</option>
-                            <option value="Cinema / Entertainment">Cinema / Entertainment</option>
-                            <option value="Bar">Bar</option>
-                            <option value="Office / Coworking">Office / Coworking</option>
-                            <option value="Kiosk">Kiosk</option>
-                          </select>
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.proposed_business_type || '—'}</div>
-                        )}
-                      </div>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Space Required</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="number"
-                            value={editRequiredSpace}
-                            onChange={(e) => setEditRequiredSpace(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.required_space ? `${selectedCase.required_space} sq mtr` : '—'}</div>
-                        )}
-                      </div>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Business Status</span>
-                        {isEditingDetails ? (
-                          <select
-                            value={editBusinessStatus}
-                            onChange={(e) => setEditBusinessStatus(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          >
-                            <option value="New">New</option>
-                            <option value="Existing">Existing</option>
-                          </select>
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.business_status || '—'}</div>
-                        )}
-                      </div>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Budget</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="number"
-                            value={editBudget}
-                            onChange={(e) => setEditBudget(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.budget ? `$${selectedCase.budget.toLocaleString()}` : '—'}</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Range & Line of Items (Other Business)</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="text"
-                          value={editProductServiceRange}
-                          onChange={(e) => setEditProductServiceRange(e.target.value)}
-                          placeholder="Specify product catalog/ranges..."
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.product_service_range || '—'}</div>
-                      )}
-                    </div>
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Work Timeframe & Approvals</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="text"
-                          value={editFitoutApprovalTimeframe}
-                          onChange={(e) => setEditFitoutApprovalTimeframe(e.target.value)}
-                          placeholder="Specify timeframe (e.g. 45 days)"
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_approval_timeframe || '—'}</div>
-                      )}
-                    </div>
-
-                    {/* Menu & Business Pictures Attachment */}
-                    {isEditingDetails ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
-                        {editMenuAndBusinessPictures ? (
-                          <div style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)' }}>
-                            <img
-                              src={editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`}
-                              alt="Menu and Business Pictures"
-                              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                              crossOrigin="use-credentials"
-                            />
-                            <div style={{ position: 'absolute', left: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600, cursor: 'pointer' }}
-                              onClick={() => {
-                                const fullUrl = editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`;
-                                setPreviewDocUrl(fullUrl);
-                                setPreviewDocTitle('Menu & Business Pictures');
-                              }}
-                            >
-                              <Eye size={10} />
-                              <span>Preview</span>
+                          {selectedCase.type === 'Individual' && (
+                            <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Date of Birth</span>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.date_of_birth || '—'}</div>
                             </div>
+                          )}
+
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Address Line 1</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="text"
+                                value={editAddressLine1}
+                                onChange={(e) => setEditAddressLine1(e.target.value)}
+                                placeholder="Line 1"
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line_1 || '—'}</div>
+                            )}
+                          </div>
+
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Address Line 2</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="text"
+                                value={editAddressLine2}
+                                onChange={(e) => setEditAddressLine2(e.target.value)}
+                                placeholder="Line 2"
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line_2 || '—'}</div>
+                            )}
+                          </div>
+
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>City</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="text"
+                                value={editCity}
+                                onChange={(e) => setEditCity(e.target.value)}
+                                placeholder="City"
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.city || '—'}</div>
+                            )}
+                          </div>
+
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>State</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="text"
+                                value={editState}
+                                onChange={(e) => setEditState(e.target.value)}
+                                placeholder="State"
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.state || '—'}</div>
+                            )}
+                          </div>
+
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Country</span>
+                            {isEditingDetails ? (
+                              <select
+                                value={editCountry}
+                                onChange={(e) => setEditCountry(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none', cursor: 'pointer' }}
+                              >
+                                <option value="">-- Choose Country --</option>
+                                {countries.map(c => (
+                                  <option key={c} value={c}>{c}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.country || '—'}</div>
+                            )}
+                          </div>
+                        </div>
+
+                        {isEditingDetails && (
+                          <button
+                            disabled={updatingDetails}
+                            onClick={handleUpdateCoreDetails}
+                            style={{
+                              background: updatingDetails ? 'var(--text-muted, #64748b)' : 'var(--brand-color, #2563eb)',
+                              color: '#fff',
+                              padding: '10px 16px',
+                              borderRadius: '8px',
+                              border: 'none',
+                              fontWeight: 700,
+                              fontSize: '13px',
+                              cursor: updatingDetails ? 'not-allowed' : 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '8px',
+                              marginTop: '8px',
+                              boxShadow: updatingDetails ? 'none' : '0 4px 12px rgba(37, 99, 235, 0.25)',
+                              opacity: updatingDetails ? 0.6 : 1
+                            }}
+                          >
+                            {updatingDetails ? 'Updating...' : 'Save Changes'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Stage 1: Business Proposal */}
+                    {activeDetailTab === 'proposal' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Business Proposal Fields</h4>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Business Type</span>
+                            {isEditingDetails ? (
+                              <select
+                                value={editProposedBusinessType}
+                                onChange={(e) => setEditProposedBusinessType(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              >
+                                <option value="Restaurant">Restaurant</option>
+                                <option value="Cafe">Cafe</option>
+                                <option value="Supermarket">Supermarket</option>
+                                <option value="Retail Store">Retail Store</option>
+                                <option value="Pharmacy">Pharmacy</option>
+                                <option value="Salon / Spa">Salon / Spa</option>
+                                <option value="Gym / Fitness">Gym / Fitness</option>
+                                <option value="Cinema / Entertainment">Cinema / Entertainment</option>
+                                <option value="Bar">Bar</option>
+                                <option value="Office / Coworking">Office / Coworking</option>
+                                <option value="Kiosk">Kiosk</option>
+                              </select>
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.proposed_business_type || '—'}</div>
+                            )}
+                          </div>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Required Space(Sqm)</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="number"
+                                value={editRequiredSpace}
+                                onChange={(e) => setEditRequiredSpace(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.required_space ? `${selectedCase.required_space} Sqm` : '—'}</div>
+                            )}
+                          </div>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Business Status</span>
+                            {isEditingDetails ? (
+                              <select
+                                value={editBusinessStatus}
+                                onChange={(e) => setEditBusinessStatus(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              >
+                                <option value="New">New</option>
+                                <option value="Existing">Existing</option>
+                              </select>
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.business_status || '—'}</div>
+                            )}
+                          </div>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Budget(FJD)</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="number"
+                                value={editBudget}
+                                onChange={(e) => setEditBudget(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.budget ? `FJD ${selectedCase.budget.toLocaleString()}` : '—'}</div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Range & Line of Items (Other Business)</span>
+                          {isEditingDetails ? (
+                            <input
+                              type="text"
+                              value={editProductServiceRange}
+                              onChange={(e) => setEditProductServiceRange(e.target.value)}
+                              placeholder="Specify product catalog/ranges..."
+                              style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                            />
+                          ) : (
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.product_service_range || '—'}</div>
+                          )}
+                        </div>
+
+                        <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Work Timeframe & Approvals</span>
+                          {isEditingDetails ? (
+                            <input
+                              type="text"
+                              value={editFitoutApprovalTimeframe}
+                              onChange={(e) => setEditFitoutApprovalTimeframe(e.target.value)}
+                              placeholder="Specify timeframe (e.g. 45 days)"
+                              style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                            />
+                          ) : (
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_approval_timeframe || '—'}</div>
+                          )}
+                        </div>
+
+                        {/* Menu & Business Pictures Attachment */}
+                        {isEditingDetails ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
+                            {editMenuAndBusinessPictures ? (
+                              <div style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)' }}>
+                                <img
+                                  src={editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`}
+                                  alt="Menu and Business Pictures"
+                                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                  crossOrigin="use-credentials"
+                                />
+                                <div style={{ position: 'absolute', left: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600, cursor: 'pointer' }}
+                                  onClick={() => {
+                                    const fullUrl = editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`;
+                                    setPreviewDocUrl(fullUrl);
+                                    setPreviewDocTitle('Menu & Business Pictures');
+                                  }}
+                                >
+                                  <Eye size={10} />
+                                  <span>Preview</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditMenuAndBusinessPictures('');
+                                  }}
+                                  style={{
+                                    position: 'absolute',
+                                    top: '8px',
+                                    right: '8px',
+                                    zIndex: 10,
+                                    background: 'rgba(239, 68, 68, 0.9)',
+                                    color: '#fff',
+                                    borderRadius: '50%',
+                                    width: '28px',
+                                    height: '28px',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                                    transition: 'background 0.2s'
+                                  }}
+                                  title="Delete Image"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            ) : (
+                              <label style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '8px',
+                                padding: '16px',
+                                border: '1px dashed var(--border-color)',
+                                background: 'var(--bg-secondary)',
+                                borderRadius: '8px',
+                                cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                                fontSize: '13px',
+                                fontWeight: 600,
+                                color: 'var(--text-secondary)',
+                                transition: 'all 0.2s'
+                              }}>
+                                {uploadingFile ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
+                                <span>{uploadingFile ? 'Uploading...' : 'Attach Menu & Business Pictures'}</span>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  disabled={uploadingFile}
+                                  onChange={(e) => handleFileUpload(e, setEditMenuAndBusinessPictures)}
+                                  style={{ display: 'none' }}
+                                />
+                              </label>
+                            )}
+                          </div>
+                        ) : (
+                          selectedCase.menu_and_business_pictures && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
+                              <div
+                                onClick={() => {
+                                  const fullUrl = selectedCase.menu_and_business_pictures.startsWith('http')
+                                    ? selectedCase.menu_and_business_pictures
+                                    : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`;
+                                  setPreviewDocUrl(fullUrl);
+                                  setPreviewDocTitle('Menu & Business Pictures');
+                                }}
+                                style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer' }}
+                              >
+                                <img
+                                  src={selectedCase.menu_and_business_pictures.startsWith('http') ? selectedCase.menu_and_business_pictures : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`}
+                                  alt="Menu and Business Pictures"
+                                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                  crossOrigin="use-credentials"
+                                />
+                                <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
+                                  <Eye size={10} />
+                                  <span>Click to Preview</span>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        )}
+                        {isEditingDetails && (
+                          <button
+                            disabled={updatingDetails}
+                            onClick={handleUpdateCoreDetails}
+                            style={{
+                              background: updatingDetails ? 'var(--text-muted, #64748b)' : 'var(--brand-color, #2563eb)',
+                              color: '#fff',
+                              padding: '10px 16px',
+                              borderRadius: '8px',
+                              border: 'none',
+                              fontWeight: 700,
+                              fontSize: '13px',
+                              cursor: updatingDetails ? 'not-allowed' : 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '8px',
+                              marginTop: '8px',
+                              boxShadow: updatingDetails ? 'none' : '0 4px 12px rgba(37, 99, 235, 0.25)',
+                              opacity: updatingDetails ? 0.6 : 1
+                            }}
+                          >
+                            {updatingDetails ? 'Updating...' : 'Save Changes'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Stage 2: Booking Form */}
+                    {activeDetailTab === 'booking' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Booking Form Terms & Conditions</h4>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Shop Space & Location</span>
+                            {isEditingDetails ? (
+                              <select
+                                value={editShopSpaceLocation}
+                                onChange={(e) => setEditShopSpaceLocation(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              >
+                                <option value="">Select Location</option>
+                                {districts.map(d => (
+                                  <option key={d} value={d}>{d}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.shop_space_location || '—'}</div>
+                            )}
+                          </div>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Lease Period(Year)</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="number"
+                                value={editLeasePeriod}
+                                onChange={(e) => setEditLeasePeriod(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_period ? `${selectedCase.lease_period} years` : '—'}</div>
+                            )}
+                          </div>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Charges ($)</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="number"
+                                value={editRentalCharges}
+                                onChange={(e) => setEditRentalCharges(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.rental_charges ? `$${selectedCase.rental_charges.toLocaleString()}` : '—'}</div>
+                            )}
+                          </div>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Promo / Service Charges ($)</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="number"
+                                value={editServicePromoCharges}
+                                onChange={(e) => setEditServicePromoCharges(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.service_promotional_charges ? `$${selectedCase.service_promotional_charges.toLocaleString()}` : '—'}</div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Security Deposit / Booking Fee</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="number"
+                                value={editSecurityDepositFee}
+                                onChange={(e) => setEditSecurityDepositFee(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.security_deposit_booking_fee ? `$${selectedCase.security_deposit_booking_fee.toLocaleString()}` : '—'}</div>
+                            )}
+                          </div>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Period (Days)</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="number"
+                                value={editFitoutPeriod}
+                                onChange={(e) => setEditFitoutPeriod(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_period ? `${selectedCase.fitout_period} days` : '—'}</div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Usage of Demise Premises</span>
+                          {isEditingDetails ? (
+                            <input
+                              type="text"
+                              value={editUsageOfDemisedPremises}
+                              onChange={(e) => setEditUsageOfDemisedPremises(e.target.value)}
+                              style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                            />
+                          ) : (
+                            <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.usage_of_demised_premises || '—'}</div>
+                          )}
+                        </div>
+
+                        <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Nature of Business</span>
+                          <input
+                            type="text"
+                            value={caseLocal.booking_nature_of_business || ''}
+                            onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_nature_of_business', e.target.value)}
+                            placeholder="e.g. Retail Clothing Boutique"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        </div>
+
+                        <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Types of Merchandise</span>
+                          <input
+                            type="text"
+                            value={caseLocal.booking_merchandise_types || ''}
+                            onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_merchandise_types', e.target.value)}
+                            placeholder="e.g. Menswear, accessories"
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                          />
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Commencement of Lease</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="date"
+                                value={editLeaseCommencementDate}
+                                onChange={(e) => setEditLeaseCommencementDate(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_commencement_date || '—'}</div>
+                            )}
+                          </div>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Vacant Possession Date</span>
+                            {isEditingDetails ? (
+                              <input
+                                type="date"
+                                value={editVacantPossessionDate}
+                                onChange={(e) => setEditVacantPossessionDate(e.target.value)}
+                                style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+                              />
+                            ) : (
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.vacant_possession_date || '—'}</div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Plans Submitted for Approval Attach field */}
+                        <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Plans Submitted for Approval</span>
+
+                          {isEditingDetails ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px' }}>
+                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: '11.5px', fontWeight: 600, cursor: uploadingFile ? 'not-allowed' : 'pointer' }}>
+                                {uploadingFile ? <Loader2 size={12} className="spin" /> : <Paperclip size={12} />}
+                                <span>{uploadingFile ? 'Uploading...' : 'Attach Plan'}</span>
+                                <input
+                                  type="file"
+                                  disabled={uploadingFile}
+                                  onChange={(e) => handleFileUpload(e, setEditPlansForApproval)}
+                                  style={{ display: 'none' }}
+                                />
+                              </label>
+                              {editPlansForApproval ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
+                                  <CheckCircle size={12} />
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={editPlansForApproval.split('/').pop()}>
+                                    {editPlansForApproval.split('/').pop()}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditPlansForApproval('')}
+                                    style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px' }}
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>No file attached</span>
+                              )}
+                            </div>
+                          ) : (
+                            <div>
+                              {selectedCase.plans_for_approval ? (
+                                <div
+                                  onClick={() => {
+                                    const fullUrl = selectedCase.plans_for_approval.startsWith('http')
+                                      ? selectedCase.plans_for_approval
+                                      : `${erpnextConfig.url}${selectedCase.plans_for_approval}`;
+                                    setPreviewDocUrl(fullUrl);
+                                    setPreviewDocTitle('Plans Submitted for Approval');
+                                  }}
+                                  style={{ width: '100%', height: '140px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer', marginTop: '6px' }}
+                                >
+                                  {/\.(jpg|jpeg|png|gif|webp)$/i.test(selectedCase.plans_for_approval) ? (
+                                    <img
+                                      src={selectedCase.plans_for_approval.startsWith('http') ? selectedCase.plans_for_approval : `${erpnextConfig.url}${selectedCase.plans_for_approval}`}
+                                      alt="Plans Submitted for Approval"
+                                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                      crossOrigin="use-credentials"
+                                    />
+                                  ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', gap: '8px' }}>
+                                      <FileText size={24} style={{ color: 'var(--text-muted)' }} />
+                                      <span style={{ fontSize: '11.5px', fontWeight: 600 }}>{selectedCase.plans_for_approval.split('/').pop()}</span>
+                                    </div>
+                                  )}
+                                  <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
+                                    <Eye size={10} />
+                                    <span>Click to Preview</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)', marginTop: '2px' }}>Not Attached</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Facilities Required by Tenant</span>
+                          <textarea
+                            rows={2}
+                            value={caseLocal.booking_facilities_required || ''}
+                            onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_facilities_required', e.target.value)}
+                            placeholder="Describe plumbing, power requirements..."
+                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none', resize: 'none' }}
+                          />
+                        </div>
+
+                        {isEditingDetails && (
+                          <button
+                            disabled={updatingDetails}
+                            onClick={handleUpdateCoreDetails}
+                            style={{
+                              background: updatingDetails ? 'var(--text-muted, #64748b)' : 'var(--brand-color, #2563eb)',
+                              color: '#fff',
+                              padding: '10px 16px',
+                              borderRadius: '8px',
+                              border: 'none',
+                              fontWeight: 700,
+                              fontSize: '13px',
+                              cursor: updatingDetails ? 'not-allowed' : 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '8px',
+                              marginTop: '8px',
+                              boxShadow: updatingDetails ? 'none' : '0 4px 12px rgba(37, 99, 235, 0.25)',
+                              opacity: updatingDetails ? 0.6 : 1
+                            }}
+                          >
+                            {updatingDetails ? 'Updating...' : 'Save Changes'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Stage 3: Company Search Documents */}
+                    {activeDetailTab === 'documents' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Company Search Audit Checklist</h4>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          {(() => {
+                            const docs = caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [];
+
+                            // Map standard static checklist items
+                            const standardDocs = documentTypes.map(doc => {
+                              const erpDoc = docs.find(d =>
+                                d.document_type?.toLowerCase().trim() === doc.label.toLowerCase().trim()
+                              );
+                              return {
+                                key: doc.key,
+                                label: doc.label,
+                                erpDoc: erpDoc,
+                                isStandard: true
+                              };
+                            });
+
+                            // Map custom dynamic checklist items
+                            const standardLabelsLower = new Set(documentTypes.map(d => d.label.toLowerCase().trim()));
+                            const customDocs = docs
+                              .filter(d => d.document_type && !standardLabelsLower.has(d.document_type.toLowerCase().trim()))
+                              .map((d, index) => ({
+                                key: `custom_${index}_${d.name || d.document_type}`,
+                                label: d.document_type,
+                                erpDoc: d,
+                                isStandard: false
+                              }));
+
+                            const combinedDocsList = [...standardDocs, ...customDocs];
+
+                            return combinedDocsList.map((docItem) => {
+                              const erpDoc = docItem.erpDoc;
+                              const fileUrl = erpDoc?.document || '';
+                              const isVerified = !!erpDoc?.verified;
+                              const isExpanded = !!expandedDocs[docItem.key];
+
+                              const draftEntry = checklistDrafts[docItem.label];
+                              const fileUrlDraft = draftEntry !== undefined ? draftEntry.doc : fileUrl;
+                              const isVerifiedDraft = draftEntry !== undefined ? draftEntry.verified : isVerified;
+
+                              let statusText = 'Pending Upload';
+                              let statusColor = 'var(--text-muted)';
+                              let statusBg = 'rgba(156, 163, 175, 0.1)';
+                              if (fileUrlDraft) {
+                                if (isVerifiedDraft) {
+                                  statusText = 'Verified';
+                                  statusColor = '#10b981';
+                                  statusBg = 'rgba(16, 185, 129, 0.1)';
+                                } else {
+                                  statusText = 'Needs Verification';
+                                  statusColor = '#d97706';
+                                  statusBg = 'rgba(217, 119, 6, 0.1)';
+                                }
+                              }
+
+                              return (
+                                <div
+                                  key={docItem.key}
+                                  style={{
+                                    background: 'var(--bg-primary)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '10px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    transition: 'all 0.2s ease',
+                                    boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                                    overflow: 'hidden'
+                                  }}
+                                >
+                                  {/* Header Row - Click to collapse/expand */}
+                                  <div
+                                    onClick={() => toggleDocExpand(docItem.key)}
+                                    style={{
+                                      padding: '12px 16px',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'space-between',
+                                      cursor: 'pointer',
+                                      background: isExpanded ? 'var(--bg-secondary)' : 'transparent',
+                                      transition: 'background 0.2s ease'
+                                    }}
+                                  >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                                      {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
+                                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {docItem.label}
+                                      </span>
+                                      <span style={{
+                                        fontSize: '10px',
+                                        fontWeight: 700,
+                                        padding: '2px 6px',
+                                        borderRadius: '4px',
+                                        background: statusBg,
+                                        color: statusColor,
+                                        marginLeft: '8px'
+                                      }}>
+                                        {statusText}
+                                      </span>
+                                    </div>
+
+                                    {/* Verify toggle stays on header for quick access */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                      <label
+                                        onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '6px',
+                                          cursor: fileUrlDraft ? 'pointer' : 'not-allowed',
+                                          fontSize: '11.5px',
+                                          fontWeight: 600,
+                                          opacity: fileUrlDraft ? 1 : 0.4
+                                        }}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          disabled={!fileUrlDraft}
+                                          checked={isVerifiedDraft}
+                                          onChange={(e) => {
+                                            const newVal = e.target.checked;
+                                            setChecklistDrafts(prev => {
+                                              const currentDraft = prev[docItem.label] || { doc: fileUrl, verified: isVerified };
+                                              return {
+                                                ...prev,
+                                                [docItem.label]: {
+                                                  ...currentDraft,
+                                                  verified: newVal
+                                                }
+                                              };
+                                            });
+                                          }}
+                                          style={{ accentColor: 'var(--brand-color)' }}
+                                        />
+                                        <span>Verify Draft</span>
+                                      </label>
+
+                                      {fileUrlDraft && (
+                                        <button
+                                          type="button"
+                                          onClick={async (e) => {
+                                            e.stopPropagation();
+                                            const targetVerified = !isVerifiedDraft;
+                                            await saveDocumentToERPNext(docItem.label, fileUrlDraft, targetVerified);
+                                            setChecklistDrafts(prev => {
+                                              const next = { ...prev };
+                                              delete next[docItem.label];
+                                              return next;
+                                            });
+                                          }}
+                                          style={{
+                                            background: 'transparent',
+                                            border: 'none',
+                                            color: 'var(--brand-color)',
+                                            cursor: 'pointer',
+                                            fontSize: '11px',
+                                            fontWeight: 700,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '4px 8px',
+                                            borderRadius: '4px',
+                                            border: '1px solid var(--border-color)',
+                                            transition: 'all 0.2s'
+                                          }}
+                                          onMouseEnter={(e) => {
+                                            e.currentTarget.style.background = 'var(--bg-secondary)';
+                                          }}
+                                          onMouseLeave={(e) => {
+                                            e.currentTarget.style.background = 'transparent';
+                                          }}
+                                        >
+                                          {isVerifiedDraft ? <ShieldAlert size={12} style={{ color: '#d97706' }} /> : <ShieldCheck size={12} />}
+                                          <span>{isVerifiedDraft ? 'Unverify Instantly' : 'Verify Instantly'}</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Expanded Content Panel */}
+                                  {isExpanded && (
+                                    <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-secondary)' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', justifySelf: 'space-between', gap: '12px' }}>
+                                        {/* File details and attachments */}
+                                        {fileUrlDraft ? (
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                                            <button
+                                              onClick={() => {
+                                                const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                                setPreviewDocUrl(fullUrl);
+                                                setPreviewDocTitle(docItem.label);
+                                              }}
+                                              style={{
+                                                background: 'transparent',
+                                                border: 'none',
+                                                color: 'var(--brand-color)',
+                                                fontSize: '12px',
+                                                fontWeight: 600,
+                                                cursor: 'pointer',
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                padding: 0,
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap'
+                                              }}
+                                            >
+                                              <Eye size={13} style={{ flexShrink: 0 }} />
+                                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                Preview: {fileUrlDraft.split('/').pop()}
+                                              </span>
+                                            </button>
+
+                                            <button
+                                              onClick={() => {
+                                                setChecklistDrafts(prev => ({
+                                                  ...prev,
+                                                  [docItem.label]: {
+                                                    ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
+                                                    doc: '',
+                                                    verified: false
+                                                  }
+                                                }));
+                                              }}
+                                              style={{
+                                                background: 'rgba(239, 68, 68, 0.08)',
+                                                border: 'none',
+                                                borderRadius: '6px',
+                                                color: '#ef4444',
+                                                padding: '6px 10px',
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                marginLeft: 'auto'
+                                              }}
+                                              title="Remove File"
+                                            >
+                                              <Trash2 size={13} />
+                                              <span style={{ fontSize: '11px', fontWeight: 600, marginLeft: '4px' }}>Remove</span>
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <label style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            padding: '8px 16px',
+                                            border: '1px solid var(--border-color)',
+                                            background: 'var(--bg-primary)',
+                                            borderRadius: '6px',
+                                            fontSize: '12px',
+                                            fontWeight: 600,
+                                            cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                                            transition: 'all 0.15s ease'
+                                          }}>
+                                            <Paperclip size={14} />
+                                            <span>Attach Document</span>
+                                            <input
+                                              type="file"
+                                              disabled={uploadingFile}
+                                              onChange={(e) => handleFileUpload(e, (url) => {
+                                                setChecklistDrafts(prev => ({
+                                                  ...prev,
+                                                  [docItem.label]: {
+                                                    ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
+                                                    doc: url
+                                                  }
+                                                }));
+                                              })}
+                                              style={{ display: 'none' }}
+                                            />
+                                          </label>
+                                        )}
+                                      </div>
+
+                                      {/* Tiny Preview Box */}
+                                      {fileUrlDraft && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrlDraft) && (
+                                        <div
+                                          onClick={() => {
+                                            const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                            setPreviewDocUrl(fullUrl);
+                                            setPreviewDocTitle(docItem.label);
+                                          }}
+                                          style={{ width: '100%', height: '100px', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'pointer' }}
+                                        >
+                                          <img
+                                            src={fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`}
+                                            alt={docItem.label}
+                                            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                            crossOrigin="use-credentials"
+                                          />
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+
+                        {/* Save Multiple Verifications Button */}
+                        {Object.keys(checklistDrafts).length > 0 && (
+                          <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
                             <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditMenuAndBusinessPictures('');
-                              }}
+                              onClick={handleSaveChecklist}
+                              disabled={updatingDetails}
                               style={{
-                                position: 'absolute',
-                                top: '8px',
-                                right: '8px',
-                                zIndex: 10,
-                                background: 'rgba(239, 68, 68, 0.9)',
+                                flex: 1,
+                                padding: '10px 16px',
+                                fontSize: '13px',
+                                fontWeight: 700,
+                                borderRadius: '8px',
+                                background: 'var(--brand-color, #065f46)',
                                 color: '#fff',
-                                borderRadius: '50%',
-                                width: '28px',
-                                height: '28px',
                                 border: 'none',
                                 cursor: 'pointer',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                                transition: 'background 0.2s'
+                                gap: '8px',
+                                boxShadow: '0 4px 12px rgba(6, 95, 70, 0.15)',
+                                transition: 'all 0.2s ease'
                               }}
-                              title="Delete Image"
                             >
-                              <Trash2 size={13} />
+                              {updatingDetails ? <Loader2 size={16} className="spin" /> : <CheckCircle size={16} />}
+                              <span>Save Audit Checklist ({Object.keys(checklistDrafts).length})</span>
+                            </button>
+                            <button
+                              onClick={() => setChecklistDrafts({})}
+                              disabled={updatingDetails}
+                              style={{
+                                padding: '10px 16px',
+                                fontSize: '13px',
+                                fontWeight: 700,
+                                borderRadius: '8px',
+                                background: 'transparent',
+                                color: 'var(--text-secondary)',
+                                border: '1px solid var(--border-color)',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease'
+                              }}
+                            >
+                              Cancel
                             </button>
                           </div>
-                        ) : (
-                          <label style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '8px',
-                            padding: '16px',
-                            border: '1px dashed var(--border-color)',
-                            background: 'var(--bg-secondary)',
-                            borderRadius: '8px',
-                            cursor: uploadingFile ? 'not-allowed' : 'pointer',
-                            fontSize: '13px',
-                            fontWeight: 600,
-                            color: 'var(--text-secondary)',
-                            transition: 'all 0.2s'
-                          }}>
-                            {uploadingFile ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
-                            <span>{uploadingFile ? 'Uploading...' : 'Attach Menu & Business Pictures'}</span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              disabled={uploadingFile}
-                              onChange={(e) => handleFileUpload(e, setEditMenuAndBusinessPictures)}
-                              style={{ display: 'none' }}
-                            />
-                          </label>
                         )}
                       </div>
-                    ) : (
-                      selectedCase.menu_and_business_pictures && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
-                          <div
-                            onClick={() => {
-                              const fullUrl = selectedCase.menu_and_business_pictures.startsWith('http')
-                                ? selectedCase.menu_and_business_pictures
-                                : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`;
-                              setPreviewDocUrl(fullUrl);
-                              setPreviewDocTitle('Menu & Business Pictures');
-                            }}
-                            style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer' }}
-                          >
-                            <img
-                              src={selectedCase.menu_and_business_pictures.startsWith('http') ? selectedCase.menu_and_business_pictures : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`}
-                              alt="Menu and Business Pictures"
-                              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                              crossOrigin="use-credentials"
-                            />
-                            <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
-                              <Eye size={10} />
-                              <span>Click to Preview</span>
-                            </div>
-                          </div>
-                        </div>
-                      )
                     )}
-                    {isEditingDetails && (
-                      <button
-                        disabled={updatingDetails || !editContactLocal.trim() || !editContactName.trim() || !editEmailId.trim()}
-                        onClick={handleUpdateCoreDetails}
-                        style={{
-                          background: 'var(--brand-color, #2563eb)',
-                          color: '#fff',
-                          padding: '10px 16px',
-                          borderRadius: '8px',
-                          border: 'none',
-                          fontWeight: 700,
-                          fontSize: '13px',
-                          cursor: updatingDetails ? 'not-allowed' : 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '8px',
-                          marginTop: '8px',
-                          boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)'
-                        }}
-                      >
-                        {updatingDetails ? 'Updating...' : 'Save Changes'}
-                      </button>
-                    )}
-                  </div>
+                  </>
                 )}
-
-                {/* Stage 2: Booking Form */}
-                {activeDetailTab === 'booking' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Booking Form Terms & Conditions</h4>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Shop Space & Location</span>
-                        {isEditingDetails ? (
-                          <select
-                            value={editShopSpaceLocation}
-                            onChange={(e) => setEditShopSpaceLocation(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          >
-                            <option value="">Select Location</option>
-                            {districts.map(d => (
-                              <option key={d} value={d}>{d}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.shop_space_location || '—'}</div>
-                        )}
-                      </div>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Lease Period(Year)</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="number"
-                            value={editLeasePeriod}
-                            onChange={(e) => setEditLeasePeriod(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_period ? `${selectedCase.lease_period} years` : '—'}</div>
-                        )}
-                      </div>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Charges ($)</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="number"
-                            value={editRentalCharges}
-                            onChange={(e) => setEditRentalCharges(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.rental_charges ? `$${selectedCase.rental_charges.toLocaleString()}` : '—'}</div>
-                        )}
-                      </div>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Promo / Service Charges ($)</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="number"
-                            value={editServicePromoCharges}
-                            onChange={(e) => setEditServicePromoCharges(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.service_promotional_charges ? `$${selectedCase.service_promotional_charges.toLocaleString()}` : '—'}</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Security Deposit / Booking Fee</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="number"
-                            value={editSecurityDepositFee}
-                            onChange={(e) => setEditSecurityDepositFee(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.security_deposit_booking_fee ? `$${selectedCase.security_deposit_booking_fee.toLocaleString()}` : '—'}</div>
-                        )}
-                      </div>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Period (Days)</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="number"
-                            value={editFitoutPeriod}
-                            onChange={(e) => setEditFitoutPeriod(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_period ? `${selectedCase.fitout_period} days` : '—'}</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Usage of Demise Premises</span>
-                      {isEditingDetails ? (
-                        <input
-                          type="text"
-                          value={editUsageOfDemisedPremises}
-                          onChange={(e) => setEditUsageOfDemisedPremises(e.target.value)}
-                          style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                        />
-                      ) : (
-                        <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.usage_of_demised_premises || '—'}</div>
-                      )}
-                    </div>
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Nature of Business</span>
-                      <input
-                        type="text"
-                        value={caseLocal.booking_nature_of_business || ''}
-                        onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_nature_of_business', e.target.value)}
-                        placeholder="e.g. Retail Clothing Boutique"
-                        style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                      />
-                    </div>
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Types of Merchandise</span>
-                      <input
-                        type="text"
-                        value={caseLocal.booking_merchandise_types || ''}
-                        onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_merchandise_types', e.target.value)}
-                        placeholder="e.g. Menswear, accessories"
-                        style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                      />
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Commencement of Lease</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="date"
-                            value={editLeaseCommencementDate}
-                            onChange={(e) => setEditLeaseCommencementDate(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_commencement_date || '—'}</div>
-                        )}
-                      </div>
-                      <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Vacant Possession Date</span>
-                        {isEditingDetails ? (
-                          <input
-                            type="date"
-                            value={editVacantPossessionDate}
-                            onChange={(e) => setEditVacantPossessionDate(e.target.value)}
-                            style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.vacant_possession_date || '—'}</div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Plans Submitted for Approval Attach field */}
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Plans Submitted for Approval</span>
-
-                      {isEditingDetails ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px' }}>
-                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: '11.5px', fontWeight: 600, cursor: uploadingFile ? 'not-allowed' : 'pointer' }}>
-                            {uploadingFile ? <Loader2 size={12} className="spin" /> : <Paperclip size={12} />}
-                            <span>{uploadingFile ? 'Uploading...' : 'Attach Plan'}</span>
-                            <input
-                              type="file"
-                              disabled={uploadingFile}
-                              onChange={(e) => handleFileUpload(e, setEditPlansForApproval)}
-                              style={{ display: 'none' }}
-                            />
-                          </label>
-                          {editPlansForApproval ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
-                              <CheckCircle size={12} />
-                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={editPlansForApproval.split('/').pop()}>
-                                {editPlansForApproval.split('/').pop()}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => setEditPlansForApproval('')}
-                                style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px' }}
-                              >
-                                <X size={12} />
-                              </button>
-                            </div>
-                          ) : (
-                            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>No file attached</span>
-                          )}
-                        </div>
-                      ) : (
-                        <div>
-                          {selectedCase.plans_for_approval ? (
-                            <div
-                              onClick={() => {
-                                const fullUrl = selectedCase.plans_for_approval.startsWith('http')
-                                  ? selectedCase.plans_for_approval
-                                  : `${erpnextConfig.url}${selectedCase.plans_for_approval}`;
-                                setPreviewDocUrl(fullUrl);
-                                setPreviewDocTitle('Plans Submitted for Approval');
-                              }}
-                              style={{ width: '100%', height: '140px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer', marginTop: '6px' }}
-                            >
-                              {/\.(jpg|jpeg|png|gif|webp)$/i.test(selectedCase.plans_for_approval) ? (
-                                <img
-                                  src={selectedCase.plans_for_approval.startsWith('http') ? selectedCase.plans_for_approval : `${erpnextConfig.url}${selectedCase.plans_for_approval}`}
-                                  alt="Plans Submitted for Approval"
-                                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                                  crossOrigin="use-credentials"
-                                />
-                              ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', gap: '8px' }}>
-                                  <FileText size={24} style={{ color: 'var(--text-muted)' }} />
-                                  <span style={{ fontSize: '11.5px', fontWeight: 600 }}>{selectedCase.plans_for_approval.split('/').pop()}</span>
-                                </div>
-                              )}
-                              <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
-                                <Eye size={10} />
-                                <span>Click to Preview</span>
-                              </div>
-                            </div>
-                          ) : (
-                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)', marginTop: '2px' }}>Not Attached</div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Facilities Required by Tenant</span>
-                      <textarea
-                        rows={2}
-                        value={caseLocal.booking_facilities_required || ''}
-                        onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_facilities_required', e.target.value)}
-                        placeholder="Describe plumbing, power requirements..."
-                        style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none', resize: 'none' }}
-                      />
-                    </div>
-
-                    {isEditingDetails && (
-                      <button
-                        disabled={updatingDetails || !editContactLocal.trim() || !editContactName.trim() || !editEmailId.trim()}
-                        onClick={handleUpdateCoreDetails}
-                        style={{
-                          background: 'var(--brand-color, #2563eb)',
-                          color: '#fff',
-                          padding: '10px 16px',
-                          borderRadius: '8px',
-                          border: 'none',
-                          fontWeight: 700,
-                          fontSize: '13px',
-                          cursor: updatingDetails ? 'not-allowed' : 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '8px',
-                          marginTop: '8px',
-                          boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)'
-                        }}
-                      >
-                        {updatingDetails ? 'Updating...' : 'Save Changes'}
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Stage 3: Company Search Documents */}
-                {activeDetailTab === 'search' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Company Search Audit Checklist</h4>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      {documentTypes.map((doc) => {
-                        const docs = caseDocuments[selectedCase.name] || selectedCase.documents || [];
-                        const erpDoc = docs.find(d =>
-                          d.document_type?.toLowerCase().trim() === doc.label.toLowerCase().trim()
-                        );
-                        const fileUrl = erpDoc?.document || '';
-                        const isVerified = !!erpDoc?.verified;
-                        const isExpanded = !!expandedDocs[doc.key];
-
-                        const draftEntry = checklistDrafts[doc.label];
-                        const fileUrlDraft = draftEntry !== undefined ? draftEntry.doc : fileUrl;
-                        const isVerifiedDraft = draftEntry !== undefined ? draftEntry.verified : isVerified;
-
-                        let statusText = 'Pending Upload';
-                        let statusColor = 'var(--text-muted)';
-                        let statusBg = 'rgba(156, 163, 175, 0.1)';
-                        if (fileUrlDraft) {
-                          if (isVerifiedDraft) {
-                            statusText = 'Verified';
-                            statusColor = '#10b981';
-                            statusBg = 'rgba(16, 185, 129, 0.1)';
-                          } else {
-                            statusText = 'Needs Verification';
-                            statusColor = '#d97706';
-                            statusBg = 'rgba(217, 119, 6, 0.1)';
-                          }
-                        }
-
-                        return (
-                          <div
-                            key={doc.key}
-                            style={{
-                              background: 'var(--bg-primary)',
-                              border: '1px solid var(--border-color)',
-                              borderRadius: '10px',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              transition: 'all 0.2s ease',
-                              boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
-                              overflow: 'hidden'
-                            }}
-                          >
-                            {/* Header Row - Click to collapse/expand */}
-                            <div
-                              onClick={() => toggleDocExpand(doc.key)}
-                              style={{
-                                padding: '12px 16px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                cursor: 'pointer',
-                                background: isExpanded ? 'var(--bg-secondary)' : 'transparent',
-                                transition: 'background 0.2s ease'
-                              }}
-                            >
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                                {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
-                                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {doc.label}
-                                </span>
-                                <span style={{
-                                  fontSize: '10px',
-                                  fontWeight: 700,
-                                  padding: '2px 6px',
-                                  borderRadius: '4px',
-                                  background: statusBg,
-                                  color: statusColor,
-                                  marginLeft: '8px'
-                                }}>
-                                  {statusText}
-                                </span>
-                              </div>
-
-                              {/* Verify toggle stays on header for quick access */}
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <label
-                                  onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    cursor: fileUrlDraft ? 'pointer' : 'not-allowed',
-                                    fontSize: '11.5px',
-                                    fontWeight: 600,
-                                    opacity: fileUrlDraft ? 1 : 0.4
-                                  }}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    disabled={!fileUrlDraft}
-                                    checked={isVerifiedDraft}
-                                    onChange={(e) => {
-                                      const newVal = e.target.checked;
-                                      setChecklistDrafts(prev => {
-                                        const currentDraft = prev[doc.label] || { doc: fileUrl, verified: isVerified };
-                                        return {
-                                          ...prev,
-                                          [doc.label]: {
-                                            ...currentDraft,
-                                            verified: newVal
-                                          }
-                                        };
-                                      });
-                                    }}
-                                    style={{ accentColor: 'var(--brand-color)' }}
-                                  />
-                                  <span>Verify Draft</span>
-                                </label>
-
-                                {fileUrlDraft && (
-                                  <button
-                                    type="button"
-                                    onClick={async (e) => {
-                                      e.stopPropagation();
-                                      const targetVerified = !isVerifiedDraft;
-                                      await saveDocumentToERPNext(doc.label, fileUrlDraft, targetVerified);
-                                      setChecklistDrafts(prev => {
-                                        const next = { ...prev };
-                                        delete next[doc.label];
-                                        return next;
-                                      });
-                                    }}
-                                    style={{
-                                      background: 'transparent',
-                                      border: 'none',
-                                      color: 'var(--brand-color)',
-                                      cursor: 'pointer',
-                                      fontSize: '11px',
-                                      fontWeight: 700,
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      padding: '4px 8px',
-                                      borderRadius: '4px',
-                                      border: '1px solid var(--border-color)',
-                                      transition: 'all 0.2s'
-                                    }}
-                                    onMouseEnter={(e) => {
-                                      e.currentTarget.style.background = 'var(--bg-secondary)';
-                                    }}
-                                    onMouseLeave={(e) => {
-                                      e.currentTarget.style.background = 'transparent';
-                                    }}
-                                  >
-                                    {isVerifiedDraft ? <ShieldAlert size={12} style={{ color: '#d97706' }} /> : <ShieldCheck size={12} />}
-                                    <span>{isVerifiedDraft ? 'Unverify Instantly' : 'Verify Instantly'}</span>
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Expanded Content Panel */}
-                            {isExpanded && (
-                              <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-secondary)' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifySelf: 'space-between', gap: '12px' }}>
-                                  {/* File details and attachments */}
-                                  {fileUrlDraft ? (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                                      <button
-                                        onClick={() => {
-                                          const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                          setPreviewDocUrl(fullUrl);
-                                          setPreviewDocTitle(doc.label);
-                                        }}
-                                        style={{
-                                          background: 'transparent',
-                                          border: 'none',
-                                          color: 'var(--brand-color)',
-                                          fontSize: '12px',
-                                          fontWeight: 600,
-                                          cursor: 'pointer',
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: '4px',
-                                          padding: 0,
-                                          overflow: 'hidden',
-                                          textOverflow: 'ellipsis',
-                                          whiteSpace: 'nowrap'
-                                        }}
-                                      >
-                                        <Eye size={13} style={{ flexShrink: 0 }} />
-                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                          Preview: {fileUrlDraft.split('/').pop()}
-                                        </span>
-                                      </button>
-
-                                      <button
-                                        onClick={() => {
-                                          setChecklistDrafts(prev => ({
-                                            ...prev,
-                                            [doc.label]: {
-                                              ...(prev[doc.label] || { doc: fileUrl, verified: isVerified }),
-                                              doc: '',
-                                              verified: false
-                                            }
-                                          }));
-                                        }}
-                                        style={{
-                                          background: 'rgba(239, 68, 68, 0.08)',
-                                          border: 'none',
-                                          borderRadius: '6px',
-                                          color: '#ef4444',
-                                          padding: '6px 10px',
-                                          cursor: 'pointer',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          justifyContent: 'center',
-                                          marginLeft: 'auto'
-                                        }}
-                                        title="Remove File"
-                                      >
-                                        <Trash2 size={13} />
-                                        <span style={{ fontSize: '11px', fontWeight: 600, marginLeft: '4px' }}>Remove</span>
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <label style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '6px',
-                                      padding: '8px 16px',
-                                      border: '1px solid var(--border-color)',
-                                      background: 'var(--bg-primary)',
-                                      borderRadius: '6px',
-                                      fontSize: '12px',
-                                      fontWeight: 600,
-                                      cursor: uploadingFile ? 'not-allowed' : 'pointer',
-                                      transition: 'all 0.15s ease'
-                                    }}>
-                                      <Paperclip size={14} />
-                                      <span>Attach Document</span>
-                                      <input
-                                        type="file"
-                                        disabled={uploadingFile}
-                                        onChange={(e) => handleFileUpload(e, (url) => {
-                                          setChecklistDrafts(prev => ({
-                                            ...prev,
-                                            [doc.label]: {
-                                              ...(prev[doc.label] || { doc: fileUrl, verified: isVerified }),
-                                              doc: url
-                                            }
-                                          }));
-                                        })}
-                                        style={{ display: 'none' }}
-                                      />
-                                    </label>
-                                  )}
-                                </div>
-
-                                {/* Tiny Preview Box */}
-                                {fileUrlDraft && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrlDraft) && (
-                                  <div
-                                    onClick={() => {
-                                      const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                      setPreviewDocUrl(fullUrl);
-                                      setPreviewDocTitle(doc.label);
-                                    }}
-                                    style={{ width: '100%', height: '100px', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'pointer' }}
-                                  >
-                                    <img
-                                      src={fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`}
-                                      alt={doc.label}
-                                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                                      crossOrigin="use-credentials"
-                                    />
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Save Multiple Verifications Button */}
-                    {Object.keys(checklistDrafts).length > 0 && (
-                      <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
-                        <button
-                          onClick={handleSaveChecklist}
-                          disabled={updatingDetails}
-                          style={{
-                            flex: 1,
-                            padding: '10px 16px',
-                            fontSize: '13px',
-                            fontWeight: 700,
-                            borderRadius: '8px',
-                            background: 'var(--brand-color, #065f46)',
-                            color: '#fff',
-                            border: 'none',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '8px',
-                            boxShadow: '0 4px 12px rgba(6, 95, 70, 0.15)',
-                            transition: 'all 0.2s ease'
-                          }}
-                        >
-                          {updatingDetails ? <Loader2 size={16} className="spin" /> : <CheckCircle size={16} />}
-                          <span>Save Audit Checklist ({Object.keys(checklistDrafts).length})</span>
-                        </button>
-                        <button
-                          onClick={() => setChecklistDrafts({})}
-                          disabled={updatingDetails}
-                          style={{
-                            padding: '10px 16px',
-                            fontSize: '13px',
-                            fontWeight: 700,
-                            borderRadius: '8px',
-                            background: 'transparent',
-                            color: 'var(--text-secondary)',
-                            border: '1px solid var(--border-color)',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s ease'
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
               </div>
 
             </div>
@@ -3162,133 +4873,215 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       </div>
 
       {/* Start Onboarding Modal */}
-      {showModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)' }}>
-          <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '12px', width: '100%', maxWidth: '560px', padding: '24px', position: 'relative', display: 'flex', flexDirection: 'column', gap: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', maxHeight: '90vh', overflowY: 'auto' }}>
+      {showModal && (() => {
+        // Group doctypeFields by Section Break
+        const dynamicSections = [];
+        let currentSec = { title: 'Basic Info', fields: [] };
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>Start New Onboarding</h2>
-              <button
-                onClick={() => { setShowModal(false); resetFormFields(); }}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 4 }}
-              >
-                <X size={20} />
-              </button>
-            </div>
+        doctypeFields
+          .filter(f => f.hidden !== 1 && f.fieldname !== 'naming_series' && f.fieldname !== 'amended_from' && f.fieldname !== 'workflow_state')
+          .forEach(f => {
+            if (f.fieldtype === 'Section Break') {
+              if (currentSec.fields.length > 0 || currentSec.title !== 'Basic Info') {
+                dynamicSections.push(currentSec);
+              }
+              currentSec = { title: f.label || 'Details', fields: [] };
+            } else if (f.fieldtype !== 'Column Break') {
+              currentSec.fields.push(f);
+            }
+          });
+        if (currentSec.fields.length > 0) {
+          dynamicSections.push(currentSec);
+        }
 
-            {/* Modal tabs for grouping inputs section wise */}
-            {/* Modal tabs for grouping inputs section wise */}
-            <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-tertiary)', padding: '4px', borderRadius: '8px' }}>
-              {[
-                { id: 'basic', label: 'Basic Details' },
-                { id: 'proposal', label: 'Proposal Details' },
-                { id: 'booking', label: 'Booking Form details' },
-                { id: 'search', label: 'Company Search' }
-              ].map(tab => (
+        const activeSections = dynamicSections.length > 0 ? dynamicSections : [{ title: 'Form', fields: doctypeFields }];
+        const safeTabIdx = Math.min(activeDynamicTabIdx, activeSections.length - 1);
+
+        return (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)' }}>
+            <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '12px', width: '100%', maxWidth: '560px', padding: '24px', position: 'relative', display: 'flex', flexDirection: 'column', gap: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', maxHeight: '90vh', overflowY: 'auto' }}>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h2 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>Start New Onboarding</h2>
                 <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActiveFormTab(tab.id)}
-                  style={{
-                    flex: 1,
-                    padding: '8px 12px',
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    borderRadius: '6px',
-                    border: 'none',
-                    background: activeFormTab === tab.id ? 'var(--bg-secondary)' : 'transparent',
-                    color: activeFormTab === tab.id ? 'var(--brand-color)' : 'var(--text-secondary)',
-                    boxShadow: activeFormTab === tab.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease'
-                  }}
+                  onClick={() => { setShowModal(false); resetFormFields(); }}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 4 }}
                 >
-                  {tab.label}
+                  <X size={20} />
                 </button>
-              ))}
-            </div>
+              </div>
 
-            <form onSubmit={handleStartOnboarding} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
-              {activeFormTab === 'basic' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '52vh', overflowY: 'auto', paddingRight: '6px' }}>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-
-                    {/* Left Column */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Type</label>
-                        <select
-                          value={type}
-                          onChange={(e) => setType(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none', cursor: 'pointer' }}
-                        >
-                          <option value="Company">Company</option>
-                          <option value="Individual">Individual</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Name *</label>
-                        <input
-                          type="text"
-                          placeholder="Contact Name"
-                          value={contactName}
-                          onChange={(e) => setContactName(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Email ID *</label>
-                        <input
-                          type="email"
-                          placeholder="e.g. email@example.com"
-                          value={emailId}
-                          onChange={(e) => setEmailId(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Number</label>
-                        <PhoneInputWithDropdown
-                          value={contactLocal ? `${contactPrefix}-${contactLocal}` : ""}
-                          onChange={(newVal) => {
-                            const parsed = parsePhoneNumber(newVal);
-                            setContactPrefix(parsed.prefix);
-                            setContactLocal(parsed.local);
+              <form onSubmit={handleStartOnboarding} style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px' }}>
+                {useDynamicForm && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    {/* Dynamic Tabs Headers */}
+                    <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-tertiary)', padding: '4px', borderRadius: '8px', overflowX: 'auto' }}>
+                      {activeSections.map((sec, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setActiveDynamicTabIdx(idx)}
+                          style={{
+                            padding: '8px 12px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            borderRadius: '6px',
+                            border: 'none',
+                            background: safeTabIdx === idx ? 'var(--bg-secondary)' : 'transparent',
+                            color: safeTabIdx === idx ? 'var(--brand-color)' : 'var(--text-secondary)',
+                            boxShadow: safeTabIdx === idx ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                            transition: 'all 0.2s ease'
                           }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Company Name</label>
-                        <input
-                          type="text"
-                          placeholder="Company Name"
-                          value={companyName}
-                          onChange={(e) => setCompanyName(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Company VAT ID</label>
-                        <input
-                          type="text"
-                          placeholder="Company VAT ID"
-                          value={companyVatId}
-                          onChange={(e) => setCompanyVatId(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
+                        >
+                          {sec.title}
+                        </button>
+                      ))}
                     </div>
 
-                    {/* Right Column */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minHeight: '38px', marginTop: '22px' }}>
+                    {/* Dynamic Fields for the Active Section */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', maxHeight: '48vh', overflowY: 'auto', paddingRight: '6px' }}>
+                      {activeSections[safeTabIdx]?.fields
+                        .filter(field => {
+                          const selectedType = dynamicFormValues['type'] || '';
+                          if (field.fieldname === 'date_of_birth' && selectedType !== 'Individual') {
+                            return false;
+                          }
+                          if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
+                            return false;
+                          }
+                          return true;
+                        })
+                        .map(field => (
+                          <DynamicFormField
+                            key={field.fieldname}
+                            field={field}
+                            value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+                            onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
+                            linkOptionsCache={linkOptionsCache}
+                            fetchLinkOptions={fetchLinkOptions}
+                            getDocTypeFields={getDocTypeFields}
+                            erpnextConfig={erpnextConfig}
+                            getCsrfToken={getCsrfToken}
+                            formValues={dynamicFormValues}
+                            isNew={true}
+                          />
+                        ))}
+                    </div>
+                  </div>
+                )}
+                {false && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '52vh', overflowY: 'auto', paddingRight: '6px' }}>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+
+                      {/* Left Column */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Type</label>
+                          <select
+                            value={type}
+                            onChange={(e) => setType(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none', cursor: 'pointer' }}
+                          >
+                            <option value="Company">Company</option>
+                            <option value="Individual">Individual</option>
+                          </select>
+                        </div>
+
+                        {(() => {
+                          const companyNameField = (
+                            <div key="company_name">
+                              <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>{type === 'Company' ? 'Company Name *' : 'Company Name'}</label>
+                              <input
+                                type="text"
+                                placeholder="Company Name"
+                                value={companyName}
+                                onChange={(e) => setCompanyName(e.target.value)}
+                                style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                              />
+                            </div>
+                          );
+
+                          const companyTinField = (
+                            <div key="company_tin">
+                              <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>{type === 'Company' ? 'Company TIN ID *' : 'Company TIN ID'}</label>
+                              <input
+                                type="text"
+                                placeholder="Company TIN ID"
+                                value={companyVatId}
+                                onChange={(e) => setCompanyVatId(e.target.value)}
+                                style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                              />
+                            </div>
+                          );
+
+                          const contactNameField = (
+                            <div key="contact_name">
+                              <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Name *</label>
+                              <input
+                                type="text"
+                                placeholder="Contact Name"
+                                value={contactName}
+                                onChange={(e) => setContactName(e.target.value)}
+                                style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                              />
+                            </div>
+                          );
+
+                          const emailIdField = (
+                            <div key="email_id">
+                              <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Email ID *</label>
+                              <input
+                                type="email"
+                                placeholder="e.g. email@example.com"
+                                value={emailId}
+                                onChange={(e) => setEmailId(e.target.value)}
+                                style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                              />
+                            </div>
+                          );
+
+                          const contactNumberField = (
+                            <div key="contact_number">
+                              <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Contact Number</label>
+                              <PhoneInputWithDropdown
+                                value={contactLocal ? `${contactPrefix}-${contactLocal}` : ""}
+                                onChange={(newVal) => {
+                                  const parsed = parsePhoneNumber(newVal);
+                                  setContactPrefix(parsed.prefix);
+                                  setContactLocal(parsed.local);
+                                }}
+                              />
+                            </div>
+                          );
+
+                          return type === 'Company' ? (
+                            <>
+                              {companyNameField}
+                              {companyTinField}
+                              {contactNameField}
+                              {emailIdField}
+                              {contactNumberField}
+                            </>
+                          ) : (
+                            <>
+                              {contactNameField}
+                              {emailIdField}
+                              {contactNumberField}
+                              {companyNameField}
+                              {companyTinField}
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Right Column */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        {/* <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minHeight: '38px', marginTop: '22px' }}>
                         <input
                           type="checkbox"
                           id="isInternalCustomer"
@@ -3297,534 +5090,666 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           style={{ width: '16px', height: '16px', cursor: 'pointer' }}
                         />
                         <label htmlFor="isInternalCustomer" style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer' }}>Is Internal Customer?</label>
+                      </div> */}
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Date of Birth</label>
+                          <input
+                            type="date"
+                            value={dateOfBirth}
+                            onChange={(e) => setDateOfBirth(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Address Line 1</label>
+                          <input
+                            type="text"
+                            placeholder="Address Line 1"
+                            value={addressLine1}
+                            onChange={(e) => setAddressLine1(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Address Line 2</label>
+                          <input
+                            type="text"
+                            placeholder="Address Line 2"
+                            value={addressLine2}
+                            onChange={(e) => setAddressLine2(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>City</label>
+                          <input
+                            type="text"
+                            placeholder="City"
+                            value={city}
+                            onChange={(e) => setCity(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>State</label>
+                          <input
+                            type="text"
+                            placeholder="State"
+                            value={state}
+                            onChange={(e) => setState(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Country</label>
+                          <select
+                            value={country}
+                            onChange={(e) => setCountry(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none', cursor: 'pointer' }}
+                          >
+                            <option value="">-- Choose Country --</option>
+                            {countries.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
 
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Date of Birth</label>
-                        <input
-                          type="date"
-                          value={dateOfBirth}
-                          onChange={(e) => setDateOfBirth(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Address Line 1</label>
-                        <input
-                          type="text"
-                          placeholder="Address Line 1"
-                          value={addressLine1}
-                          onChange={(e) => setAddressLine1(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Address Line 2</label>
-                        <input
-                          type="text"
-                          placeholder="Address Line 2"
-                          value={addressLine2}
-                          onChange={(e) => setAddressLine2(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>City</label>
-                        <input
-                          type="text"
-                          placeholder="City"
-                          value={city}
-                          onChange={(e) => setCity(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>State</label>
-                        <input
-                          type="text"
-                          placeholder="State"
-                          value={state}
-                          onChange={(e) => setState(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Country</label>
-                        <input
-                          type="text"
-                          placeholder="Country"
-                          value={country}
-                          onChange={(e) => setCountry(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
                     </div>
 
                   </div>
+                )}
 
-                </div>
-              )}
-
-              {activeFormTab === 'proposal' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '52vh', overflowY: 'auto', paddingRight: '6px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Proposed Business Type *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Restaurant, Office"
-                      value={proposedBusinessType}
-                      onChange={(e) => setProposedBusinessType(e.target.value)}
-                      style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                    />
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                {activeFormTab === 'proposal' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '52vh', overflowY: 'auto', paddingRight: '6px' }}>
                     <div>
-                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Required Space (sq mtr)</label>
-                      <input
-                        type="number"
-                        placeholder="e.g. 120"
-                        value={requiredSpace}
-                        onChange={(e) => setRequiredSpace(e.target.value)}
-                        style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Rental Budget ($)</label>
-                      <input
-                        type="number"
-                        placeholder="e.g. 1900000"
-                        value={budget}
-                        onChange={(e) => setBudget(e.target.value)}
-                        style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Business Background Status *</label>
-                      <select
-                        required
-                        value={businessStatus}
-                        onChange={(e) => setBusinessStatus(e.target.value)}
-                        style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                      >
-                        <option value="New">New</option>
-                        <option value="Existing">Existing</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Fitout Timeframe</label>
+                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Proposed Business Type *</label>
                       <input
                         type="text"
-                        placeholder="e.g. 45 days"
-                        value={fitoutTimeframe}
-                        onChange={(e) => setFitoutTimeframe(e.target.value)}
+                        required
+                        placeholder="e.g. Restaurant, Office"
+                        value={proposedBusinessType}
+                        onChange={(e) => setProposedBusinessType(e.target.value)}
                         style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
                       />
                     </div>
-                  </div>
 
-                  <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Range & Line of Items (Other Business)</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Clothing catalog details"
-                      value={rangeLineItems}
-                      onChange={(e) => setRangeLineItems(e.target.value)}
-                      style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                    />
-                  </div>
-
-                  {/* Menu / Pics attachment */}
-                  <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Menu & Business Pictures (Attach)</label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 14px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 600, cursor: uploadingFile ? 'not-allowed' : 'pointer' }}>
-                        {uploadingFile ? <Loader2 size={14} className="spin" /> : <Paperclip size={14} />}
-                        <span>{uploadingFile ? 'Uploading...' : 'Attach File'}</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          disabled={uploadingFile}
-                          onChange={(e) => handleFileUpload(e, setMenuAndBusinessPictures)}
-                          style={{ display: 'none' }}
-                        />
-                      </label>
-                      {menuAndBusinessPictures && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#10b981', fontWeight: 600 }}>
-                            <CheckCircle size={14} />
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '150px' }}>
-                              {menuAndBusinessPictures.split('/').pop()}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setMenuAndBusinessPictures('')}
-                            style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px' }}
-                            title="Delete Image"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                </div>
-              )}
-
-              {activeFormTab === 'booking' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '52vh', overflowY: 'auto', paddingRight: '6px' }}>
-
-                  {/* Location & Duration */}
-                  <div style={{ background: 'var(--bg-primary)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <h4 style={{ margin: 0, fontSize: '11.5px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Location & Duration</h4>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                       <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Shop Space & Location</label>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Required Space(Sqm)</label>
+                        <input
+                          type="number"
+                          placeholder="e.g. 120"
+                          value={requiredSpace}
+                          onChange={(e) => setRequiredSpace(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Rental Budget(FJD)</label>
+                        <input
+                          type="number"
+                          placeholder="e.g. 1900000"
+                          value={budget}
+                          onChange={(e) => setBudget(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Business Background Status *</label>
                         <select
-                          value={shopSpaceLocation}
-                          onChange={(e) => setShopSpaceLocation(e.target.value)}
+                          required
+                          value={businessStatus}
+                          onChange={(e) => setBusinessStatus(e.target.value)}
                           style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
                         >
-                          <option value="">Select Location</option>
-                          {districts.map(d => (
-                            <option key={d} value={d}>{d}</option>
-                          ))}
+                          <option value="New">New</option>
+                          <option value="Existing">Existing</option>
                         </select>
                       </div>
                       <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Lease Period (years)</label>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Fitout Timeframe</label>
                         <input
-                          type="number"
-                          placeholder="e.g. 3"
-                          value={leasePeriod}
-                          onChange={(e) => setLeasePeriod(e.target.value)}
+                          type="text"
+                          placeholder="e.g. 45 days"
+                          value={fitoutTimeframe}
+                          onChange={(e) => setFitoutTimeframe(e.target.value)}
                           style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
                         />
                       </div>
                     </div>
-                  </div>
 
-                  {/* Financial Terms */}
-                  <div style={{ background: 'var(--bg-primary)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <h4 style={{ margin: 0, fontSize: '11.5px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Financial Terms</h4>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Rental Charges ($)</label>
-                        <input
-                          type="number"
-                          placeholder="e.g. 5000"
-                          value={rentalCharges}
-                          onChange={(e) => setRentalCharges(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Service / Promo Charges ($)</label>
-                        <input
-                          type="number"
-                          placeholder="e.g. 1000"
-                          value={servicePromoCharges}
-                          onChange={(e) => setServicePromoCharges(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Security Deposit Fee ($)</label>
-                        <input
-                          type="number"
-                          placeholder="e.g. 15000"
-                          value={securityDepositFee}
-                          onChange={(e) => setSecurityDepositFee(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Fitout Period (Days)</label>
-                        <input
-                          type="number"
-                          placeholder="e.g. 30"
-                          value={fitoutPeriod}
-                          onChange={(e) => setFitoutPeriod(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Timeline & Possession */}
-                  <div style={{ background: 'var(--bg-primary)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <h4 style={{ margin: 0, fontSize: '11.5px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Timeline & Possession</h4>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Lease Commencement</label>
-                        <input
-                          type="date"
-                          value={leaseCommencement}
-                          onChange={(e) => setLeaseCommencement(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Vacant Possession Date</label>
-                        <input
-                          type="date"
-                          value={vacantPossessionDate}
-                          onChange={(e) => setVacantPossessionDate(e.target.value)}
-                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Usage & Operations */}
-                  <div style={{ background: 'var(--bg-primary)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <h4 style={{ margin: 0, fontSize: '11.5px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Usage & Operations</h4>
                     <div>
-                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Usage of Demised Premises</label>
+                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Range & Line of Items (Other Business)</label>
                       <input
                         type="text"
-                        placeholder="e.g. Cafe usage details"
-                        value={usageOfDemisedPremises}
-                        onChange={(e) => setUsageOfDemisedPremises(e.target.value)}
+                        placeholder="e.g. Clothing catalog details"
+                        value={rangeLineItems}
+                        onChange={(e) => setRangeLineItems(e.target.value)}
                         style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
                       />
                     </div>
+
+                    {/* Menu / Pics attachment */}
                     <div>
-                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Nature of Business</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Restaurant"
-                        value={bookingNatureBusiness}
-                        onChange={(e) => setBookingNatureBusiness(e.target.value)}
-                        style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Types of Merchandise</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Food, beverages"
-                        value={bookingMerchandiseTypes}
-                        onChange={(e) => setBookingMerchandiseTypes(e.target.value)}
-                        style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Plans Submitted for Approval</label>
+                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Menu & Business Pictures (Attach)</label>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 14px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 600, cursor: uploadingFile ? 'not-allowed' : 'pointer' }}>
                           {uploadingFile ? <Loader2 size={14} className="spin" /> : <Paperclip size={14} />}
-                          <span>{uploadingFile ? 'Uploading...' : 'Attach Plan'}</span>
+                          <span>{uploadingFile ? 'Uploading...' : 'Attach File'}</span>
                           <input
                             type="file"
+                            accept="image/*"
                             disabled={uploadingFile}
-                            onChange={(e) => handleFileUpload(e, setPlansForApproval)}
+                            onChange={(e) => handleFileUpload(e, setMenuAndBusinessPictures)}
                             style={{ display: 'none' }}
                           />
                         </label>
-                        {plansForApproval && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#10b981', fontWeight: 600 }}>
-                            <CheckCircle size={14} />
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px' }}>
-                              {plansForApproval.split('/').pop()}
-                            </span>
+                        {menuAndBusinessPictures && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#10b981', fontWeight: 600 }}>
+                              <CheckCircle size={14} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '150px' }}>
+                                {menuAndBusinessPictures.split('/').pop()}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setMenuAndBusinessPictures('')}
+                              style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px' }}
+                              title="Delete Image"
+                            >
+                              <Trash2 size={13} />
+                            </button>
                           </div>
                         )}
                       </div>
                     </div>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Facilities Required by Tenant</label>
-                      <textarea
-                        rows={2}
-                        placeholder="e.g. 3-phase electricity, grease trap..."
-                        value={facilitiesRequired}
-                        onChange={(e) => setFacilitiesRequired(e.target.value)}
-                        style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none', resize: 'none' }}
-                      />
-                    </div>
+
                   </div>
+                )}
 
-                </div>
-              )}
+                {activeFormTab === 'booking' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '52vh', overflowY: 'auto', paddingRight: '6px' }}>
 
-              {activeFormTab === 'search' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '50vh', overflowY: 'auto', paddingRight: '4px' }}>
-                  {[
-                    { key: 'inc', label: 'True Certified copies of Incorporation' },
-                    { key: 'moa', label: 'Memorandum of Associations Company' },
-                    { key: 'name_cert', label: 'Business Name Registration Certificate' },
-                    { key: 'directors_rep', label: 'Directors Reports' },
-                    { key: 'tin_letter', label: 'Tin Letter' },
-                    { key: 'bus_reg_cert', label: 'Business Registration Certificate' },
-                    { key: 'birth_cert', label: 'Birth Certificate' },
-                    { key: 'passport_photo', label: 'Passport photo of Directors' },
-                    { key: 'tin_comp_indiv', label: 'Tin Letter Company and Individual' },
-                    { key: 'photo_id', label: 'Photo ID Card' }
-                  ].map((doc) => {
-                    const docObj = formCompanySearchDocs[doc.key] || { doc: '', verified: false };
-                    const isExpanded = !!modalExpandedDocs[doc.key];
-
-                    const handleUpdateDoc = (docUrl) => {
-                      setFormCompanySearchDocs(prev => ({
-                        ...prev,
-                        [doc.key]: { ...prev[doc.key], doc: docUrl }
-                      }));
-                    };
-
-                    const handleToggleVerified = (verifiedVal) => {
-                      setFormCompanySearchDocs(prev => ({
-                        ...prev,
-                        [doc.key]: { ...prev[doc.key], verified: verifiedVal }
-                      }));
-                    };
-
-                    return (
-                      <div
-                        key={doc.key}
-                        style={{
-                          border: '1px solid var(--border-color)',
-                          borderRadius: '8px',
-                          padding: '12px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '10px',
-                          background: 'var(--bg-secondary)'
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', maxWidth: '65%' }}>
-                            {doc.label}
-                          </span>
-                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '11.5px', fontWeight: 600 }}>
-                            <input
-                              type="checkbox"
-                              checked={docObj.verified}
-                              onChange={(e) => handleToggleVerified(e.target.checked)}
-                              style={{ accentColor: 'var(--brand-color)' }}
-                            />
-                            <span style={{ color: docObj.verified ? '#10b981' : 'var(--text-secondary)' }}>
-                              {docObj.verified ? 'Verified' : 'Verify'}
-                            </span>
-                          </label>
+                    {/* Location & Duration */}
+                    <div style={{ background: 'var(--bg-primary)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <h4 style={{ margin: 0, fontSize: '11.5px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Location & Duration</h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Shop Space & Location</label>
+                          <select
+                            value={shopSpaceLocation}
+                            onChange={(e) => setShopSpaceLocation(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          >
+                            <option value="">Select Location</option>
+                            {districts.map(d => (
+                              <option key={d} value={d}>{d}</option>
+                            ))}
+                          </select>
                         </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Lease Period (years)</label>
+                          <input
+                            type="number"
+                            placeholder="e.g. 3"
+                            value={leasePeriod}
+                            onChange={(e) => setLeasePeriod(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', borderRadius: '6px', fontSize: '11px', fontWeight: 600, cursor: uploadingFile ? 'not-allowed' : 'pointer' }}>
-                            <Paperclip size={12} />
-                            <span>{uploadingFile ? 'Uploading...' : 'Attach File'}</span>
+                    {/* Financial Terms */}
+                    <div style={{ background: 'var(--bg-primary)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <h4 style={{ margin: 0, fontSize: '11.5px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Financial Terms</h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Rental Charges ($)</label>
+                          <input
+                            type="number"
+                            placeholder="e.g. 5000"
+                            value={rentalCharges}
+                            onChange={(e) => setRentalCharges(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Service / Promo Charges ($)</label>
+                          <input
+                            type="number"
+                            placeholder="e.g. 1000"
+                            value={servicePromoCharges}
+                            onChange={(e) => setServicePromoCharges(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Security Deposit Fee ($)</label>
+                          <input
+                            type="number"
+                            placeholder="e.g. 15000"
+                            value={securityDepositFee}
+                            onChange={(e) => setSecurityDepositFee(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Fitout Period (Days)</label>
+                          <input
+                            type="number"
+                            placeholder="e.g. 30"
+                            value={fitoutPeriod}
+                            onChange={(e) => setFitoutPeriod(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Timeline & Possession */}
+                    <div style={{ background: 'var(--bg-primary)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <h4 style={{ margin: 0, fontSize: '11.5px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Timeline & Possession</h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Lease Commencement</label>
+                          <input
+                            type="date"
+                            value={leaseCommencement}
+                            onChange={(e) => setLeaseCommencement(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Vacant Possession Date</label>
+                          <input
+                            type="date"
+                            value={vacantPossessionDate}
+                            onChange={(e) => setVacantPossessionDate(e.target.value)}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Usage & Operations */}
+                    <div style={{ background: 'var(--bg-primary)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <h4 style={{ margin: 0, fontSize: '11.5px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Usage & Operations</h4>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Usage of Demised Premises</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Cafe usage details"
+                          value={usageOfDemisedPremises}
+                          onChange={(e) => setUsageOfDemisedPremises(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Nature of Business</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Restaurant"
+                          value={bookingNatureBusiness}
+                          onChange={(e) => setBookingNatureBusiness(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Types of Merchandise</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Food, beverages"
+                          value={bookingMerchandiseTypes}
+                          onChange={(e) => setBookingMerchandiseTypes(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Plans Submitted for Approval</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 14px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 600, cursor: uploadingFile ? 'not-allowed' : 'pointer' }}>
+                            {uploadingFile ? <Loader2 size={14} className="spin" /> : <Paperclip size={14} />}
+                            <span>{uploadingFile ? 'Uploading...' : 'Attach Plan'}</span>
                             <input
                               type="file"
                               disabled={uploadingFile}
-                              onChange={(e) => handleFileUpload(e, handleUpdateDoc)}
+                              onChange={(e) => handleFileUpload(e, setPlansForApproval)}
                               style={{ display: 'none' }}
                             />
                           </label>
-
-                          {docObj.doc && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                              <span style={{ fontSize: '11px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {docObj.doc.split('/').pop()}
+                          {plansForApproval && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#10b981', fontWeight: 600 }}>
+                              <CheckCircle size={14} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px' }}>
+                                {plansForApproval.split('/').pop()}
                               </span>
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateDoc('')}
-                                style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '11px', padding: 0, marginLeft: 'auto' }}
-                              >
-                                Remove
-                              </button>
                             </div>
                           )}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Facilities Required by Tenant</label>
+                        <textarea
+                          rows={2}
+                          placeholder="e.g. 3-phase electricity, grease trap..."
+                          value={facilitiesRequired}
+                          onChange={(e) => setFacilitiesRequired(e.target.value)}
+                          style={{ width: '100%', padding: '10px 14px', fontSize: '13px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', outline: 'none', resize: 'none' }}
+                        />
+                      </div>
+                    </div>
 
-              {/* Submit buttons */}
-              <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
-                <button
-                  type="button"
-                  onClick={() => { setShowModal(false); resetFormFields(); }}
-                  disabled={submitting}
-                  style={{ flex: 1, padding: '10px', fontSize: '13px', fontWeight: 600, border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: 'pointer' }}
-                >
-                  Cancel
-                </button>
+                  </div>
+                )}
 
-                <div style={{ display: 'flex', gap: '12px', flex: 2 }}>
-                  {activeFormTab !== 'search' && (
+                {activeFormTab === 'search' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '56vh', overflowY: 'auto', paddingRight: '4px' }}>
+                    {[
+                      { key: 'inc', label: 'True Certified copies of Incorporation' },
+                      { key: 'moa', label: 'Memorandum of Associations Company' },
+                      { key: 'name_cert', label: 'Business name registration certificate.' },
+                      { key: 'directors_rep', label: 'Directors Reports' },
+                      { key: 'tin_letter', label: 'Tin Letter' },
+                      { key: 'bus_reg_cert', label: 'Business Registration Certificate' },
+                      { key: 'birth_cert', label: 'Birth Certificate' },
+                      { key: 'passport_photo', label: 'Passport photo of Directors' },
+                      { key: 'tin_comp_indiv', label: 'Tin Letter Company and Individual' },
+                      { key: 'photo_id', label: 'Photo ID Card' }
+                    ].map((doc) => {
+                      const docObj = formCompanySearchDocs[doc.key] || { doc: '', verified: false };
+                      const isExpanded = !!modalExpandedDocs[doc.key];
+
+                      const handleUpdateDoc = (docUrl) => {
+                        setFormCompanySearchDocs(prev => ({
+                          ...prev,
+                          [doc.key]: { ...prev[doc.key], doc: docUrl }
+                        }));
+                      };
+
+                      const handleToggleVerified = (verifiedVal) => {
+                        setFormCompanySearchDocs(prev => ({
+                          ...prev,
+                          [doc.key]: { ...prev[doc.key], verified: verifiedVal }
+                        }));
+                      };
+
+                      let statusText = 'Pending Upload';
+                      let statusColor = 'var(--text-muted, #94a3b8)';
+                      let statusBg = 'rgba(156, 163, 175, 0.1)';
+                      if (docObj.doc) {
+                        if (docObj.verified) {
+                          statusText = 'Verified';
+                          statusColor = '#10b981';
+                          statusBg = 'rgba(16, 185, 129, 0.1)';
+                        } else {
+                          statusText = 'Needs Verification';
+                          statusColor = '#d97706';
+                          statusBg = 'rgba(217, 119, 6, 0.1)';
+                        }
+                      }
+
+                      return (
+                        <div
+                          key={doc.key}
+                          style={{
+                            background: 'var(--bg-primary, #ffffff)',
+                            border: '1px solid var(--border-color, #e2e8f0)',
+                            borderRadius: '12px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            transition: 'all 0.2s ease',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                            overflow: 'hidden'
+                          }}
+                        >
+                          {/* Header Row - Click to collapse/expand */}
+                          <div
+                            onClick={() => toggleModalDocExpand(doc.key)}
+                            style={{
+                              padding: '12px 16px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              cursor: 'pointer',
+                              background: isExpanded ? 'var(--bg-secondary, #f8fafc)' : 'transparent',
+                              transition: 'background 0.2s ease'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                              {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
+                              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary, #0f172a)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {doc.label}
+                              </span>
+                              <span style={{
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                background: statusBg,
+                                color: statusColor,
+                                marginLeft: '8px'
+                              }}>
+                                {statusText}
+                              </span>
+                            </div>
+
+                            {/* Verify toggle checkbox */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <label
+                                onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  cursor: docObj.doc ? 'pointer' : 'not-allowed',
+                                  fontSize: '11.5px',
+                                  fontWeight: 600,
+                                  opacity: docObj.doc ? 1 : 0.4,
+                                  color: 'var(--text-secondary, #475569)'
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  disabled={!docObj.doc}
+                                  checked={docObj.verified}
+                                  onChange={(e) => handleToggleVerified(e.target.checked)}
+                                  style={{ accentColor: 'var(--brand-color, #2563eb)' }}
+                                />
+                                <span>Verify Draft</span>
+                              </label>
+                            </div>
+                          </div>
+
+                          {/* Expanded Content Panel */}
+                          {isExpanded && (
+                            <div style={{
+                              padding: '16px',
+                              borderTop: '1px solid var(--border-color, #e2e8f0)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '12px',
+                              background: 'var(--bg-secondary, #f8fafc)'
+                            }}>
+                              {docObj.doc ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const fullUrl = docObj.doc.startsWith('http') ? docObj.doc : `${erpnextConfig.url}${docObj.doc}`;
+                                      setPreviewDocUrl(fullUrl);
+                                      setPreviewDocTitle(doc.label);
+                                    }}
+                                    style={{
+                                      background: 'transparent',
+                                      border: 'none',
+                                      color: 'var(--brand-color, #2563eb)',
+                                      fontSize: '12px',
+                                      fontWeight: 600,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      padding: 0,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                  >
+                                    <Eye size={13} style={{ flexShrink: 0 }} />
+                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      Preview: {docObj.doc.split('/').pop()}
+                                    </span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateDoc('')}
+                                    style={{
+                                      background: 'transparent',
+                                      border: 'none',
+                                      color: '#ef4444',
+                                      cursor: 'pointer',
+                                      fontSize: '11px',
+                                      fontWeight: 700,
+                                      padding: '4px 8px',
+                                      borderRadius: '4px',
+                                      border: '1px solid var(--border-color, #e2e8f0)',
+                                      marginLeft: 'auto',
+                                      transition: 'all 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.05)'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                  <label style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '8px',
+                                    padding: '8px 16px',
+                                    border: '1px solid var(--border-color, #cbd5e1)',
+                                    background: 'var(--bg-primary, #ffffff)',
+                                    borderRadius: '8px',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                                    width: 'fit-content',
+                                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                    transition: 'all 0.2s'
+                                  }}>
+                                    <Paperclip size={14} />
+                                    <span>{uploadingFile ? 'Uploading...' : 'Attach Document'}</span>
+                                    <input
+                                      type="file"
+                                      disabled={uploadingFile}
+                                      onChange={(e) => handleFileUpload(e, handleUpdateDoc)}
+                                      style={{ display: 'none' }}
+                                    />
+                                  </label>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Submit buttons */}
+                <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                  <button
+                    type="button"
+                    onClick={() => { setShowModal(false); resetFormFields(); }}
+                    disabled={submitting}
+                    style={{ flex: 1, padding: '10px', fontSize: '13px', fontWeight: 600, border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+
+                  <div style={{ display: 'flex', gap: '12px', flex: 2 }}>
+                    {safeTabIdx < activeSections.length - 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentFields = activeSections[safeTabIdx]?.fields || [];
+                          const missing = currentFields.filter(f => isFieldRequired(f, dynamicFormValues) && (dynamicFormValues[f.fieldname] === undefined || dynamicFormValues[f.fieldname] === null || String(dynamicFormValues[f.fieldname]).trim() === ''));
+                          if (missing.length > 0) {
+                            alert(`Please fill in the following mandatory fields first: ${missing.map(f => f.label || f.fieldname).join(', ')}`, 'error');
+                            return;
+                          }
+                          setActiveDynamicTabIdx(safeTabIdx + 1);
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: '10px',
+                          fontSize: '13px',
+                          fontWeight: 700,
+                          border: '1.5px solid var(--brand-color, #2563eb)',
+                          borderRadius: '6px',
+                          background: 'var(--bg-accent-alpha, rgba(37, 99, 235, 0.08))',
+                          color: 'var(--brand-color, #2563eb)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 6,
+                          boxShadow: '0 2px 6px rgba(37, 99, 235, 0.05)',
+                          transition: 'all 0.2s ease'
+                        }}
+                      >
+                        <span>Save & Next</span>
+                        <ArrowRight size={14} />
+                      </button>
+                    )}
                     <button
-                      type="button"
-                      onClick={() => {
-                        if (activeFormTab === 'basic') setActiveFormTab('proposal');
-                        else if (activeFormTab === 'proposal') setActiveFormTab('booking');
-                        else if (activeFormTab === 'booking') setActiveFormTab('search');
-                      }}
+                      type="submit"
+                      disabled={submitting || uploadingFile || !isFormValid}
                       style={{
                         flex: 1,
                         padding: '10px',
                         fontSize: '13px',
-                        fontWeight: 700,
-                        border: '1.5px solid var(--brand-color, #2563eb)',
+                        fontWeight: 600,
+                        border: 'none',
                         borderRadius: '6px',
-                        background: 'var(--bg-accent-alpha, rgba(37, 99, 235, 0.08))',
-                        color: 'var(--brand-color, #2563eb)',
-                        cursor: 'pointer',
+                        background: (submitting || uploadingFile || !isFormValid) ? 'var(--border-color, #d1d5db)' : 'var(--brand-color, #2563eb)',
+                        color: (submitting || uploadingFile || !isFormValid) ? 'var(--text-muted, #9ca3af)' : '#fff',
+                        cursor: (submitting || uploadingFile || !isFormValid) ? 'not-allowed' : 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         gap: 6,
-                        boxShadow: '0 2px 6px rgba(37, 99, 235, 0.05)',
                         transition: 'all 0.2s ease'
                       }}
                     >
-                      <span>Save & Next</span>
-                      <ArrowRight size={14} />
+                      {submitting ? 'Creating...' : 'Submit'}
                     </button>
-                  )}
-                  <button
-                    type="submit"
-                    disabled={submitting || uploadingFile || !isFormValid}
-                    style={{
-                      flex: 1,
-                      padding: '10px',
-                      fontSize: '13px',
-                      fontWeight: 600,
-                      border: 'none',
-                      borderRadius: '6px',
-                      background: (submitting || uploadingFile || !isFormValid) ? 'var(--border-color, #d1d5db)' : 'var(--brand-color, #2563eb)',
-                      color: (submitting || uploadingFile || !isFormValid) ? 'var(--text-muted, #9ca3af)' : '#fff',
-                      cursor: (submitting || uploadingFile || !isFormValid) ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      transition: 'all 0.2s ease'
-                    }}
-                  >
-                    {submitting ? 'Creating...' : 'Submit'}
-                  </button>
+                  </div>
                 </div>
-              </div>
 
-            </form>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
 
 
@@ -3958,6 +5883,169 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {alertModal.show && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.4)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <div style={{
+            background: 'var(--bg-primary, #ffffff)',
+            borderRadius: '16px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            width: '100%',
+            maxWidth: '400px',
+            padding: '24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+            border: '1px solid var(--border-color, #e2e8f0)',
+            transform: 'scale(1)',
+            transition: 'transform 0.2s ease-out'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: alertModal.type === 'error' ? '#fee2e2' : (alertModal.type === 'success' ? '#d1fae5' : '#fef3c7'),
+                color: alertModal.type === 'error' ? '#ef4444' : (alertModal.type === 'success' ? '#10b981' : '#f59e0b')
+              }}>
+                {alertModal.type === 'error' ? <AlertCircle size={20} /> : (alertModal.type === 'success' ? <CheckCircle size={20} /> : <Info size={20} />)}
+              </div>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
+                {alertModal.title}
+              </h3>
+            </div>
+            <p style={{ margin: 0, fontSize: '13.5px', color: 'var(--text-secondary, #475569)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+              {alertModal.message}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+              <button
+                onClick={() => setAlertModal(prev => ({ ...prev, show: false }))}
+                style={{
+                  padding: '8px 20px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: alertModal.type === 'error' ? '#ef4444' : (alertModal.type === 'success' ? '#10b981' : 'var(--brand-color, #2563eb)'),
+                  color: '#ffffff',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)'
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmModal.show && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.4)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 10000,
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <div style={{
+            background: 'var(--bg-primary, #ffffff)',
+            borderRadius: '16px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            width: '100%',
+            maxWidth: '400px',
+            padding: '24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+            border: '1px solid var(--border-color, #e2e8f0)',
+            transform: 'scale(1)',
+            transition: 'transform 0.2s ease-out'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: '#fef3c7',
+                color: '#f59e0b'
+              }}>
+                <Info size={20} />
+              </div>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
+                Confirm Action
+              </h3>
+            </div>
+            <p style={{ margin: 0, fontSize: '13.5px', color: 'var(--text-secondary, #475569)', lineHeight: 1.5 }}>
+              {confirmModal.message}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '4px' }}>
+              <button
+                onClick={() => {
+                  confirmModal.resolve(false);
+                  setConfirmModal(prev => ({ ...prev, show: false }));
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-color, #e2e8f0)',
+                  background: 'var(--bg-primary, #ffffff)',
+                  color: 'var(--text-secondary, #475569)',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  confirmModal.resolve(true);
+                  setConfirmModal(prev => ({ ...prev, show: false }));
+                }}
+                style={{
+                  padding: '8px 20px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: 'var(--brand-color, #2563eb)',
+                  color: '#ffffff',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)'
+                }}
+              >
+                Confirm
+              </button>
+            </div>
           </div>
         </div>
       )}

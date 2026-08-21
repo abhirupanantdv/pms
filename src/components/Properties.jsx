@@ -3123,7 +3123,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
             padding: 0,
             height: '100%',
             overflowY: 'auto',
-            minHeight: 0
+            minHeight: 0,
+            filter: selectedProp ? 'blur(4px)' : 'none',
+            transition: 'filter 0.3s ease'
           }}>
             <div className="table-container" style={{ border: 'none', marginTop: 0 }}>
               <table className="custom-table">
