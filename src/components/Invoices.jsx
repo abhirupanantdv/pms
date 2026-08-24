@@ -310,7 +310,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
         <div className="card-panel" style={{
           padding: 0,
           overflow: 'hidden',
-          filter: selectedInvoice ? 'blur(4px)' : 'none',
+          filter: 'none',
           transition: 'filter 0.3s ease'
         }}>
           <div className="table-container">

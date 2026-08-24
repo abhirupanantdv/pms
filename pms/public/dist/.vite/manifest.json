@@ -1,6 +1,6 @@
 {
   "index.html": {
-    "file": "assets/index-BMv43UMW.js",
+    "file": "assets/index-BtCr7ORU.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -8,9 +8,14 @@
       "assets/index-fpi9ApVR.css"
     ],
     "assets": [
+      "assets/home-D8J3-NJd.png",
       "assets/new-house-6oOLwp4_.png",
-      "assets/home-D8J3-NJd.png"
+      "assets/Billing-summary-CIiJB8H7.png"
     ]
+  },
+  "src/assets/Billing-summary.png": {
+    "file": "assets/Billing-summary-CIiJB8H7.png",
+    "src": "src/assets/Billing-summary.png"
   },
   "src/assets/home.png": {
     "file": "assets/home-D8J3-NJd.png",

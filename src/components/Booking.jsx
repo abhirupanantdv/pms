@@ -2178,7 +2178,10 @@
 
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Calendar, User, Building, DollarSign, Plus, X, Search, Filter, Loader, Eye, RefreshCw, CheckCircle2, FileText, PenLine, ChevronDown, AlertCircle, CheckCircle, XCircle, Printer } from 'lucide-react';
+import { Calendar, User, Building, DollarSign, Plus, X, Search, Filter, Loader, Eye, RefreshCw, CheckCircle2, FileText, PenLine, ChevronDown, AlertCircle, CheckCircle, XCircle, Printer, Mail, Phone, Tag, Settings } from 'lucide-react';
+import homeImg from '../assets/home.png';
+import houseImg from '../assets/new-house.png';
+import billingSummaryImg from '../assets/Billing-summary.png';
 
 const getCsrfToken = () => {
   if (typeof window !== 'undefined' && window.csrf_token) {
@@ -2579,7 +2582,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
     setLoadingTemplates(true);
     try {
       const res = await fetch(
-        `${erpnextConfig.url}/api/resource/${encodeURIComponent('Contract Template')}?fields=["name","title"]&limit_page_length=200`,
+        `${erpnextConfig.url}/api/resource/Contract%20Template?fields=["name","title"]&filters=[["custom_reference_type","=","Contract"]]&limit_page_length=200`,
         {
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' }
@@ -2588,6 +2591,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
       if (res.ok) {
         const json = await res.json();
         setContractTemplates(json.data || []);
+        console.log(json.data);
       }
     } catch (err) {
       console.warn('Failed to fetch contract templates:', err);
@@ -3193,7 +3197,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
       </div>
 
       {/* Grid view containing list & inspector */}
-      <div className="grid-2col" style={{ gridTemplateColumns: selectedBookingId ? '60% calc(40% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
+      <div className="grid-2col" style={{ gridTemplateColumns: selectedBookingId ? '50% calc(50% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
 
         {/* Booking Table Card */}
         <div className="card-panel" style={{
@@ -3319,12 +3323,31 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
         {selectedBookingId && (
           <div className="card-panel" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 18 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: 12 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--brand-color)' }}>{selectedBookingId} Details</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: '#e6f4ea', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Calendar size={14} style={{ color: '#137333' }} />
+                </div>
+                <span style={{ fontSize: '15px', fontWeight: 700, color: '#137333' }}>{selectedBookingId}</span>
+              </div>
               <button
                 onClick={() => setSelectedBookingId(null)}
-                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                style={{
+                  background: 'rgba(15, 23, 42, 0.05)',
+                  border: 'none',
+                  borderRadius: '50%',
+                  width: '28px',
+                  height: '28px',
+                  color: '#0f172a',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'background 0.2s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(15, 23, 42, 0.1)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(15, 23, 42, 0.05)'}
               >
-                <X size={18} />
+                <X size={16} />
               </button>
             </div>
 
@@ -3337,143 +3360,389 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
                 {/* Visual Header */}
-                <div style={{ background: 'var(--bg-tertiary)', padding: 16, borderRadius: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                    <Calendar size={18} style={{ color: 'var(--brand-color)' }} />
-                    <strong style={{ fontSize: 15, color: 'var(--text-primary)' }}>{selectedBookingDetails.property || 'Property Unit'}</strong>
+                <div style={{
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' viewBox='0 0 800 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23f0fdf4' stop-opacity='0.95'/%3E%3Cstop offset='60%25' stop-color='%23f8fafc' stop-opacity='0.7'/%3E%3Cstop offset='100%25' stop-color='%23ffffff' stop-opacity='1'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100%25' height='100%25' fill='url(%23g)'/%3E%3Cpath d='M-100 150 C 150 50, 250 250, 500 150 S 650 50, 900 150' stroke='rgba(16, 185, 129, 0.09)' fill='none' stroke-width='4.5'/%3E%3Cpath d='M-50 200 C 200 100, 300 300, 550 200 S 700 100, 950 200' stroke='rgba(16, 185, 129, 0.05)' fill='none' stroke-width='2.5'/%3E%3C/svg%3E")`,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  border: '1px solid #e2e8f0',
+                  borderLeft: '4px solid #10b981',
+                  borderRadius: '12px',
+                  padding: '16px 20px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  minHeight: '96px',
+                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', zIndex: 1 }}>
+                    <div style={{
+                      width: '56px',
+                      height: '56px',
+                      borderRadius: '50%',
+                      backgroundColor: '#ffffff',
+                      boxShadow: '0 4px 10px rgba(0, 0, 0, 0.06)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                      border: '1px solid #e2e8f0'
+                    }}>
+                      <img src={homeImg} alt="Property" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <strong style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>{selectedBookingDetails.property || 'Booking Details'}</strong>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
+                        <span style={{
+                          fontSize: '10.5px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '12px',
+                          background: '#e6f4ea',
+                          color: '#137333',
+                          border: '1px solid rgba(19, 115, 51, 0.15)',
+                          textTransform: 'capitalize'
+                        }}>
+                          Type: {selectedBookingDetails.booking_type || 'Lease'}
+                        </span>
+                        <span style={{
+                          fontSize: '10.5px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '12px',
+                          background: '#e0f2fe',
+                          color: '#0369a1',
+                          border: '1px solid rgba(3, 105, 161, 0.15)'
+                        }}>
+                          Status: {selectedBookingDetails.workflow_state || selectedBookingDetails.status || 'Pending'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    Type: <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.booking_type}</strong> | Status: <strong style={{ color: 'var(--color-success)' }}>{selectedBookingDetails.workflow_state || selectedBookingDetails.status || 'Pending'}</strong>
+
+                  {/* Right Side Illustration */}
+                  <div style={{
+                    position: 'absolute',
+                    right: 0,
+                    bottom: 0,
+                    top: 0,
+                    zIndex: 0,
+                    width: '150px',
+                    display: 'flex',
+                    alignItems: 'flex-end',
+                    justifyContent: 'flex-end',
+                    overflow: 'hidden'
+                  }}>
+                    <img
+                      src={houseImg}
+                      alt="Illustration"
+                      style={{ height: '90%', width: 'auto', objectFit: 'contain', opacity: 0.25 }}
+                    />
                   </div>
                 </div>
 
-                {/* Details list */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Booking Date:</span>
-                    <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.booking_date}</strong>
-                  </div>
+                {/* Details card wrapper */}
+                {(() => {
+                  const isWaitingForContractSubmit = selectedBookingDetails.workflow_state === 'Waiting For Contract Submit' || selectedBookingDetails.status === 'Waiting For Contract Submit';
+                  return (
+                    <div style={{
+                      border: '1px solid var(--border-color, #e2e8f0)',
+                      borderRadius: '12px',
+                      padding: '16px',
+                      background: '#ffffff',
+                      display: 'grid',
+                      gridTemplateColumns: '1.15fr 0.85fr',
+                      gap: '20px',
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02)'
+                    }}>
+                      {/* Left Column: General info */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', justifyContent: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Calendar size={14} style={{ color: '#10b981' }} />
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Booking Date</span>
+                          </div>
+                          <strong style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)' }}>{selectedBookingDetails.booking_date}</strong>
+                        </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Customer Name:</span>
-                    <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.customer_name}</strong>
-                  </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <User size={14} style={{ color: '#10b981' }} />
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Customer Name</span>
+                          </div>
+                          <strong style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)' }}>{selectedBookingDetails.customer_name}</strong>
+                        </div>
 
-                  {selectedBookingDetails.customer_email && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                      <span style={{ color: 'var(--text-muted)' }}>Customer Email:</span>
-                      <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.customer_email}</strong>
-                    </div>
-                  )}
+                        {selectedBookingDetails.customer_email && (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Mail size={14} style={{ color: '#10b981' }} />
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Customer Email</span>
+                            </div>
+                            <strong style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)', wordBreak: 'break-all', marginLeft: '10px' }}>{selectedBookingDetails.customer_email}</strong>
+                          </div>
+                        )}
 
-                  {selectedBookingDetails.customer_phone_no && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                      <span style={{ color: 'var(--text-muted)' }}>Phone Number:</span>
-                      <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.customer_phone_no}</strong>
-                    </div>
-                  )}
+                        {selectedBookingDetails.customer_phone_no && (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Phone size={14} style={{ color: '#10b981' }} />
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Phone Number</span>
+                            </div>
+                            <strong style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)' }}>{selectedBookingDetails.customer_phone_no}</strong>
+                          </div>
+                        )}
 
-                  {(() => {
-                    const isWaitingForContractSubmit = selectedBookingDetails.workflow_state === 'Waiting For Contract Submit' || selectedBookingDetails.status === 'Waiting For Contract Submit';
-                    if (isWaitingForContractSubmit) {
-                      return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 10 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Start Date:</span>
+                        {selectedBookingDetails.quotation && (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <FileText size={14} style={{ color: '#10b981' }} />
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Quotation Id</span>
+                            </div>
+                            <strong style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)' }}>{selectedBookingDetails.quotation}</strong>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Right Column: Editable / Read-only Dates */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', justifyContent: 'center' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted, #6b7280)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Calendar size={13} style={{ color: '#10b981' }} />
+                            <span>Start Date</span>
+                          </label>
+                          {isWaitingForContractSubmit ? (
                             <input
                               type="date"
                               value={editStartDate}
                               onChange={(e) => setEditStartDate(e.target.value)}
-                              className="form-input"
-                              style={{ width: '150px', fontSize: 12, padding: '4px 8px' }}
+                              style={{
+                                width: '100%',
+                                fontSize: '12px',
+                                padding: '6px 10px',
+                                borderRadius: '8px',
+                                border: '1px solid #d1d5db',
+                                outline: 'none',
+                                color: '#1f2937',
+                                fontWeight: 500
+                              }}
                             />
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>End Date:</span>
+                          ) : (
+                            <div style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)', fontWeight: 700, padding: '6px 10px', border: '1px solid #e2e8f0', background: '#f8fafc', borderRadius: '8px' }}>
+                              {selectedBookingDetails.starting_date || selectedBookingDetails.start_date || 'N/A'}
+                            </div>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted, #6b7280)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Calendar size={13} style={{ color: '#10b981' }} />
+                            <span>End Date</span>
+                          </label>
+                          {isWaitingForContractSubmit ? (
                             <input
                               type="date"
                               value={editEndDate}
                               onChange={(e) => setEditEndDate(e.target.value)}
-                              className="form-input"
-                              style={{ width: '150px', fontSize: 12, padding: '4px 8px' }}
+                              style={{
+                                width: '100%',
+                                fontSize: '12px',
+                                padding: '6px 10px',
+                                borderRadius: '8px',
+                                border: '1px solid #d1d5db',
+                                outline: 'none',
+                                color: '#1f2937',
+                                fontWeight: 500
+                              }}
                             />
-                          </div>
+                          ) : (
+                            <div style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)', fontWeight: 700, padding: '6px 10px', border: '1px solid #e2e8f0', background: '#f8fafc', borderRadius: '8px' }}>
+                              {selectedBookingDetails.ending_date || selectedBookingDetails.end_date || 'N/A'}
+                            </div>
+                          )}
+                        </div>
+
+                        {isWaitingForContractSubmit && (
                           <button
                             onClick={handleUpdateBookingDates}
                             disabled={updatingDates}
-                            className="btn btn-sm btn-primary"
-                            style={{ alignSelf: 'flex-end', marginTop: 4, padding: '4px 12px', fontSize: 11 }}
+                            style={{
+                              width: '100%',
+                              backgroundColor: '#10b981',
+                              border: '1px solid #10b981',
+                              color: '#ffffff',
+                              padding: '8px 12px',
+                              borderRadius: '8px',
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '6px',
+                              marginTop: '4px',
+                              transition: 'background 0.2s'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#059669'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#10b981'}
                           >
-                            {updatingDates ? 'Updating...' : 'Update Dates'}
+                            <Calendar size={14} />
+                            <span>{updatingDates ? 'Updating...' : 'Update Dates'}</span>
                           </button>
-                        </div>
-                      );
-                    } else {
-                      return (
-                        <>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Start Date:</span>
-                            <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.starting_date || selectedBookingDetails.start_date || 'N/A'}</strong>
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                            <span style={{ color: 'var(--text-muted)' }}>End Date:</span>
-                            <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.ending_date || selectedBookingDetails.end_date || 'N/A'}</strong>
-                          </div>
-                        </>
-                      );
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Metric metrics grid row */}
+                {(() => {
+                  const totalDaysVal = (() => {
+                    const start = editStartDate;
+                    const end = editEndDate;
+                    if (start && end) {
+                      const startDate = new Date(start);
+                      const endDate = new Date(end);
+                      if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) {
+                        const diffTime = endDate.getTime() - startDate.getTime();
+                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        return diffDays >= 0 ? diffDays : 'N/A';
+                      }
                     }
-                  })()}
+                    return selectedBookingDetails.total_days || 'N/A';
+                  })();
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Total Days:</span>
-                    <strong style={{ color: 'var(--text-secondary)' }}>
-                      {(() => {
-                        const start = editStartDate;
-                        const end = editEndDate;
-                        if (start && end) {
-                          const startDate = new Date(start);
-                          const endDate = new Date(end);
-                          if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) {
-                            const diffTime = endDate.getTime() - startDate.getTime();
-                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                            return diffDays >= 0 ? diffDays : 'N/A';
-                          }
-                        }
-                        return selectedBookingDetails.total_days || 'N/A';
-                      })()}
-                    </strong>
-                  </div>
+                  const billingCycleVal = (() => {
+                    const cycle = selectedBookingDetails.billing_cycle || selectedBookingDetails.billing_cycle_date;
+                    if (!cycle) return 'N/A';
+                    const date = new Date(cycle);
+                    if (!isNaN(date.getTime()) && String(cycle).includes('-')) {
+                      return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+                    }
+                    return cycle;
+                  })();
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Billing Cycle Date:</span>
-                    <strong style={{ color: 'var(--text-secondary)' }}>
-                      {(() => {
-                        const cycle = selectedBookingDetails.billing_cycle || selectedBookingDetails.billing_cycle_date;
-                        if (!cycle) return 'N/A';
-                        const date = new Date(cycle);
-                        if (!isNaN(date.getTime()) && String(cycle).includes('-')) {
-                          return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
-                        }
-                        return cycle;
-                      })()}
-                    </strong>
-                  </div>
+                  const paymentMethodVal = selectedBookingDetails.payment_method || 'Cash';
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--bg-tertiary)', paddingBottom: 6 }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Payment Method:</span>
-                    <strong style={{ color: 'var(--text-secondary)' }}>{selectedBookingDetails.payment_method || 'Cash'}</strong>
-                  </div>
-                </div>
+                  return (
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, 1fr)',
+                      gap: '12px',
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02)'
+                    }}>
+                      {/* Card 1: Total Days */}
+                      <div style={{
+                        border: '1px solid var(--border-color, #e2e8f0)',
+                        borderRadius: '12px',
+                        padding: '12px 14px',
+                        background: '#ffffff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px'
+                      }}>
+                        <div style={{
+                          width: '36px',
+                          height: '36px',
+                          borderRadius: '50%',
+                          backgroundColor: '#e6f4ea',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}>
+                          <Calendar size={18} style={{ color: '#137333' }} />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontSize: '10px', color: '#6b7280', fontWeight: 600 }}>Total Days</span>
+                          <strong style={{ fontSize: '18px', fontWeight: 800, color: '#137333', marginTop: '2px' }}>{totalDaysVal}</strong>
+                        </div>
+                      </div>
+
+                      {/* Card 2: Billing Cycle Date */}
+                      <div style={{
+                        border: '1px solid var(--border-color, #e2e8f0)',
+                        borderRadius: '12px',
+                        padding: '12px 14px',
+                        background: '#ffffff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px'
+                      }}>
+                        <div style={{
+                          width: '36px',
+                          height: '36px',
+                          borderRadius: '50%',
+                          backgroundColor: '#eef2ff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}>
+                          <RefreshCw size={16} style={{ color: '#4f46e5' }} />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontSize: '10px', color: '#6b7280', fontWeight: 600 }}>Billing Cycle Date</span>
+                          <strong style={{ fontSize: '18px', fontWeight: 800, color: '#4f46e5', marginTop: '2px' }}>{billingCycleVal}</strong>
+                        </div>
+                      </div>
+
+                      {/* Card 3: Payment Method */}
+                      <div style={{
+                        border: '1px solid var(--border-color, #e2e8f0)',
+                        borderRadius: '12px',
+                        padding: '12px 14px',
+                        background: '#ffffff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px'
+                      }}>
+                        <div style={{
+                          width: '36px',
+                          height: '36px',
+                          borderRadius: '50%',
+                          backgroundColor: '#fffbeb',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}>
+                          <DollarSign size={16} style={{ color: '#d97706' }} />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontSize: '10px', color: '#6b7280', fontWeight: 600 }}>Payment Method</span>
+                          <strong style={{ fontSize: '18px', fontWeight: 800, color: '#d97706', marginTop: '2px' }}>{paymentMethodVal}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* BOOKING ITEMS TABLE */}
                 {selectedBookingDetails.booking_item && selectedBookingDetails.booking_item.length > 0 && (
-                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 4, overflow: 'hidden', marginTop: 4 }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                  <div style={{ border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden', marginTop: 4, boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02)' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', textAlign: 'left' }}>
                       <thead>
-                        <tr style={{ background: '#1f2937', color: '#ffffff', borderBottom: '1px solid #374151' }}>
-                          <th style={{ padding: '8px 10px', color: '#ffffff' }}>Unit Name</th>
-                          <th style={{ padding: '8px 10px', color: '#ffffff' }}>Billing Cycle</th>
-                          <th style={{ padding: '8px 10px', textAlign: 'right', color: '#ffffff' }}>Amount ({currency})</th>
+                        <tr style={{ background: '#0a6c66', color: '#ffffff' }}>
+                          <th style={{ padding: '12px 14px', color: '#ffffff', fontWeight: 600 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <Building size={13} style={{ color: '#ffffff' }} />
+                              <span>Unit Name</span>
+                            </div>
+                          </th>
+                          <th style={{ padding: '12px 14px', color: '#ffffff', fontWeight: 600 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <RefreshCw size={13} style={{ color: '#ffffff' }} />
+                              <span>Billing Cycle</span>
+                            </div>
+                          </th>
+                          <th style={{ padding: '12px 14px', textAlign: 'right', color: '#ffffff', fontWeight: 600 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
+                              <DollarSign size={13} style={{ color: '#ffffff' }} />
+                              <span>Amount ({currency})</span>
+                            </div>
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3481,11 +3750,30 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                           const amtVal = item.amount !== undefined && item.amount !== null
                             ? parseFloat(item.amount)
                             : ((parseFloat(item.qty) || 1) * (parseFloat(item.rate) || 0));
+
+                          const nameLower = (item.item_name || item.item_code || '').toLowerCase();
+                          let cellIcon = <Building size={14} style={{ color: '#0a6c66' }} />;
+                          let iconBg = '#e6f4ea';
+                          if (nameLower.includes('promo') || nameLower.includes('discount')) {
+                            cellIcon = <Tag size={14} style={{ color: '#d97706' }} />;
+                            iconBg = '#fffbeb';
+                          } else if (nameLower.includes('service') || nameLower.includes('maintenance')) {
+                            cellIcon = <Settings size={14} style={{ color: '#2563eb' }} />;
+                            iconBg = '#eff6ff';
+                          }
+
                           return (
-                            <tr key={idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                              <td style={{ padding: '8px 10px', color: '#374151', fontWeight: 600 }}>{item.item_name || item.item_code}</td>
-                              <td style={{ padding: '8px 10px', color: '#4b5563' }}>{item.uom || 'Month'}</td>
-                              <td style={{ padding: '8px 10px', textAlign: 'right', color: '#111827', fontWeight: 600 }}>
+                            <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9', background: '#ffffff' }}>
+                              <td style={{ padding: '12px 14px', color: '#374151', fontWeight: 700 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                  <div style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                    {cellIcon}
+                                  </div>
+                                  <span>{item.item_name || item.item_code}</span>
+                                </div>
+                              </td>
+                              <td style={{ padding: '12px 14px', color: '#6b7280', fontWeight: 500 }}>{item.uom || 'Month'}</td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', color: '#0a6c66', fontWeight: 700, fontSize: '12px' }}>
                                 ${amtVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
@@ -3497,146 +3785,236 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                 )}
 
                 {/* Account Balances Section */}
-                <div style={{ background: 'var(--bg-tertiary)', padding: 14, borderRadius: 8, marginTop: 4 }}>
-                  <h4 style={{ fontSize: 12, margin: '0 0 10px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 4, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Ledger summary</h4>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Total Booking Amt:</span>
-                      <strong style={{ color: 'var(--text-primary)' }}>${parseFloat(selectedBookingDetails.booking_amount || selectedBookingDetails.amount_to_pay || 0).toFixed(2)}</strong>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1.15fr 0.85fr',
+                  gap: '16px',
+                  border: '1px solid var(--border-color, #e2e8f0)',
+                  borderRadius: '12px',
+                  padding: '16px',
+                  background: '#ffffff',
+                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02)'
+                }}>
+                  {/* Ledger lines info */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid #f1f5f9', paddingBottom: '8px', marginBottom: '4px' }}>
+                      <div style={{ width: 24, height: 24, borderRadius: '50%', backgroundColor: '#e6f4ea', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <FileText size={12} style={{ color: '#137333' }} />
+                      </div>
+                      <span style={{ fontSize: '12px', fontWeight: 800, color: '#137333', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Billing Summary</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Deposit Received:</span>
-                      <strong style={{ color: 'var(--text-primary)' }}>${parseFloat(selectedBookingDetails.advance_amount || 0).toFixed(2)}</strong>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Total Booking Amt:</span>
+                      <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '13px', fontWeight: 700 }}>
+                        ${parseFloat(selectedBookingDetails.booking_amount || selectedBookingDetails.amount_to_pay || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Paid Amount:</span>
-                      <strong style={{ color: 'var(--color-success)' }}>${parseFloat(selectedBookingDetails.paid_amount || 0).toFixed(2)}</strong>
+
+                    {/* Monthly Breakdown separator */}
+                    <div style={{ fontSize: '10px', color: '#137333', fontWeight: 700, textTransform: 'uppercase', marginTop: '6px', borderBottom: '1px dashed #f1f5f9', paddingBottom: '3px' }}>
+                      Monthly Installment Amount
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: 6, marginTop: 4 }}>
-                      <span style={{ color: 'var(--text-secondary)', fontWeight: 'bold' }}>Pending Balance:</span>
-                      <strong style={{ color: 'var(--color-danger)', fontWeight: 'bold' }}>${parseFloat(selectedBookingDetails.pending_amount || 0).toFixed(2)}</strong>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Net Total:</span>
+                      <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '12px', fontWeight: 600 }}>
+                        ${parseFloat(selectedBookingDetails.net_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
                     </div>
+                    {selectedBookingDetails.discount_amount !== undefined && selectedBookingDetails.discount_amount !== null && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                        <span style={{ color: '#d97706', fontWeight: 500 }}>Discount Amount:</span>
+                        <strong style={{ color: '#d97706', fontSize: '12px', fontWeight: 600 }}>
+                          - ${parseFloat(selectedBookingDetails.discount_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </strong>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Taxes & Charges:</span>
+                      <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '12px', fontWeight: 600 }}>
+                        + ${parseFloat(selectedBookingDetails.taxes_and_charges || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px', borderBottom: '1px dashed #f1f5f9', paddingBottom: '6px', marginBottom: '6px' }}>
+                      <span style={{ color: 'var(--text-primary, #0f172a)', fontWeight: 700 }}>Monthly Grand Total:</span>
+                      <strong style={{ color: '#0a6c66', fontSize: '12.5px', fontWeight: 800 }}>
+                        ${parseFloat(selectedBookingDetails.grand_totalmonthly || selectedBookingDetails.per_month_billing_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Deposit Received:</span>
+                      <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '13px', fontWeight: 700 }}>
+                        ${parseFloat(selectedBookingDetails.advance_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Paid Amount:</span>
+                      <strong style={{ color: '#10b981', fontSize: '13px', fontWeight: 700 }}>
+                        ${parseFloat(selectedBookingDetails.paid_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px', borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '2px' }}>
+                      <span style={{ color: 'var(--text-primary, #0f172a)', fontWeight: 700 }}>Pending Balance:</span>
+                      <strong style={{ color: '#ef4444', fontSize: '13px', fontWeight: 800 }}>
+                        ${parseFloat(selectedBookingDetails.pending_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* Image Illustration Container */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#f8fafc',
+                    borderRadius: '12px',
+                    border: '1px dashed #e2e8f0',
+                    padding: '12px',
+                    minHeight: '140px'
+                  }}>
+                    <img
+                      src={billingSummaryImg}
+                      alt="Billing Summary"
+                      style={{ width: '100%', height: '100%', objectFit: 'contain', maxHeight: '135px' }}
+                    />
                   </div>
                 </div>
 
-                {/* Workflow / System notes */}
+                {/* Workflow state notes */}
                 {selectedBookingDetails.workflow_state && (
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: 'rgba(59, 130, 246, 0.1)', padding: 10, borderRadius: 6, fontSize: 11, color: '#60a5fa' }}>
-                    <CheckCircle2 size={14} />
+                  <div style={{
+                    display: 'flex',
+                    gap: 8,
+                    alignItems: 'center',
+                    background: '#f0f9ff',
+                    border: '1px solid #b3e0ff',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    color: '#0369a1',
+                    marginTop: 4,
+                    fontWeight: 500
+                  }}>
+                    <AlertCircle size={15} style={{ color: '#0369a1' }} />
                     <span>Current Document State: <strong>{selectedBookingDetails.workflow_state}</strong></span>
                   </div>
-
                 )}
-                <button
-                  className="btn btn-primary"
-                  onClick={() => {
-                    if (selectedBookingDetails?.status === 'Cancelled' || selectedBookingDetails?.workflow_state === 'Cancelled') {
-                      showToast('error', 'Not allowed to print cancelled documents');
-                      return;
-                    }
-                    const contractId = selectedBookingDetails?.custom_contract || selectedBookingDetails?.contract;
-                    if (!contractId) {
-                      showToast('error', 'No linked contract found for this booking');
-                      return;
-                    }
-                    if (erpnextConfig?.url) {
-                      // Open the print page for Lease Agreement print format on Contract doctype
-                      const printUrl = `${erpnextConfig.url}/printview?doctype=Contract&name=${encodeURIComponent(contractId)}&format=Lease%20Agreement%20Contract&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
-                      const printWindow = window.open(printUrl, '_blank');
 
-                      if (printWindow) {
-                        const injectAndPrint = () => {
-                          try {
-                            const doc = printWindow.document;
-                            if (doc) {
-                              // Prevent printing window title
-                              doc.title = "";
-
-                              if (doc.head) {
-                                if (doc.getElementById('pms-custom-print-style')) return;
-
-                                const style = doc.createElement('style');
-                                style.id = 'pms-custom-print-style';
-                                style.innerHTML = `
-                                  /* Hide Frappe print view action banner containing Print / Get PDF */
-                                  .action-banner {
-                                    display: none !important;
-                                  }
-                                  
-                                  /* Remove default browser print headers and footers globally */
-                                  @page {
-                                    size: auto;
-                                    margin: 0mm;
-                                  }
-                                  
-                                  /* Remove default browser print headers and footers within print media */
-                                  @media print {
-                                    @page {
-                                      size: auto;
-                                      margin: 0mm;
-                                    }
-                                    body {
-                                      margin: 15mm !important;
-                                      padding: 0px !important;
-                                    }
-                                    .action-banner, header, footer {
-                                      display: none !important;
-                                    }
-                                  }
-                                `;
-                                doc.head.appendChild(style);
-
-                                // Delay slightly to ensure CSS and title updates are applied before printing
-                                setTimeout(() => {
-                                  printWindow.print();
-                                }, 500);
-                              }
-                            }
-                          } catch (e) {
-                            console.warn("Unable to customize print style:", e);
-                          }
-                        };
-
-                        printWindow.onload = injectAndPrint;
-
-                        // Fallback polling for loaded document
-                        let attempts = 0;
-                        const checkInterval = setInterval(() => {
-                          attempts++;
-                          if (printWindow.closed || attempts > 80) { // 8 seconds timeout
-                            clearInterval(checkInterval);
-                            return;
-                          }
-                          try {
-                            if (printWindow.document && printWindow.document.readyState === 'complete') {
-                              clearInterval(checkInterval);
-                              injectAndPrint();
-                            }
-                          } catch (err) {
-                            // Ignore cross-origin transitions
-                          }
-                        }, 100);
-                      }
-                    }
-                  }}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 4 }}
-                >
-                  <Printer size={14} />
-                  Print Lease Agreement
-                </button>
-
-
-                {/* Approve Booking Action */}
-                {!isBookingApproved && (
+                <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
                   <button
                     className="btn btn-primary"
-                    onClick={openApproveModal}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 4 }}
+                    onClick={() => {
+                      if (selectedBookingDetails?.status === 'Cancelled' || selectedBookingDetails?.workflow_state === 'Cancelled') {
+                        showToast('error', 'Not allowed to print cancelled documents');
+                        return;
+                      }
+                      const contractId = selectedBookingDetails?.custom_contract || selectedBookingDetails?.contract;
+                      if (!contractId) {
+                        showToast('error', 'No linked contract found for this booking');
+                        return;
+                      }
+                      if (erpnextConfig?.url) {
+                        const printUrl = `${erpnextConfig.url}/printview?doctype=Contract&name=${encodeURIComponent(contractId)}&format=Lease%20Agreement%20Contract&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+                        const printWindow = window.open(printUrl, '_blank');
+                        if (printWindow) {
+                          const injectAndPrint = () => {
+                            try {
+                              const doc = printWindow.document;
+                              if (doc) {
+                                doc.title = "";
+                                if (doc.head) {
+                                  if (doc.getElementById('pms-custom-print-style')) return;
+                                  const style = doc.createElement('style');
+                                  style.id = 'pms-custom-print-style';
+                                  style.innerHTML = `
+                                    .action-banner { display: none !important; }
+                                    @page { size: auto; margin: 0mm; }
+                                    @media print {
+                                      @page { size: auto; margin: 0mm; }
+                                      body { margin: 15mm !important; padding: 0px !important; }
+                                      .action-banner, header, footer { display: none !important; }
+                                    }
+                                  `;
+                                  doc.head.appendChild(style);
+                                  setTimeout(() => { printWindow.print(); }, 500);
+                                }
+                              }
+                            } catch (e) {
+                              console.warn("Unable to customize print style:", e);
+                            }
+                          };
+                          printWindow.onload = injectAndPrint;
+                          let attempts = 0;
+                          const checkInterval = setInterval(() => {
+                            attempts++;
+                            if (printWindow.closed || attempts > 80) {
+                              clearInterval(checkInterval);
+                              return;
+                            }
+                            try {
+                              if (printWindow.document && printWindow.document.readyState === 'complete') {
+                                clearInterval(checkInterval);
+                                injectAndPrint();
+                              }
+                            } catch (err) { }
+                          }, 100);
+                        }
+                      }
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      flex: 1,
+                      backgroundColor: '#0a6c66',
+                      borderColor: '#0a6c66',
+                      color: '#ffffff',
+                      padding: '10px 16px',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#085450'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#0a6c66'}
                   >
-                    <CheckCircle2 size={14} />
-                    Approve Booking
+                    <Printer size={14} />
+                    <span>Print Lease Agreement</span>
                   </button>
-                )}
+
+                  {/* Approve Booking Action */}
+                  {!isBookingApproved && (
+                    <button
+                      onClick={openApproveModal}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        flex: 1,
+                        backgroundColor: '#0a6c66',
+                        borderColor: '#0a6c66',
+                        color: '#ffffff',
+                        padding: '10px 16px',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#085450'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#0a6c66'}
+                    >
+                      <CheckCircle2 size={14} />
+                      <span>Approve Booking</span>
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
               <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>

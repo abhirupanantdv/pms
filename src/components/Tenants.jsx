@@ -2910,8 +2910,17 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
                 <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{selectedTenant.territory || '—'}</span>
               </div>
               <div style={{ background: 'rgba(255,255,255,0.01)', padding: 12, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', fontSize: 12 }}>
-                <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 }}>Date of Birth</span>
-                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{selectedTenant.date_of_birth || '—'}</span>
+                {String(selectedTenant.custom_type || '').toLowerCase() === 'company' ? (
+                  <>
+                    <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 }}>Date of Incorporation</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{selectedTenant.date_of_incorporation || '—'}</span>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 }}>Date of Birth</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{selectedTenant.date_of_birth || '—'}</span>
+                  </>
+                )}
               </div>
             </div>
 

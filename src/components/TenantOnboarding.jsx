@@ -118,7 +118,7 @@ const PhoneInputWithDropdown = ({ value, onChange, disabled }) => {
       <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
         <input
           type="tel"
-          placeholder="Local number"
+          placeholder="e.g. 999 1234"
           value={parsed.local}
           disabled={disabled}
           onChange={(e) => {
@@ -219,6 +219,18 @@ const isFieldRequired = (field, formValues = {}) => {
     return false;
   }
 
+  const isInternal = !!formValues?.is_internal_customer;
+  const fieldLabelLower = (field.label || '').toLowerCase();
+  const fieldNameLower = (field.fieldname || '').toLowerCase();
+  if (!isInternal) {
+    if (fieldLabelLower.includes('represents company') || fieldNameLower.includes('represents_company')) {
+      return false;
+    }
+    if (fieldLabelLower.includes('allowed to transact with') || fieldNameLower.includes('allowed_to_transact_with') || fieldNameLower.includes('allowed_to_transact')) {
+      return false;
+    }
+  }
+
   if (selectedType === 'Company') {
     if (field.fieldname === 'company_name' || field.fieldname === 'company_vat_id' || field.fieldname === 'company_tin_id' || field.fieldname === 'tax_id') {
       return true;
@@ -226,6 +238,9 @@ const isFieldRequired = (field, formValues = {}) => {
   }
 
   if (selectedType === 'Individual') {
+    if (field.fieldname === 'company_name' || field.fieldname === 'company_tin_id' || field.fieldname === 'company_vat_id' || field.fieldname === 'tax_id' || field.fieldname === 'date_of_incorporation') {
+      return false;
+    }
     if (field.fieldname === 'date_of_birth') {
       return true;
     }
@@ -319,6 +334,26 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
   }
   const isRequired = isFieldRequired(field, formValues);
   const isReadOnly = !!field.read_only;
+
+  const getPlaceholder = (label, fieldname) => {
+    const lblLower = (label || '').toLowerCase();
+    const nameLower = (fieldname || '').toLowerCase();
+    
+    if (lblLower.includes('contact name')) return 'e.g. John Doe';
+    if (lblLower.includes('company name')) return 'e.g. Acme Corporation';
+    if (lblLower.includes('company tin') || lblLower.includes('vat') || nameLower.includes('vat') || nameLower.includes('tin')) return 'e.g. 12-3456789';
+    if (lblLower.includes('email')) return 'e.g. john.doe@example.com';
+    if (lblLower.includes('address line 1')) return 'e.g. 123 Main St';
+    if (lblLower.includes('address line 2')) return 'e.g. Suite 400';
+    if (lblLower.includes('locality')) return 'e.g. Suva';
+    if (lblLower.includes('state')) return 'e.g. Central';
+    if (lblLower.includes('proposed business')) return 'e.g. Retail Shop';
+    if (lblLower.includes('space') || nameLower.includes('space')) return 'e.g. 150';
+    if (lblLower.includes('budget') || nameLower.includes('budget')) return 'e.g. 5000';
+    if (lblLower.includes('land and building') || nameLower.includes('land_and_building')) return 'e.g. Tower A';
+    
+    return `e.g. ${label || fieldname}`;
+  };
 
   const [childFields, setChildFields] = useState([]);
   const [loadingChild, setLoadingChild] = useState(false);
@@ -582,8 +617,9 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Link':
       const linkedOptions = linkOptionsCache[field.options] || [];
+      const isRepresentsCompany = (field.fieldname || '').toLowerCase().includes('represents_company') || (field.label || '').toLowerCase().includes('represents company');
       return (
-        <div>
+        <div style={isRepresentsCompany ? { gridColumn: 'span 2' } : {}}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -628,7 +664,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
           </label>
           <textarea
             rows={3}
-            placeholder={`Enter ${label}...`}
+            placeholder={getPlaceholder(label, field.fieldname)}
             value={value || ''}
             onChange={(e) => onChange(e.target.value)}
             disabled={isReadOnly}
@@ -649,7 +685,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
           <input
             type="number"
             step={fieldtype === 'Int' ? '1' : 'any'}
-            placeholder="0"
+            placeholder={getPlaceholder(label, field.fieldname).includes(label) ? '0' : getPlaceholder(label, field.fieldname)}
             value={value === undefined || value === null ? '' : value}
             onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
             disabled={isReadOnly}
@@ -771,18 +807,28 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
       if (field.fieldname === 'company_search_documents') {
         const docList = Array.isArray(value) ? value : [];
 
-        const standardTypes = [
-          { key: 'inc', label: 'True Certified copies of Incorporation' },
-          { key: 'moa', label: 'Memorandum of Associations Company' },
-          { key: 'name_cert', label: 'Business name registration certificate.' },
-          { key: 'directors_rep', label: 'Directors Reports' },
-          { key: 'tin_letter', label: 'Tin Letter' },
-          { key: 'bus_reg_cert', label: 'Business Registration Certificate' },
-          { key: 'birth_cert', label: 'Birth Certificate' },
-          { key: 'passport_photo', label: 'Passport photo of Directors' },
-          { key: 'tin_comp_indiv', label: 'Tin Letter Company and Individual' },
-          { key: 'photo_id', label: 'Photo ID Card' }
+        const docTypeField = childFields.find(cf => cf.fieldname === 'document_type');
+        const fetchedLabels = docTypeField?.options
+          ? docTypeField.options.split('\n').filter(Boolean).map(opt => opt.trim())
+          : [];
+
+        const labelsToUse = fetchedLabels.length > 0 ? fetchedLabels : [
+          'True Certified Copies of Incorporation',
+          'Memorandum of Associations Company',
+          'Business Name Registration Certificate',
+          'Directors Reports',
+          'Tin Letter',
+          'Business Registration Certificate',
+          'Birth Certificate',
+          'Passport photo of Directors',
+          'Tin Letter Company and Individual',
+          'Photo ID Card'
         ];
+
+        const standardTypes = labelsToUse.map((label, idx) => ({
+          key: `doc_${idx}`,
+          label: label
+        }));
 
         // Map standard items
         const standardDocsMapped = standardTypes.map(st => {
@@ -1202,7 +1248,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
           </label>
           <input
             type="text"
-            placeholder={`Enter ${label}...`}
+            placeholder={getPlaceholder(label, field.fieldname)}
             value={value || ''}
             onChange={(e) => onChange(e.target.value)}
             disabled={isReadOnly}
@@ -1419,6 +1465,16 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     setWorkflowState(null);
     fetchWorkflowActions(item.name);
 
+    // Sync edit states
+    setEditType(item.type || 'Company');
+    setEditCompanyName(item.company_name || '');
+    setEditCompanyVatId(item.company_vat_id || '');
+    setEditContactName(item.contact_name || '');
+    setEditEmailId(item.email_id || '');
+    const phoneParsed = parsePhoneNumber(item.contact_number || '');
+    setEditContactPrefix(phoneParsed.prefix || '+679');
+    setEditContactLocal(phoneParsed.local || '');
+
     if (!erpnextConfig?.url) return;
     try {
       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(item.name)}`, {
@@ -1430,6 +1486,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         const detail = json.data || json;
         console.log("Selected Tenant Onboarding Details:", detail);
         if (detail) {
+          setEditType(detail.type || 'Company');
+          setEditCompanyName(detail.company_name || '');
+          setEditCompanyVatId(detail.company_vat_id || '');
+          setEditContactName(detail.contact_name || '');
+          setEditEmailId(detail.email_id || '');
+          const phoneParsedDetail = parsePhoneNumber(detail.contact_number || '');
+          setEditContactPrefix(phoneParsedDetail.prefix || '+679');
+          setEditContactLocal(phoneParsedDetail.local || '');
+
           const docList = detail.company_search_documents || [];
 
           setCaseDocuments(prev => ({
@@ -1625,6 +1690,33 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const [linkOptionsCache, setLinkOptionsCache] = useState({});
   const [activeDynamicTabIdx, setActiveDynamicTabIdx] = useState(0);
   const [childSchemasCache, setChildSchemasCache] = useState({});
+
+  const getDynamicDocumentTypes = () => {
+    const fields = childSchemasCache["Company Search Documents"];
+    if (Array.isArray(fields)) {
+      const docTypeField = fields.find(f => f.fieldname === 'document_type');
+      if (docTypeField?.options) {
+        return docTypeField.options.split('\n').filter(Boolean).map((opt, idx) => ({
+          key: `doc_${idx}`,
+          label: opt.trim()
+        }));
+      }
+    }
+    return [
+      { key: 'inc', label: 'True Certified Copies of Incorporation' },
+      { key: 'moa', label: 'Memorandum of Associations Company' },
+      { key: 'name_cert', label: 'Business Name Registration Certificate' },
+      { key: 'directors_rep', label: 'Directors Reports' },
+      { key: 'tin_letter', label: 'Tin Letter' },
+      { key: 'bus_reg_cert', label: 'Business Registration Certificate' },
+      { key: 'birth_cert', label: 'Birth Certificate' },
+      { key: 'passport_photo', label: 'Passport photo of Directors' },
+      { key: 'tin_comp_indiv', label: 'Tin Letter Company and Individual' },
+      { key: 'photo_id', label: 'Photo ID Card' }
+    ];
+  };
+
+  const currentDocumentTypes = getDynamicDocumentTypes();
 
   const fetchLinkOptions = async (linkDoctype) => {
     if (!linkDoctype || !erpnextConfig?.url || linkOptionsCache[linkDoctype]) return;
@@ -1870,6 +1962,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     fetchDistricts();
     fetchCountries();
     fetchWorkflowDoctype();
+    getDocTypeFields("Company Search Documents").catch(err => console.warn(err));
     getDocTypeFields("Tenant Onboarding").then(fields => {
       if (Array.isArray(fields) && fields.length > 0) {
         setDoctypeFields(fields);
@@ -2132,6 +2225,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       cleanedValues.date_of_incorporation = null;
     }
 
+    const isInternal = !!cleanedValues.is_internal_customer;
+    if (!isInternal) {
+      cleanedValues.represents_company = null;
+      cleanedValues.allowed_to_transact_with = null;
+      cleanedValues.allowed_to_transact = null;
+    }
+
     const payload = {
       ...cleanedValues
     };
@@ -2368,7 +2468,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     try {
       // Build child table documents payload
       const childDocs = [];
-      documentTypes.forEach(docType => {
+      currentDocumentTypes.forEach(docType => {
         const val = formCompanySearchDocs[docType.key];
         if (val && val.doc) {
           childDocs.push({
@@ -2452,6 +2552,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         }
         if (selectedType !== 'Company') {
           delete cleanedValues.date_of_incorporation;
+        }
+
+        const isInternal = !!cleanedValues.is_internal_customer;
+        if (!isInternal) {
+          delete cleanedValues.represents_company;
+          delete cleanedValues.allowed_to_transact_with;
+          delete cleanedValues.allowed_to_transact;
         }
 
         payload = {
@@ -2675,21 +2782,16 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       }
     });
 
+    const companySearchChecks = currentDocumentTypes.map(docType => 
+      !!verifiedMap[docType.label.toLowerCase().trim()]
+    );
+
     // Progress checks based ONLY on proposal, booking, and company search
     const checks = [
       // Proposal & booking core details check
       !!item.menu_and_business_pictures,
       // Company search checks (fetched directly from ERPNext child table)
-      !!verifiedMap['true certified copies of incorporation'],
-      !!verifiedMap['memorandum of associations company'],
-      !!verifiedMap['business name registration certificate.'] || !!verifiedMap['business name registration certificate'],
-      !!verifiedMap['directors reports'],
-      !!verifiedMap['tin letter'],
-      !!verifiedMap['business registration certificate'],
-      !!verifiedMap['birth certificate'],
-      !!verifiedMap['passport photo of directors'],
-      !!verifiedMap['tin letter company and individual'],
-      !!verifiedMap['photo id card'],
+      ...companySearchChecks,
       // Booking Form plan check
       !!item.plans_for_approval || !!localData.booking_plans_for_approval
     ];
@@ -3367,6 +3469,17 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
                               return false;
                             }
+                            const isInternal = !!dynamicFormValues['is_internal_customer'];
+                            const fieldLabelLower = (field.label || '').toLowerCase();
+                            const fieldNameLower = (field.fieldname || '').toLowerCase();
+                            if (!isInternal) {
+                              if (fieldLabelLower.includes('represents company') || fieldNameLower.includes('represents_company')) {
+                                return false;
+                              }
+                              if (fieldLabelLower.includes('allowed to transact with') || fieldNameLower.includes('allowed_to_transact_with') || fieldNameLower.includes('allowed_to_transact')) {
+                                return false;
+                              }
+                            }
                             return true;
                           })
                           .map(field => (
@@ -3394,7 +3507,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               const docs = caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [];
 
                               // Map standard static checklist items
-                              const standardDocs = documentTypes.map(doc => {
+                              const standardDocs = currentDocumentTypes.map(doc => {
                                 const erpDoc = docs.find(d =>
                                   d.document_type?.toLowerCase().trim() === doc.label.toLowerCase().trim()
                                 );
@@ -3407,7 +3520,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               });
 
                               // Map custom dynamic checklist items
-                              const standardLabelsLower = new Set(documentTypes.map(d => d.label.toLowerCase().trim()));
+                              const standardLabelsLower = new Set(currentDocumentTypes.map(d => d.label.toLowerCase().trim()));
                               const customDocs = docs
                                 .filter(d => d.document_type && !standardLabelsLower.has(d.document_type.toLowerCase().trim()))
                                 .map((d, index) => ({
@@ -3755,7 +3868,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                             const rCompanyNameField = (
                               <div key="company_name" style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{editType === 'Company' ? 'Company Name *' : 'Company Name'}</span>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{currentType === 'Company' ? 'Company Name *' : 'Company Name'}</span>
                                 {isEditingDetails ? (
                                   <input
                                     type="text"
@@ -3772,7 +3885,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                             const rCompanyTinField = (
                               <div key="company_tin" style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{editType === 'Company' ? 'Company TIN ID *' : 'Company TIN ID'}</span>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{currentType === 'Company' ? 'Company TIN ID *' : 'Company TIN ID'}</span>
                                 {isEditingDetails ? (
                                   <input
                                     type="text"
@@ -4518,7 +4631,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             const docs = caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [];
 
                             // Map standard static checklist items
-                            const standardDocs = documentTypes.map(doc => {
+                            const standardDocs = currentDocumentTypes.map(doc => {
                               const erpDoc = docs.find(d =>
                                 d.document_type?.toLowerCase().trim() === doc.label.toLowerCase().trim()
                               );
@@ -4531,7 +4644,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             });
 
                             // Map custom dynamic checklist items
-                            const standardLabelsLower = new Set(documentTypes.map(d => d.label.toLowerCase().trim()));
+                            const standardLabelsLower = new Set(currentDocumentTypes.map(d => d.label.toLowerCase().trim()));
                             const customDocs = docs
                               .filter(d => d.document_type && !standardLabelsLower.has(d.document_type.toLowerCase().trim()))
                               .map((d, index) => ({
@@ -4952,6 +5065,17 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           }
                           if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
                             return false;
+                          }
+                          const isInternal = !!dynamicFormValues['is_internal_customer'];
+                          const fieldLabelLower = (field.label || '').toLowerCase();
+                          const fieldNameLower = (field.fieldname || '').toLowerCase();
+                          if (!isInternal) {
+                            if (fieldLabelLower.includes('represents company') || fieldNameLower.includes('represents_company')) {
+                              return false;
+                            }
+                            if (fieldLabelLower.includes('allowed to transact with') || fieldNameLower.includes('allowed_to_transact_with') || fieldNameLower.includes('allowed_to_transact')) {
+                              return false;
+                            }
                           }
                           return true;
                         })
@@ -5452,24 +5576,11 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                         />
                       </div>
                     </div>
-
                   </div>
                 )}
-
                 {activeFormTab === 'search' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '56vh', overflowY: 'auto', paddingRight: '4px' }}>
-                    {[
-                      { key: 'inc', label: 'True Certified copies of Incorporation' },
-                      { key: 'moa', label: 'Memorandum of Associations Company' },
-                      { key: 'name_cert', label: 'Business name registration certificate.' },
-                      { key: 'directors_rep', label: 'Directors Reports' },
-                      { key: 'tin_letter', label: 'Tin Letter' },
-                      { key: 'bus_reg_cert', label: 'Business Registration Certificate' },
-                      { key: 'birth_cert', label: 'Birth Certificate' },
-                      { key: 'passport_photo', label: 'Passport photo of Directors' },
-                      { key: 'tin_comp_indiv', label: 'Tin Letter Company and Individual' },
-                      { key: 'photo_id', label: 'Photo ID Card' }
-                    ].map((doc) => {
+                    {currentDocumentTypes.map((doc) => {
                       const docObj = formCompanySearchDocs[doc.key] || { doc: '', verified: false };
                       const isExpanded = !!modalExpandedDocs[doc.key];
 
