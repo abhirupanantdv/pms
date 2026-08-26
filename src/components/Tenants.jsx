@@ -2752,9 +2752,9 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
             <table className="custom-table">
               <thead>
                 <tr>
-                  <th>Customer</th>
+                  <th>Tenant</th>
                   <th>Type</th>
-                  <th>Customer Group</th>
+                  <th>Tenant Group</th>
                   <th>Territory</th>
                   <th>Contact</th>
                   <th>Status</th>
@@ -3043,7 +3043,7 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
 
                 <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
                   <div className="form-group">
-                    <label className="form-label">Customer Group</label>
+                    <label className="form-label">Tenant Group</label>
                     <input type="text" value={customerGroup} onChange={(e) => setCustomerGroup(e.target.value)} placeholder="e.g. Residential Tenants" className="form-input" />
                   </div>
                   <div className="form-group">

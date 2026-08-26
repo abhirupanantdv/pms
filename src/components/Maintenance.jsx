@@ -4337,7 +4337,7 @@ export default function Maintenance({
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                     <Info title="Schedule" value={selectedWorkOrder.custom_mantainence_sechedule} />
                     <Info title="Booking" value={selectedWorkOrder.custom_booking_number} />
-                    <Info title="Customer" value={selectedWorkOrder.custom_customer_name} />
+                    <Info title="Tenant" value={selectedWorkOrder.custom_customer_name} />
                     <Info title="Company" value={selectedWorkOrder.company} />
                     <Info title="Created" value={selectedWorkOrder.creation?.split(".")[0]} />
                     <Info title="Owner" value={selectedWorkOrder.owner} />
@@ -4485,7 +4485,7 @@ export default function Maintenance({
                 )}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Customer Name</label>
+                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Tenant Name</label>
                     {/* <select value={schedBookingId} onChange={(e) => handleSchedBookingChange(e.target.value)} className="form-select" required disabled={submittingSchedule} style={{ fontSize: 13, boxSizing: 'border-box' }}>
                       <option value="">-- Choose Booking --</option>
                       {bookings.length === 0 ? (
@@ -4496,7 +4496,7 @@ export default function Maintenance({
                       value={schedCustomer}
                       onChange={(e) => handleSchedCustomerChange(e.target.value)}
                     >
-                      <option value="">-- Choose Customer --</option>
+                      <option value="">-- Choose Tenant --</option>
 
                       {tenants.map(customer => (
                         <option
@@ -4509,7 +4509,7 @@ export default function Maintenance({
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Customer Name</label>
+                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Tenant Name</label>
                     {/* <input type="text" value={bookingDetails?.customer_name || bookingDetails?.customer || tenants.find(t => t.id === schedCustomer)?.name || ''} readOnly className="form-input" disabled style={{ fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-secondary)' }} /> */}
                   </div>
                 </div>
@@ -4614,7 +4614,7 @@ export default function Maintenance({
               {/* Schedule summary */}
               <div style={{ background: 'var(--bg-tertiary)', borderRadius: 6, padding: '10px 12px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <div><span style={{ color: 'var(--text-secondary)' }}>Schedule: </span><strong>{selectedSchedule.name}</strong></div>
-                <div><span style={{ color: 'var(--text-secondary)' }}>Customer: </span><strong>{selectedSchedule.customer_name || selectedSchedule.customer}</strong></div>
+                <div><span style={{ color: 'var(--text-secondary)' }}>Tenant: </span><strong>{selectedSchedule.customer_name || selectedSchedule.customer}</strong></div>
                 <div><span style={{ color: 'var(--text-secondary)' }}>Property: </span><strong>{getPropertyNameById(selectedSchedule.custom_property)}</strong></div>
               </div>
 

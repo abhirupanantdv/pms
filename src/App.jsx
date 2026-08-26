@@ -5841,6 +5841,16 @@ export default function App() {
     );
   }
 
+  const getCategoryForTab = (tab) => {
+    if (['properties', 'bookings', 'listings', 'mall-3d'].includes(tab)) return 'operations';
+    if (['owners', 'tenants', 'tenant-onboarding'].includes(tab)) return 'people';
+    if (['quotation', 'invoices'].includes(tab)) return 'sales';
+    if (['maintenance', 'support'].includes(tab)) return 'service';
+    if (['reports'].includes(tab)) return 'analytics';
+    if (['hrms'].includes(tab)) return 'admin';
+    return '';
+  };
+
   return (
     <div className="app-container">
       {/* Sidebar Navigation */}
@@ -5865,7 +5875,7 @@ export default function App() {
             <span>Overview</span>
           </li>
 
-          <div className="sidebar-category-header">
+          <div className={`sidebar-category-header ${getCategoryForTab(currentTab) === 'operations' ? 'active' : ''}`}>
             <span>🏠 Property Operations</span>
           </div>
           <li className={`menu-item ${currentTab === 'properties' ? 'active' : ''}`} onClick={() => setCurrentTab('properties')}>
@@ -5885,7 +5895,7 @@ export default function App() {
             <span>3D Mall Tracker</span>
           </li>
 
-          <div className="sidebar-category-header">
+          <div className={`sidebar-category-header ${getCategoryForTab(currentTab) === 'people' ? 'active' : ''}`}>
             <span>👥 PEOPLE</span>
           </div>
           <li className={`menu-item ${currentTab === 'owners' ? 'active' : ''}`} onClick={() => setCurrentTab('owners')}>
@@ -5901,7 +5911,7 @@ export default function App() {
             <span>Tenant Onboarding</span>
           </li>
 
-          <div className="sidebar-category-header">
+          <div className={`sidebar-category-header ${getCategoryForTab(currentTab) === 'sales' ? 'active' : ''}`}>
             <span>💰 Sales & Finance</span>
           </div>
           <li className={`menu-item ${currentTab === 'quotation' ? 'active' : ''}`} onClick={() => setCurrentTab('quotation')}>
@@ -5913,7 +5923,7 @@ export default function App() {
             <span>Billing Ledger</span>
           </li>
 
-          <div className="sidebar-category-header">
+          <div className={`sidebar-category-header ${getCategoryForTab(currentTab) === 'service' ? 'active' : ''}`}>
             <span>🔧 Service Management</span>
           </div>
           <li className={`menu-item ${currentTab === 'maintenance' ? 'active' : ''}`} onClick={() => setCurrentTab('maintenance')}>
@@ -5925,7 +5935,7 @@ export default function App() {
             <span>Helpdesk Support</span>
           </li>
 
-          <div className="sidebar-category-header">
+          <div className={`sidebar-category-header ${getCategoryForTab(currentTab) === 'analytics' ? 'active' : ''}`}>
             <span>📊 Analytics</span>
           </div>
           <li className={`menu-item ${currentTab === 'reports' ? 'active' : ''}`} onClick={() => setCurrentTab('reports')}>
@@ -5933,7 +5943,7 @@ export default function App() {
             <span>Reports</span>
           </li>
 
-          <div className="sidebar-category-header">
+          <div className={`sidebar-category-header ${getCategoryForTab(currentTab) === 'admin' ? 'active' : ''}`}>
             <span>⚙️ Administration</span>
           </div>
           <li className={`menu-item ${currentTab === 'hrms' ? 'active' : ''}`} onClick={() => setCurrentTab('hrms')}>

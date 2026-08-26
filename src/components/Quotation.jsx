@@ -6231,7 +6231,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               <thead>
                 <tr>
                   <th>Quotation ID</th>
-                  <th>Customer Name</th>
+                  <th>Tenant Name</th>
                   <th>Quote Date</th>
                   <th>Valid Till</th>
                   <th>Grand Total</th>
@@ -6451,10 +6451,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               {/* TAB CONTENT WRAPPER */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
                 {(() => {
-                  const originalPrice = selectedQuotationDetail.custom_original_grand_total || (selectedQuotationDetail.grand_total + (selectedQuotationDetail.discount_amount || 0));
+                  const originalPrice = (selectedQuotationDetail.items || []).reduce((acc, item) => acc + ((item.price_list_rate || item.rate || 0) * (item.qty || 1)), 0);
                   const currentPrice = selectedQuotationDetail.grand_total || 0;
+                  const offeredPrice = selectedQuotationDetail.total || 0;
                   const discount = selectedQuotationDetail.discount_amount || 0;
-                  const diffPct = originalPrice > 0 ? ((discount / originalPrice) * 100).toFixed(2) : '0.00';
+                  const diffPct = originalPrice > 0 ? (Math.abs((originalPrice - offeredPrice) / originalPrice) * 100).toFixed(2) : '0.00';
 
                   const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
                   const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
@@ -6489,15 +6490,15 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             <div style={{ fontSize: 10, fontWeight: 700, color: '#4b5563', textTransform: 'uppercase', marginBottom: 4 }}>Price Comparison</div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: 'auto auto', gap: 10, padding: 12, background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb', textAlign: 'center', minHeight: 120, boxSizing: 'border-box' }}>
                               <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Original Price</div>
+                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Valuation Rate</div>
                                 <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2 }}>${originalPrice.toLocaleString()}</div>
                               </div>
                               <div style={{ borderLeft: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Current Price</div>
-                                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: 'var(--brand-color)' }}>${currentPrice.toLocaleString()}</div>
+                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Offered Price</div>
+                                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: 'var(--brand-color)' }}>${offeredPrice.toLocaleString()}</div>
                               </div>
                               <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 8, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Discount ({companyDetails.currency || 'FJD'})</div>
+                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Negotiated Discount ({companyDetails.currency || 'FJD'})</div>
                                 <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: '#eab308' }}>${discount.toLocaleString()}</div>
                               </div>
                               <div style={{ borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb', paddingTop: 8, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
@@ -6512,19 +6513,56 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
                               Price Breakdown (Current)
                             </div>
-                            <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
+                             <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
                               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                                <thead>
+                                  <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#4b5563' }}>
+                                    <th style={{ padding: '6px 12px' }}>Unit / Fee Name</th>
+                                    <th style={{ padding: '6px 12px', textAlign: 'center' }}>Total Area (sqft)</th>
+                                    <th style={{ padding: '6px 12px', textAlign: 'right' }}>Amount</th>
+                                  </tr>
+                                </thead>
                                 <tbody>
-                                  {(selectedQuotationDetail.items || []).map((item, idx) => (
-                                    <tr key={idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                      <td style={{ padding: '8px 12px', color: '#374151', fontWeight: 600 }}>
-                                        {item.item_name || item.item_code}
-                                      </td>
-                                      <td style={{ padding: '8px 12px', textAlign: 'right', color: '#111827', fontWeight: 700 }}>
-                                        ${((item.qty || 1) * (item.rate || 0)).toLocaleString()}
-                                      </td>
-                                    </tr>
-                                  ))}
+                                  {(selectedQuotationDetail.items || []).map((item, idx) => {
+                                    const matchedUnit = spaceUnits.find(u => u.name === item.item_code || u.item_code === item.item_code);
+                                    
+                                    // Resolve area value
+                                    let areaVal = '—';
+                                    const isFee = (item.item_name || item.item_code || '').toLowerCase().match(/fee|charge|service|deposit|tax/);
+                                    if (!isFee) {
+                                      if (item.total_areasqm) areaVal = item.total_areasqm;
+                                      else if (item.custom_total_area) areaVal = item.custom_total_area;
+                                      else if (item.total_area) areaVal = item.total_area;
+                                      else if (item.custom_total_area_sqft) areaVal = item.custom_total_area_sqft;
+                                      else if (item.area_sqft) areaVal = item.area_sqft;
+                                      else if (item.area) areaVal = item.area;
+                                      else if (matchedUnit) {
+                                        areaVal = matchedUnit.total_areasqm || matchedUnit.custom_total_area || matchedUnit.total_area || matchedUnit.area || matchedUnit.custom_total_area_sqft || '—';
+                                      }
+                                      
+                                      if (areaVal === '—') {
+                                        // Fallback scan: find any item in the quote with qty > 1
+                                        const otherWithQty = (selectedQuotationDetail.items || []).find(it => it.qty > 1);
+                                        if (otherWithQty) {
+                                          areaVal = otherWithQty.qty;
+                                        }
+                                      }
+                                    }
+
+                                    return (
+                                      <tr key={idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                        <td style={{ padding: '8px 12px', color: '#374151', fontWeight: 600 }}>
+                                          {item.item_name || item.item_code}
+                                        </td>
+                                        <td style={{ padding: '8px 12px', textAlign: 'center', color: '#4b5563', fontWeight: 500 }}>
+                                          {areaVal && areaVal !== '—' ? `${areaVal} sqft` : '—'}
+                                        </td>
+                                        <td style={{ padding: '8px 12px', textAlign: 'right', color: '#111827', fontWeight: 700 }}>
+                                          ${((item.qty || 1) * (item.rate || 0)).toLocaleString()}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>
@@ -6752,7 +6790,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
               {/* BOTTOM SUMMARY & DECISION SECTION */}
               {(() => {
-                const originalPrice = selectedQuotationDetail.custom_original_grand_total || (selectedQuotationDetail.grand_total + (selectedQuotationDetail.discount_amount || 0));
+                const originalPrice = (selectedQuotationDetail.items || []).reduce((acc, item) => acc + ((item.price_list_rate || item.rate || 0) * (item.qty || 1)), 0);
                 const originalDiscount = selectedQuotationDetail.discount_amount !== undefined && selectedQuotationDetail.discount_amount !== null
                   ? String(selectedQuotationDetail.discount_amount)
                   : '';
@@ -7179,7 +7217,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
                         <User size={14} style={{ color: '#137333' }} />
-                        <span>Customer Name</span>
+                        <span>Tenant Name</span>
                       </label>
                       <select
                         value={quoteCustomer}
@@ -7189,7 +7227,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         disabled={submitting}
                         style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
                       >
-                        <option value="">-- Choose Customer --</option>
+                        <option value="">-- Choose Tenant --</option>
                         {customers.map(c => (
                           <option key={c.name} value={c.name}>{c.customer_name || c.name}</option>
                         ))}
@@ -7492,7 +7530,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                           </colgroup>
                           <thead>
                             <tr style={{ background: 'var(--bg-secondary, #f8fafc)', position: 'sticky', top: 0, zIndex: 1 }}>
-                              {['#', 'Unit Code', 'Val. Rate', 'Offered Rate', 'Property Group', 'District', 'Total Area (Sqm)', 'Amount', ''].map((h, i) => (
+                              {['#', 'Unit Code', 'Val. Rate', 'Offered Rate', 'Property Group', 'District', 'Total Area (Sqft)', 'Amount', ''].map((h, i) => (
                                 <th
                                   key={i}
                                   style={{
@@ -7540,14 +7578,17 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                                 {/* Offered Rate */}
                                 <td style={{ padding: '6px 8px' }}>
-                                  <input
-                                    type="number"
-                                    value={item.offeredRate}
-                                    onChange={(e) => handleQtyOrRateChange(idx, 'offeredRate', e.target.value)}
-                                    className="form-input"
-                                    style={{ width: '100%', fontSize: 11, minHeight: 32, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border-color, #cbd5e1)', boxSizing: 'border-box' }}
-                                    required
-                                  />
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <span style={{ color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>$</span>
+                                    <input
+                                      type="number"
+                                      value={item.offeredRate}
+                                      onChange={(e) => handleQtyOrRateChange(idx, 'offeredRate', e.target.value)}
+                                      className="form-input"
+                                      style={{ width: '100%', fontSize: 11, minHeight: 32, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border-color, #cbd5e1)', boxSizing: 'border-box' }}
+                                      required
+                                    />
+                                  </div>
                                 </td>
 
                                 {/* Property Type */}

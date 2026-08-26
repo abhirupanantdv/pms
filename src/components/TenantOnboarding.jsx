@@ -105,17 +105,17 @@ const PhoneInputWithDropdown = ({ value, onChange, disabled }) => {
   );
 
   return (
-    <div style={{ position: 'relative', display: 'flex', width: '100%', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-secondary)', padding: '4px' }} ref={dropdownRef}>
+    <div style={{ position: 'relative', display: 'flex', width: '100%', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-secondary)', height: '38px', alignItems: 'center' }} ref={dropdownRef}>
       <div
         onClick={() => !disabled && setIsOpen(!isOpen)}
-        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', cursor: disabled ? 'default' : 'pointer', background: 'var(--bg-primary)', borderRadius: '6px', border: '1px solid var(--border-color)', userSelect: 'none' }}
+        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '0 10px', height: '100%', cursor: disabled ? 'default' : 'pointer', background: 'var(--bg-primary)', borderTopLeftRadius: '7px', borderBottomLeftRadius: '7px', borderRight: '1px solid var(--border-color)', userSelect: 'none' }}
       >
         <span style={{ fontSize: '16px' }}>{currentCode.flag}</span>
         <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{currentCode.prefix}</span>
         <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', flex: 1, height: '100%' }}>
         <input
           type="tel"
           placeholder="e.g. 999 1234"
@@ -132,9 +132,10 @@ const PhoneInputWithDropdown = ({ value, onChange, disabled }) => {
             background: 'transparent',
             color: 'var(--text-primary)',
             fontSize: '13px',
-            padding: '0 10px',
+            padding: '0 12px',
             outline: 'none',
-            width: '100%'
+            width: '100%',
+            height: '100%'
           }}
         />
       </div>
@@ -327,7 +328,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
   const fieldtype = field.fieldtype;
   let label = field.label || field.fieldname;
   if (label === 'Required Space' || label === 'Required Space (sq mtr)' || label === 'Space Required') {
-    label = 'Required Space(Sqm)';
+    label = 'Required Space(Sq Ft)';
   }
   if (label === 'Rental Budget' || label === 'Rental Budget ($)' || label === 'Budget') {
     label = 'Rental Budget(FJD)';
@@ -338,7 +339,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
   const getPlaceholder = (label, fieldname) => {
     const lblLower = (label || '').toLowerCase();
     const nameLower = (fieldname || '').toLowerCase();
-    
+
     if (lblLower.includes('contact name')) return 'e.g. John Doe';
     if (lblLower.includes('company name')) return 'e.g. Acme Corporation';
     if (lblLower.includes('company tin') || lblLower.includes('vat') || nameLower.includes('vat') || nameLower.includes('tin')) return 'e.g. 12-3456789';
@@ -351,7 +352,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
     if (lblLower.includes('space') || nameLower.includes('space')) return 'e.g. 150';
     if (lblLower.includes('budget') || nameLower.includes('budget')) return 'e.g. 5000';
     if (lblLower.includes('land and building') || nameLower.includes('land_and_building')) return 'e.g. Tower A';
-    
+
     return `e.g. ${label || fieldname}`;
   };
 
@@ -396,16 +397,18 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
   // Style for label
   const labelStyle = {
     display: 'block',
-    fontSize: '11.5px',
-    fontWeight: 600,
-    color: 'var(--text-secondary)',
-    marginBottom: '5px'
+    fontSize: '12.5px',
+    fontWeight: 700,
+    color: 'var(--text-primary)',
+    margin: 0,
+    textAlign: 'left'
   };
 
   // Standard input style
   const inputStyle = {
     width: '100%',
-    padding: '10px 14px',
+    height: '38px',
+    padding: '8px 12px',
     fontSize: '13px',
     borderRadius: '8px',
     border: '1px solid var(--border-color)',
@@ -423,8 +426,23 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
   // Textarea input style
   const textareaStyle = {
     ...inputStyle,
-    padding: '12px 14px',
+    height: 'auto',
+    padding: '8px 12px',
     resize: 'vertical'
+  };
+
+  const fieldContainerStyle = {
+    display: 'grid',
+    gridTemplateColumns: '130px 1fr',
+    alignItems: 'center',
+    gap: '12px',
+    width: '100%'
+  };
+
+  const fieldContainerStartStyle = {
+    ...fieldContainerStyle,
+    alignItems: 'start',
+    gridColumn: 'span 2'
   };
 
   const isPhone = fieldtype === 'Phone' ||
@@ -436,7 +454,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
   if (isPhone) {
     return (
-      <div>
+      <div style={fieldContainerStyle}>
         <label style={labelStyle}>
           {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
         </label>
@@ -474,7 +492,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Color':
       return (
-        <div>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -490,7 +508,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Datetime':
       return (
-        <div>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -506,7 +524,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Time':
       return (
-        <div>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -522,7 +540,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Read Only':
       return (
-        <div>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>{label}</label>
           <input
             type="text"
@@ -535,7 +553,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Signature':
       return (
-        <div style={{ gridColumn: 'span 2' }}>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -574,7 +592,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Check':
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '8px 0', gridColumn: 'span 2' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', height: '100%', minHeight: '38px' }}>
           <input
             type="checkbox"
             id={field.fieldname}
@@ -589,7 +607,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
               borderRadius: '4px'
             }}
           />
-          <label htmlFor={field.fieldname} style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
+          <label htmlFor={field.fieldname} style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
         </div>
@@ -597,7 +615,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Select':
       return (
-        <div>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -617,9 +635,8 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Link':
       const linkedOptions = linkOptionsCache[field.options] || [];
-      const isRepresentsCompany = (field.fieldname || '').toLowerCase().includes('represents_company') || (field.label || '').toLowerCase().includes('represents company');
       return (
-        <div style={isRepresentsCompany ? { gridColumn: 'span 2' } : {}}>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -639,7 +656,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Date':
       return (
-        <div>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -658,8 +675,8 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
     case 'Long Text':
     case 'Code':
       return (
-        <div style={{ gridColumn: 'span 2' }}>
-          <label style={labelStyle}>
+        <div style={fieldContainerStartStyle}>
+          <label style={{ ...labelStyle, marginTop: '8px' }}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
           <textarea
@@ -678,7 +695,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
     case 'Currency':
     case 'Percent':
       return (
-        <div>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -696,7 +713,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     case 'Password':
       return (
-        <div>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -714,7 +731,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
     case 'Attach':
     case 'Attach Image':
       return (
-        <div style={{ gridColumn: 'span 2' }}>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -723,8 +740,10 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
+                justifyContent: 'center',
                 gap: '8px',
-                padding: '10px 16px',
+                padding: '0 16px',
+                height: '38px',
                 borderRadius: '8px',
                 border: '1px solid var(--border-color)',
                 background: 'var(--bg-secondary)',
@@ -900,7 +919,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
               const isVerified = !!item.docObj?.verified;
               const isExpanded = !!localExpanded[item.key];
 
-              let statusText = 'Pending Upload';
+              let statusText = 'Upload';
               let statusColor = 'var(--text-muted, #94a3b8)';
               let statusBg = 'rgba(156, 163, 175, 0.1)';
               if (fileUrl) {
@@ -1242,7 +1261,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
 
     default: // Data, Autocomplete, Read Only, etc.
       return (
-        <div>
+        <div style={fieldContainerStyle}>
           <label style={labelStyle}>
             {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
           </label>
@@ -2278,6 +2297,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           }));
         }
         setIsEditingDetails(false);
+        alert("Changes saved successfully!", "success");
       } else {
         const errorMsg = await extractErrorMessage(res);
         console.error("Tenant Onboarding error:", errorMsg);
@@ -2700,9 +2720,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
     let message = "";
     if (allVerified) {
-      message = `All documents are verified. Do you want to convert ${selectedCase.company_name || selectedCase.name} into Customer?`;
+      message = `All documents are verified. Do you want to convert ${selectedCase.company_name || selectedCase.name} into Tenant?`;
     } else {
-      message = `Some documents are not verified. Do you still want to convert ${selectedCase.company_name || selectedCase.name} into Customer?`;
+      message = `Some documents are not verified. Do you still want to convert ${selectedCase.company_name || selectedCase.name} into Tenant?`;
     }
 
     if (await confirm(message)) {
@@ -2730,11 +2750,11 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       });
 
       if (res.ok) {
-        alert("Tenant Onboarding successfully submitted and converted into Customer!");
+        alert("Tenant Onboarding successfully submitted and converted into Tenant!");
         setSelectedCase(prev => prev && prev.name === caseName ? { ...prev, docstatus: 1 } : prev);
         await fetchOnboardings();
       } else {
-        let rawMsg = "Failed to submit Tenant Onboarding and convert into Customer.";
+        let rawMsg = "Failed to submit Tenant Onboarding and convert into Tenant.";
         try {
           const errData = await res.json();
           if (errData._server_messages) {
@@ -2753,7 +2773,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       }
     } catch (err) {
       console.error("Failed submitting Tenant Onboarding:", err);
-      alert("An error occurred while converting to Customer.");
+      alert("An error occurred while converting to Tenant.");
     } finally {
       setLoading(false);
     }
@@ -2782,7 +2802,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       }
     });
 
-    const companySearchChecks = currentDocumentTypes.map(docType => 
+    const companySearchChecks = currentDocumentTypes.map(docType =>
       !!verifiedMap[docType.label.toLowerCase().trim()]
     );
 
@@ -3027,8 +3047,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           <strong style={{ color: 'var(--text-primary)' }}>{c.proposed_business_type || '—'}</strong>
                         </div>
                         <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Required Space(Sqm): </span>
-                          <strong style={{ color: 'var(--text-primary)' }}>{c.required_space ? `${c.required_space} Sqm` : '—'}</strong>
+                          <span style={{ color: 'var(--text-muted)' }}>Required Space(Sq Ft): </span>
+                          <strong style={{ color: 'var(--text-primary)' }}>{c.required_space ? `${c.required_space} Sq Ft` : '—'}</strong>
                         </div>
                         <div>
                           <span style={{ color: 'var(--text-muted)' }}>Location: </span>
@@ -3144,8 +3164,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       <div style={{
         position: 'fixed',
         top: 0,
-        right: selectedCase ? 0 : '-560px',
-        width: '560px',
+        right: selectedCase ? 0 : '-800px',
+        width: '800px',
         maxWidth: '100%',
         height: '100vh',
         background: 'var(--bg-primary)',
@@ -3159,7 +3179,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         {selectedCase && (() => {
           const caseLocal = localChecklists[selectedCase.name] || {};
           return (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
 
               {/* Header with Wavy Pattern and Flow Layout */}
               <div style={{
@@ -3177,16 +3197,17 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      padding: '4px 12px',
+                      fontSize: '15px',
+                      fontWeight: 800,
+                      padding: '6px 16px',
                       borderRadius: '20px',
-                      background: 'rgba(74, 222, 128, 0.1)',
-                      color: '#16a34a',
-                      border: '1px solid rgba(74, 222, 128, 0.3)',
-                      fontFamily: 'monospace'
+                      background: 'var(--brand-color, #065f46)',
+                      color: '#ffffff',
+                      boxShadow: '0 2px 6px rgba(6, 95, 70, 0.25)',
+                      fontFamily: 'monospace',
+                      letterSpacing: '0.5px'
                     }}>
-                      {selectedCase.name}
+                      ID:{selectedCase.name}
                     </span>
 
                     {/* Current State Badge */}
@@ -3197,22 +3218,22 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                         <div style={{
                           display: 'inline-flex',
                           alignItems: 'center',
-                          gap: '6px',
-                          padding: '4px 12px',
+                          gap: '5px',
+                          padding: '3px 10px',
                           borderRadius: '20px',
                           background: badge.bg,
                           border: badge.border,
                           color: badge.color,
-                          fontSize: '11px',
+                          fontSize: '10px',
                           fontWeight: 700,
-                          boxShadow: '0 2px 4px rgba(0,0,0,0.02)'
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
                         }}>
                           <span style={{
-                            width: '6px',
-                            height: '6px',
+                            width: '5px',
+                            height: '5px',
                             borderRadius: '50%',
                             background: badge.dot,
-                            boxShadow: `0 0 8px ${badge.dot}`
+                            boxShadow: `0 0 6px ${badge.dot}`
                           }} />
                           <span>{currentState}</span>
                         </div>
@@ -3310,7 +3331,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             height: '28px'
                           }}
                         >
-                          <span>{act.action}</span>
+                          <span>{act.action === 'Convert to Customer' ? 'Convert to Tenant' : act.action}</span>
                         </button>
                       );
                     })}
@@ -3329,7 +3350,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                         gap: '4px'
                       }}>
                         <ShieldCheck size={12} />
-                        <span>Converted to Customer</span>
+                        <span>Converted to Tenant</span>
                       </span>
                     )}
                   </div>
@@ -3340,10 +3361,11 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
                     <div style={{
                       display: 'flex',
-                      gap: '4px',
-                      background: 'var(--bg-secondary, #f1f5f9)',
-                      padding: '4px',
-                      borderRadius: '10px',
+                      gap: '6px',
+                      background: '#e2e8f0',
+                      padding: '6px',
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
                       flex: 1
                     }}>
                       {[
@@ -3361,14 +3383,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               flex: 1,
                               padding: '8px 10px',
                               fontSize: '12px',
-                              fontWeight: 700,
-                              borderRadius: '8px',
-                              border: 'none',
-                              background: isActive ? 'var(--bg-primary, #ffffff)' : 'transparent',
-                              color: isActive ? 'var(--brand-color, #2563eb)' : 'var(--text-secondary, #64748b)',
+                              fontWeight: isActive ? 700 : 500,
+                              borderRadius: '6px',
+                              border: isActive ? '1px solid #cbd5e1' : '1px solid transparent',
+                              background: isActive ? '#ffffff' : 'transparent',
+                              color: isActive ? 'var(--brand-color, #065f46)' : '#475569',
                               cursor: 'pointer',
-                              transition: 'all 0.2s ease',
-                              boxShadow: isActive ? '0 2px 8px rgba(0, 0, 0, 0.05)' : 'none',
+                              transition: 'all 0.25s ease',
+                              boxShadow: isActive ? '0 2px 6px rgba(0, 0, 0, 0.08)' : 'none',
                               display: 'inline-flex',
                               alignItems: 'center',
                               justifyContent: 'center',
@@ -3405,7 +3427,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
 
               {/* TAB CONTENT */}
-              <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', flex: 1 }}>
+              <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', flex: 1, overflowY: 'hidden', minHeight: 0 }}>
                 {isEditingDetails ? (() => {
                   const dynamicSections = [];
                   let currentSec = { title: 'Basic Info', fields: [] };
@@ -3430,389 +3452,435 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                   const safeTabIdx = Math.min(activeDynamicTabIdx, activeSections.length - 1);
 
                   return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, minHeight: 0 }}>
                       {/* Dynamic Tabs Headers */}
-                      <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-tertiary)', padding: '4px', borderRadius: '8px', overflowX: 'auto' }}>
-                        {activeSections.map((sec, idx) => (
-                          <button
-                            key={idx}
-                            type="button"
-                            onClick={() => setActiveDynamicTabIdx(idx)}
-                            style={{
-                              padding: '8px 12px',
-                              fontSize: '11px',
-                              fontWeight: 600,
-                              borderRadius: '6px',
-                              border: 'none',
-                              background: safeTabIdx === idx ? 'var(--bg-secondary)' : 'transparent',
-                              color: safeTabIdx === idx ? 'var(--brand-color)' : 'var(--text-secondary)',
-                              boxShadow: safeTabIdx === idx ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                              cursor: 'pointer',
-                              whiteSpace: 'nowrap',
-                              transition: 'all 0.2s ease'
-                            }}
-                          >
-                            {sec.title}
-                          </button>
-                        ))}
+                      <div style={{ display: 'flex', gap: '6px', background: '#e2e8f0', padding: '6px', borderRadius: '8px', overflowX: 'auto', border: '1px solid #cbd5e1' }}>
+                        {activeSections.map((sec, idx) => {
+                          const isActive = safeTabIdx === idx;
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => setActiveDynamicTabIdx(idx)}
+                              style={{
+                                padding: '8px 16px',
+                                fontSize: '12px',
+                                fontWeight: isActive ? 700 : 500,
+                                borderRadius: '6px',
+                                border: isActive ? '1px solid #cbd5e1' : '1px solid transparent',
+                                background: isActive ? '#ffffff' : 'transparent',
+                                color: isActive ? 'var(--brand-color, #065f46)' : '#475569',
+                                boxShadow: isActive ? '0 2px 6px rgba(0,0,0,0.08)' : 'none',
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                                transition: 'all 0.25s ease'
+                              }}
+                            >
+                              {sec.title}
+                            </button>
+                          );
+                        })}
                       </div>
 
-                      {/* Dynamic Fields for the Active Section */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingRight: '6px' }}>
-                        {activeSections[safeTabIdx]?.fields
-                          .filter(field => {
-                            if (field.fieldname === 'company_search_documents') return false;
-                            const selectedType = dynamicFormValues['type'] || '';
-                            if (field.fieldname === 'date_of_birth' && selectedType !== 'Individual') {
-                              return false;
-                            }
-                            if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
-                              return false;
-                            }
-                            const isInternal = !!dynamicFormValues['is_internal_customer'];
-                            const fieldLabelLower = (field.label || '').toLowerCase();
-                            const fieldNameLower = (field.fieldname || '').toLowerCase();
-                            if (!isInternal) {
-                              if (fieldLabelLower.includes('represents company') || fieldNameLower.includes('represents_company')) {
+                      {/* Scrollable Fields & Checklist Container */}
+                      <div style={{ flex: 1, overflowY: 'auto', paddingRight: '6px', display: 'flex', flexDirection: 'column', gap: '16px', minHeight: 0 }}>
+                         {/* Dynamic Fields for the Active Section */}
+                          {(() => {
+                            const fields = activeSections[safeTabIdx]?.fields.filter(field => {
+                              if (field.fieldname === 'company_search_documents') return false;
+                              const selectedType = dynamicFormValues['type'] || '';
+                              if (field.fieldname === 'date_of_birth' && selectedType !== 'Individual') {
                                 return false;
                               }
-                              if (fieldLabelLower.includes('allowed to transact with') || fieldNameLower.includes('allowed_to_transact_with') || fieldNameLower.includes('allowed_to_transact')) {
+                              if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
                                 return false;
                               }
-                            }
-                            return true;
-                          })
-                          .map(field => (
-                            <DynamicFormField
-                              key={field.fieldname}
-                              field={field}
-                              value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
-                              onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
-                              linkOptionsCache={linkOptionsCache}
-                              fetchLinkOptions={fetchLinkOptions}
-                              getDocTypeFields={getDocTypeFields}
-                              erpnextConfig={erpnextConfig}
-                              getCsrfToken={getCsrfToken}
-                              formValues={dynamicFormValues}
-                            />
-                          ))}
-                      </div>
-
-                      {/* Unified Checklist UI for Company Search tab inside dynamic edit panel */}
-                      {activeSections[safeTabIdx]?.fields.some(f => f.fieldname === 'company_search_documents') && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
-                          <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Company Search Audit Checklist</h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            {(() => {
-                              const docs = caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [];
-
-                              // Map standard static checklist items
-                              const standardDocs = currentDocumentTypes.map(doc => {
-                                const erpDoc = docs.find(d =>
-                                  d.document_type?.toLowerCase().trim() === doc.label.toLowerCase().trim()
-                                );
-                                return {
-                                  key: doc.key,
-                                  label: doc.label,
-                                  erpDoc: erpDoc,
-                                  isStandard: true
-                                };
-                              });
-
-                              // Map custom dynamic checklist items
-                              const standardLabelsLower = new Set(currentDocumentTypes.map(d => d.label.toLowerCase().trim()));
-                              const customDocs = docs
-                                .filter(d => d.document_type && !standardLabelsLower.has(d.document_type.toLowerCase().trim()))
-                                .map((d, index) => ({
-                                  key: `custom_${index}_${d.name || d.document_type}`,
-                                  label: d.document_type,
-                                  erpDoc: d,
-                                  isStandard: false
-                                }));
-
-                              const combinedDocsList = [...standardDocs, ...customDocs];
-
-                              return combinedDocsList.map((docItem) => {
-                                const erpDoc = docItem.erpDoc;
-                                const fileUrl = erpDoc?.document || '';
-                                const isVerified = !!erpDoc?.verified;
-                                const isExpanded = !!expandedDocs[docItem.key];
-
-                                const draftEntry = checklistDrafts[docItem.label];
-                                const fileUrlDraft = draftEntry !== undefined ? draftEntry.doc : fileUrl;
-                                const isVerifiedDraft = draftEntry !== undefined ? draftEntry.verified : isVerified;
-
-                                let statusText = 'Pending Upload';
-                                let statusColor = 'var(--text-muted)';
-                                let statusBg = 'rgba(156, 163, 175, 0.1)';
-                                if (fileUrlDraft) {
-                                  if (isVerifiedDraft) {
-                                    statusText = 'Verified';
-                                    statusColor = '#10b981';
-                                    statusBg = 'rgba(16, 185, 129, 0.1)';
-                                  } else {
-                                    statusText = 'Needs Verification';
-                                    statusColor = '#d97706';
-                                    statusBg = 'rgba(217, 119, 6, 0.1)';
-                                  }
+                              const isInternal = !!dynamicFormValues['is_internal_customer'];
+                              const fieldLabelLower = (field.label || '').toLowerCase();
+                              const fieldNameLower = (field.fieldname || '').toLowerCase();
+                              if (!isInternal) {
+                                if (fieldLabelLower.includes('represents company') || fieldNameLower.includes('represents_company')) {
+                                  return false;
                                 }
+                                if (fieldLabelLower.includes('allowed to transact with') || fieldNameLower.includes('allowed_to_transact_with') || fieldNameLower.includes('allowed_to_transact')) {
+                                  return false;
+                                }
+                              }
+                              return true;
+                            }) || [];
 
-                                return (
-                                  <div
-                                    key={docItem.key}
-                                    style={{
-                                      background: 'var(--bg-primary)',
-                                      border: '1px solid var(--border-color)',
-                                      borderRadius: '10px',
-                                      display: 'flex',
-                                      flexDirection: 'column',
-                                      transition: 'all 0.2s ease',
-                                      boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
-                                      overflow: 'hidden'
-                                    }}
-                                  >
-                                    {/* Header Row - Click to collapse/expand */}
+                            const addressFieldNames = ['address_line_1', 'address_line_2', 'city', 'state', 'country'];
+                            const hasAddress = fields.some(f => addressFieldNames.includes(f.fieldname));
+                            const hasGeneral = fields.some(f => !addressFieldNames.includes(f.fieldname));
+
+                            if (hasAddress && hasGeneral) {
+                              const generalFields = fields.filter(f => !addressFieldNames.includes(f.fieldname));
+                              const addressFields = fields.filter(f => addressFieldNames.includes(f.fieldname));
+
+                              return (
+                                <>
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                    {generalFields.map(field => (
+                                      <DynamicFormField
+                                        key={field.fieldname}
+                                        field={field}
+                                        value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+                                        onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
+                                        linkOptionsCache={linkOptionsCache}
+                                        fetchLinkOptions={fetchLinkOptions}
+                                        getDocTypeFields={getDocTypeFields}
+                                        erpnextConfig={erpnextConfig}
+                                        getCsrfToken={getCsrfToken}
+                                        formValues={dynamicFormValues}
+                                      />
+                                    ))}
+                                  </div>
+
+                                  <div style={{
+                                    fontSize: '12px',
+                                    fontWeight: 700,
+                                    color: 'var(--brand-color, #065f46)',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.75px',
+                                    marginTop: '8px',
+                                    paddingBottom: '6px',
+                                    borderBottom: '1.5px solid var(--border-color)'
+                                  }}>
+                                    Address Info
+                                  </div>
+
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                    {addressFields.map(field => (
+                                      <DynamicFormField
+                                        key={field.fieldname}
+                                        field={field}
+                                        value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+                                        onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
+                                        linkOptionsCache={linkOptionsCache}
+                                        fetchLinkOptions={fetchLinkOptions}
+                                        getDocTypeFields={getDocTypeFields}
+                                        erpnextConfig={erpnextConfig}
+                                        getCsrfToken={getCsrfToken}
+                                        formValues={dynamicFormValues}
+                                      />
+                                    ))}
+                                  </div>
+                                </>
+                              );
+                            }
+
+                            return (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                {fields.map(field => (
+                                  <DynamicFormField
+                                    key={field.fieldname}
+                                    field={field}
+                                    value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+                                    onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
+                                    linkOptionsCache={linkOptionsCache}
+                                    fetchLinkOptions={fetchLinkOptions}
+                                    getDocTypeFields={getDocTypeFields}
+                                    erpnextConfig={erpnextConfig}
+                                    getCsrfToken={getCsrfToken}
+                                    formValues={dynamicFormValues}
+                                  />
+                                ))}
+                              </div>
+                            );
+                          })()}
+
+                        {/* Unified Checklist UI for Company Search tab inside dynamic edit panel */}
+                        {activeSections[safeTabIdx]?.fields.some(f => f.fieldname === 'company_search_documents') && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                              {(() => {
+                                const docs = caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [];
+
+                                // Map standard static checklist items
+                                const standardDocs = currentDocumentTypes.map(doc => {
+                                  const erpDoc = docs.find(d =>
+                                    d.document_type?.toLowerCase().trim() === doc.label.toLowerCase().trim()
+                                  );
+                                  return {
+                                    key: doc.key,
+                                    label: doc.label,
+                                    erpDoc: erpDoc,
+                                    isStandard: true
+                                  };
+                                });
+
+                                // Map custom dynamic checklist items
+                                const standardLabelsLower = new Set(currentDocumentTypes.map(d => d.label.toLowerCase().trim()));
+                                const customDocs = docs
+                                  .filter(d => d.document_type && !standardLabelsLower.has(d.document_type.toLowerCase().trim()))
+                                  .map((d, index) => ({
+                                    key: `custom_${index}_${d.name || d.document_type}`,
+                                    label: d.document_type,
+                                    erpDoc: d,
+                                    isStandard: false
+                                  }));
+
+                                const combinedDocsList = [...standardDocs, ...customDocs];
+
+                                return combinedDocsList.map((docItem) => {
+                                  const erpDoc = docItem.erpDoc;
+                                  const fileUrl = erpDoc?.document || '';
+                                  const isVerified = !!erpDoc?.verified;
+                                  const isExpanded = !!expandedDocs[docItem.key];
+
+                                  const draftEntry = checklistDrafts[docItem.label];
+                                  const fileUrlDraft = draftEntry !== undefined ? draftEntry.doc : fileUrl;
+                                  const isVerifiedDraft = draftEntry !== undefined ? draftEntry.verified : isVerified;
+
+                                  let statusText = 'Upload';
+                                  let statusColor = 'var(--text-muted)';
+                                  let statusBg = 'rgba(156, 163, 175, 0.1)';
+                                  if (fileUrlDraft) {
+                                    if (isVerifiedDraft) {
+                                      statusText = 'Verified';
+                                      statusColor = '#10b981';
+                                      statusBg = 'rgba(16, 185, 129, 0.1)';
+                                    } else {
+                                      statusText = 'Needs Verification';
+                                      statusColor = '#d97706';
+                                      statusBg = 'rgba(217, 119, 6, 0.1)';
+                                    }
+                                  }
+
+                                  return (
                                     <div
-                                      onClick={() => toggleDocExpand(docItem.key)}
+                                      key={docItem.key}
                                       style={{
-                                        padding: '12px 16px',
+                                        background: 'var(--bg-primary)',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: '10px',
                                         display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'space-between',
-                                        cursor: 'pointer',
-                                        background: isExpanded ? 'var(--bg-secondary)' : 'transparent',
-                                        transition: 'background 0.2s ease'
+                                        flexDirection: 'column',
+                                        transition: 'all 0.2s ease',
+                                        boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                                        overflow: 'hidden'
                                       }}
                                     >
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                                        {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
-                                        <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                          {docItem.label}
-                                        </span>
-                                        <span style={{
-                                          fontSize: '10px',
-                                          fontWeight: 700,
-                                          padding: '2px 6px',
-                                          borderRadius: '4px',
-                                          background: statusBg,
-                                          color: statusColor,
-                                          marginLeft: '8px'
-                                        }}>
-                                          {statusText}
-                                        </span>
-                                      </div>
-
-                                      {/* Verify toggle stays on header for quick access */}
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <label
-                                          onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
-                                          style={{
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: '6px',
-                                            cursor: fileUrlDraft ? 'pointer' : 'not-allowed',
-                                            fontSize: '11.5px',
-                                            fontWeight: 600,
-                                            opacity: fileUrlDraft ? 1 : 0.4
-                                          }}
-                                        >
-                                          <input
-                                            type="checkbox"
-                                            disabled={!fileUrlDraft}
-                                            checked={isVerifiedDraft}
-                                            onChange={(e) => {
-                                              const newVal = e.target.checked;
-                                              setChecklistDrafts(prev => {
-                                                const currentDraft = prev[docItem.label] || { doc: fileUrl, verified: isVerified };
-                                                return {
-                                                  ...prev,
-                                                  [docItem.label]: {
-                                                    ...currentDraft,
-                                                    verified: newVal
-                                                  }
-                                                };
-                                              });
-                                            }}
-                                            style={{ accentColor: 'var(--brand-color)' }}
-                                          />
-                                          <span>Verify Draft</span>
-                                        </label>
-
-                                        {fileUrlDraft && (
-                                          <button
-                                            type="button"
-                                            onClick={async (e) => {
-                                              e.stopPropagation();
-                                              const targetVerified = !isVerifiedDraft;
-                                              await saveDocumentToERPNext(docItem.label, fileUrlDraft, targetVerified);
-                                              setChecklistDrafts(prev => {
-                                                const next = { ...prev };
-                                                delete next[docItem.label];
-                                                return next;
-                                              });
-                                            }}
-                                            style={{
-                                              background: 'transparent',
-                                              border: 'none',
-                                              color: 'var(--brand-color)',
-                                              cursor: 'pointer',
-                                              fontSize: '11px',
-                                              fontWeight: 700,
-                                              display: 'flex',
-                                              alignItems: 'center',
-                                              gap: '4px',
-                                              padding: '4px 8px',
-                                              borderRadius: '4px',
-                                              border: '1px solid var(--border-color)',
-                                              transition: 'all 0.2s'
-                                            }}
-                                            onMouseEnter={(e) => {
-                                              e.currentTarget.style.background = 'var(--bg-secondary)';
-                                            }}
-                                            onMouseLeave={(e) => {
-                                              e.currentTarget.style.background = 'transparent';
-                                            }}
-                                          >
-                                            {isVerifiedDraft ? <ShieldAlert size={12} style={{ color: '#d97706' }} /> : <ShieldCheck size={12} />}
-                                            <span>{isVerifiedDraft ? 'Unverify Instantly' : 'Verify Instantly'}</span>
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
-
-                                    {/* Expanded Content Panel */}
-                                    {isExpanded && (
-                                      <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-secondary)' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', justifySelf: 'space-between', gap: '12px' }}>
-                                          {/* File details and attachments */}
-                                          {fileUrlDraft ? (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                                              <button
-                                                onClick={() => {
-                                                  const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                                  setPreviewDocUrl(fullUrl);
-                                                  setPreviewDocTitle(docItem.label);
-                                                }}
-                                                style={{
-                                                  background: 'transparent',
-                                                  border: 'none',
-                                                  color: 'var(--brand-color)',
-                                                  fontSize: '12px',
-                                                  fontWeight: 600,
-                                                  cursor: 'pointer',
-                                                  display: 'inline-flex',
-                                                  alignItems: 'center',
-                                                  gap: '4px',
-                                                  padding: 0,
-                                                  overflow: 'hidden',
-                                                  textOverflow: 'ellipsis',
-                                                  whiteSpace: 'nowrap'
-                                                }}
-                                              >
-                                                <Eye size={13} style={{ flexShrink: 0 }} />
-                                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                  Preview: {fileUrlDraft.split('/').pop()}
-                                                </span>
-                                              </button>
-
-                                              <button
-                                                onClick={() => {
-                                                  setChecklistDrafts(prev => ({
-                                                    ...prev,
-                                                    [docItem.label]: {
-                                                      ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
-                                                      doc: '',
-                                                      verified: false
-                                                    }
-                                                  }));
-                                                }}
-                                                style={{
-                                                  background: 'rgba(239, 68, 68, 0.08)',
-                                                  border: 'none',
-                                                  borderRadius: '6px',
-                                                  color: '#ef4444',
-                                                  padding: '6px 10px',
-                                                  cursor: 'pointer',
-                                                  display: 'flex',
-                                                  alignItems: 'center',
-                                                  justifyContent: 'center',
-                                                  marginLeft: 'auto'
-                                                }}
-                                                title="Remove File"
-                                              >
-                                                <Trash2 size={13} />
-                                                <span style={{ fontSize: '11px', fontWeight: 600, marginLeft: '4px' }}>Remove</span>
-                                              </button>
-                                            </div>
-                                          ) : (
-                                            <label style={{
-                                              display: 'inline-flex',
-                                              alignItems: 'center',
-                                              gap: '6px',
-                                              padding: '8px 16px',
-                                              border: '1px solid var(--border-color)',
-                                              background: 'var(--bg-primary)',
-                                              borderRadius: '6px',
-                                              fontSize: '12px',
-                                              fontWeight: 600,
-                                              cursor: uploadingFile ? 'not-allowed' : 'pointer',
-                                              transition: 'all 0.15s ease'
-                                            }}>
-                                              <Paperclip size={14} />
-                                              <span>Attach Document</span>
-                                              <input
-                                                type="file"
-                                                disabled={uploadingFile}
-                                                onChange={(e) => handleFileUpload(e, (url) => {
-                                                  setChecklistDrafts(prev => ({
-                                                    ...prev,
-                                                    [docItem.label]: {
-                                                      ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
-                                                      doc: url
-                                                    }
-                                                  }));
-                                                })}
-                                                style={{ display: 'none' }}
-                                              />
-                                            </label>
-                                          )}
+                                      {/* Header Row - Click to collapse/expand */}
+                                      <div
+                                        onClick={() => toggleDocExpand(docItem.key)}
+                                        style={{
+                                          padding: '12px 16px',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'space-between',
+                                          cursor: 'pointer',
+                                          background: isExpanded ? 'var(--bg-secondary)' : 'transparent',
+                                          transition: 'background 0.2s ease'
+                                        }}
+                                      >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                                          {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
+                                          <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {docItem.label}
+                                          </span>
+                                          <span style={{
+                                            fontSize: '10px',
+                                            fontWeight: 700,
+                                            padding: '2px 6px',
+                                            borderRadius: '4px',
+                                            background: statusBg,
+                                            color: statusColor,
+                                            marginLeft: '8px'
+                                          }}>
+                                            {statusText}
+                                          </span>
                                         </div>
 
-                                        {/* Tiny Preview Box */}
-                                        {fileUrlDraft && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrlDraft) && (
-                                          <div
-                                            onClick={() => {
-                                              const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                              setPreviewDocUrl(fullUrl);
-                                              setPreviewDocTitle(docItem.label);
-                                            }}
-                                            style={{ width: '100%', height: '100px', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'pointer' }}
-                                          >
-                                            <img
-                                              src={fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`}
-                                              alt={docItem.label}
-                                              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                                              crossOrigin="use-credentials"
-                                            />
-                                          </div>
-                                        )}
+                                        {/* Verify toggle stays on header for quick access */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+
+                                          {fileUrlDraft && (
+                                            <button
+                                              type="button"
+                                              onClick={async (e) => {
+                                                e.stopPropagation();
+                                                const targetVerified = !isVerifiedDraft;
+                                                await saveDocumentToERPNext(docItem.label, fileUrlDraft, targetVerified);
+                                                setChecklistDrafts(prev => {
+                                                  const next = { ...prev };
+                                                  delete next[docItem.label];
+                                                  return next;
+                                                });
+                                              }}
+                                              style={{
+                                                background: 'transparent',
+                                                border: 'none',
+                                                color: 'var(--brand-color)',
+                                                cursor: 'pointer',
+                                                fontSize: '11px',
+                                                fontWeight: 700,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                padding: '4px 8px',
+                                                borderRadius: '4px',
+                                                border: '1px solid var(--border-color)',
+                                                transition: 'all 0.2s'
+                                              }}
+                                              onMouseEnter={(e) => {
+                                                e.currentTarget.style.background = 'var(--bg-secondary)';
+                                              }}
+                                              onMouseLeave={(e) => {
+                                                e.currentTarget.style.background = 'transparent';
+                                              }}
+                                            >
+                                              {isVerifiedDraft ? <ShieldAlert size={12} style={{ color: '#d97706' }} /> : <ShieldCheck size={12} />}
+                                              <span>{isVerifiedDraft ? 'Unverify' : 'Verify'}</span>
+                                            </button>
+                                          )}
+                                        </div>
                                       </div>
-                                    )}
-                                  </div>
-                                );
-                              });
-                            })()}
+
+                                      {/* Expanded Content Panel */}
+                                      {isExpanded && (
+                                        <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-secondary)' }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', justifySelf: 'space-between', gap: '12px' }}>
+                                            {/* File details and attachments */}
+                                            {fileUrlDraft ? (
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+                                                <button
+                                                  onClick={() => {
+                                                    const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                                    setPreviewDocUrl(fullUrl);
+                                                    setPreviewDocTitle(docItem.label);
+                                                  }}
+                                                  style={{
+                                                    background: 'transparent',
+                                                    border: 'none',
+                                                    color: 'var(--brand-color)',
+                                                    fontSize: '12px',
+                                                    fontWeight: 600,
+                                                    cursor: 'pointer',
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px',
+                                                    padding: 0,
+                                                    overflow: 'hidden',
+                                                    textOverflow: 'ellipsis',
+                                                    whiteSpace: 'nowrap'
+                                                  }}
+                                                >
+                                                  <Eye size={13} style={{ flexShrink: 0 }} />
+                                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    Preview: {fileUrlDraft.split('/').pop()}
+                                                  </span>
+                                                </button>
+
+                                                <button
+                                                  onClick={() => {
+                                                    setChecklistDrafts(prev => ({
+                                                      ...prev,
+                                                      [docItem.label]: {
+                                                        ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
+                                                        doc: '',
+                                                        verified: false
+                                                      }
+                                                    }));
+                                                  }}
+                                                  style={{
+                                                    background: 'rgba(239, 68, 68, 0.08)',
+                                                    border: 'none',
+                                                    borderRadius: '6px',
+                                                    color: '#ef4444',
+                                                    padding: '6px 10px',
+                                                    cursor: 'pointer',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    marginLeft: 'auto'
+                                                  }}
+                                                  title="Remove File"
+                                                >
+                                                  <Trash2 size={13} />
+                                                  <span style={{ fontSize: '11px', fontWeight: 600, marginLeft: '4px' }}>Remove</span>
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              <label style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                padding: '8px 16px',
+                                                border: '1px solid var(--border-color)',
+                                                background: 'var(--bg-primary)',
+                                                borderRadius: '6px',
+                                                fontSize: '12px',
+                                                fontWeight: 600,
+                                                cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                                                transition: 'all 0.15s ease'
+                                              }}>
+                                                <Paperclip size={14} />
+                                                <span>Attach Document</span>
+                                                <input
+                                                  type="file"
+                                                  disabled={uploadingFile}
+                                                  onChange={(e) => handleFileUpload(e, (url) => {
+                                                    setChecklistDrafts(prev => ({
+                                                      ...prev,
+                                                      [docItem.label]: {
+                                                        ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
+                                                        doc: url
+                                                      }
+                                                    }));
+                                                  })}
+                                                  style={{ display: 'none' }}
+                                                />
+                                              </label>
+                                            )}
+                                          </div>
+
+                                          {/* Tiny Preview Box */}
+                                          {fileUrlDraft && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrlDraft) && (
+                                            <div
+                                              onClick={() => {
+                                                const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                                setPreviewDocUrl(fullUrl);
+                                                setPreviewDocTitle(docItem.label);
+                                              }}
+                                              style={{ width: '100%', height: '100px', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'pointer' }}
+                                            >
+                                              <img
+                                                src={fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`}
+                                                alt={docItem.label}
+                                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                                crossOrigin="use-credentials"
+                                              />
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                });
+                              })()}
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
+                      </div>
 
                       {/* Action buttons */}
-                      <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '16px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                         <button
                           type="button"
                           onClick={() => setIsEditingDetails(false)}
                           disabled={updatingDetails}
-                          style={{ flex: 1, padding: '10px', fontSize: '13px', fontWeight: 600, border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                          style={{
+                            padding: '7px 16px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '6px',
+                            background: 'var(--bg-primary)',
+                            color: 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            minWidth: '90px'
+                          }}
                         >
                           Cancel
                         </button>
@@ -3821,16 +3889,16 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           onClick={handleUpdateCoreDetails}
                           disabled={updatingDetails}
                           style={{
-                            flex: 1,
-                            padding: '10px',
-                            fontSize: '13px',
+                            padding: '7px 16px',
+                            fontSize: '12px',
                             fontWeight: 600,
                             border: 'none',
                             borderRadius: '6px',
-                            background: updatingDetails ? 'var(--text-muted, #64748b)' : 'var(--brand-color, #2563eb)',
+                            background: updatingDetails ? 'var(--text-muted, #64748b)' : 'var(--brand-color, #065f46)',
                             color: '#fff',
                             cursor: updatingDetails ? 'not-allowed' : 'pointer',
-                            boxShadow: '0 4px 12px rgba(37, 99, 235, 0.2)'
+                            minWidth: '110px',
+                            boxShadow: '0 2px 4px rgba(6, 95, 70, 0.15)'
                           }}
                         >
                           {updatingDetails ? 'Updating...' : 'Save Changes'}
@@ -3842,13 +3910,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                   <>
                     {/* Basic Details */}
                     {activeDetailTab === 'basic' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
                         <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Basic Onboarding Details</h4>
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                          {/* Customer Type */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                          {/* Tenant Type */}
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Customer Type</span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Tenant Type</span>
                             {isEditingDetails ? (
                               <select
                                 value={editType}
@@ -3984,8 +4052,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             );
                           })()}
 
-                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Is Internal Customer?</span>
+                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gridColumn: 'span 2' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Is Internal Tenant?</span>
                             {isEditingDetails ? (
                               <input
                                 type="checkbox"
@@ -4006,7 +4074,22 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.date_of_birth || '—'}</div>
                             </div>
                           )}
+                        </div>
 
+                        <div style={{
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          color: 'var(--brand-color, #065f46)',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.75px',
+                          marginTop: '8px',
+                          paddingBottom: '6px',
+                          borderBottom: '1.5px solid var(--border-color)'
+                        }}>
+                          Address Info
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Address Line 1</span>
                             {isEditingDetails ? (
@@ -4116,7 +4199,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                     {/* Stage 1: Business Proposal */}
                     {activeDetailTab === 'proposal' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
                         <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Business Proposal Fields</h4>
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -4145,7 +4228,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Required Space(Sqm)</span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Required Space(Sq Ft)</span>
                             {isEditingDetails ? (
                               <input
                                 type="number"
@@ -4154,7 +4237,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.required_space ? `${selectedCase.required_space} Sqm` : '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.required_space ? `${selectedCase.required_space} Sq Ft` : '—'}</div>
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -4354,7 +4437,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                     {/* Stage 2: Booking Form */}
                     {activeDetailTab === 'booking' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
                         <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Booking Form Terms & Conditions</h4>
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -4623,10 +4706,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                     {/* Stage 3: Company Search Documents */}
                     {activeDetailTab === 'documents' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Company Search Audit Checklist</h4>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, minHeight: 0 }}>
+                        <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 700 }}>Company Search Audit Checklist</h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
                           {(() => {
                             const docs = caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [];
 
@@ -4666,7 +4748,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               const fileUrlDraft = draftEntry !== undefined ? draftEntry.doc : fileUrl;
                               const isVerifiedDraft = draftEntry !== undefined ? draftEntry.verified : isVerified;
 
-                              let statusText = 'Pending Upload';
+                              let statusText = 'Upload';
                               let statusColor = 'var(--text-muted)';
                               let statusBg = 'rgba(156, 163, 175, 0.1)';
                               if (fileUrlDraft) {
@@ -4728,40 +4810,6 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                                     {/* Verify toggle stays on header for quick access */}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                      <label
-                                        onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: '6px',
-                                          cursor: fileUrlDraft ? 'pointer' : 'not-allowed',
-                                          fontSize: '11.5px',
-                                          fontWeight: 600,
-                                          opacity: fileUrlDraft ? 1 : 0.4
-                                        }}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          disabled={!fileUrlDraft}
-                                          checked={isVerifiedDraft}
-                                          onChange={(e) => {
-                                            const newVal = e.target.checked;
-                                            setChecklistDrafts(prev => {
-                                              const currentDraft = prev[docItem.label] || { doc: fileUrl, verified: isVerified };
-                                              return {
-                                                ...prev,
-                                                [docItem.label]: {
-                                                  ...currentDraft,
-                                                  verified: newVal
-                                                }
-                                              };
-                                            });
-                                          }}
-                                          style={{ accentColor: 'var(--brand-color)' }}
-                                        />
-                                        <span>Verify Draft</span>
-                                      </label>
-
                                       {fileUrlDraft && (
                                         <button
                                           type="button"
@@ -4798,7 +4846,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                           }}
                                         >
                                           {isVerifiedDraft ? <ShieldAlert size={12} style={{ color: '#d97706' }} /> : <ShieldCheck size={12} />}
-                                          <span>{isVerifiedDraft ? 'Unverify Instantly' : 'Verify Instantly'}</span>
+                                          <span>{isVerifiedDraft ? 'Unverify' : 'Verify'}</span>
                                         </button>
                                       )}
                                     </div>
@@ -5011,8 +5059,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         const safeTabIdx = Math.min(activeDynamicTabIdx, activeSections.length - 1);
 
         return (
-          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)' }}>
-            <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '12px', width: '100%', maxWidth: '560px', padding: '24px', position: 'relative', display: 'flex', flexDirection: 'column', gap: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="onboarding-modal-overlay">
+            <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '12px', width: '100%', maxWidth: '1050px', padding: '24px', position: 'relative', display: 'flex', flexDirection: 'column', gap: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', maxHeight: '90vh', overflowY: 'auto' }}>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h2 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>Start New Onboarding</h2>
@@ -5030,33 +5078,36 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 {useDynamicForm && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     {/* Dynamic Tabs Headers */}
-                    <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-tertiary)', padding: '4px', borderRadius: '8px', overflowX: 'auto' }}>
-                      {activeSections.map((sec, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => setActiveDynamicTabIdx(idx)}
-                          style={{
-                            padding: '8px 12px',
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            borderRadius: '6px',
-                            border: 'none',
-                            background: safeTabIdx === idx ? 'var(--bg-secondary)' : 'transparent',
-                            color: safeTabIdx === idx ? 'var(--brand-color)' : 'var(--text-secondary)',
-                            boxShadow: safeTabIdx === idx ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap',
-                            transition: 'all 0.2s ease'
-                          }}
-                        >
-                          {sec.title}
-                        </button>
-                      ))}
+                    <div style={{ display: 'flex', gap: '6px', background: '#e2e8f0', padding: '6px', borderRadius: '8px', overflowX: 'auto', border: '1px solid #cbd5e1' }}>
+                      {activeSections.map((sec, idx) => {
+                        const isActive = safeTabIdx === idx;
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setActiveDynamicTabIdx(idx)}
+                            style={{
+                              padding: '8px 16px',
+                              fontSize: '12px',
+                              fontWeight: isActive ? 700 : 500,
+                              borderRadius: '6px',
+                              border: isActive ? '1px solid #cbd5e1' : '1px solid transparent',
+                              background: isActive ? '#ffffff' : 'transparent',
+                              color: isActive ? 'var(--brand-color, #065f46)' : '#475569',
+                              boxShadow: isActive ? '0 2px 6px rgba(0,0,0,0.08)' : 'none',
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              transition: 'all 0.25s ease'
+                            }}
+                          >
+                            {sec.title}
+                          </button>
+                        );
+                      })}
                     </div>
 
                     {/* Dynamic Fields for the Active Section */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', maxHeight: '48vh', overflowY: 'auto', paddingRight: '6px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', height: '380px', overflowY: 'auto', paddingRight: '6px' }}>
                       {activeSections[safeTabIdx]?.fields
                         .filter(field => {
                           const selectedType = dynamicFormValues['type'] || '';
@@ -5306,7 +5357,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                       <div>
-                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Required Space(Sqm)</label>
+                        <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Required Space(Sq Ft)</label>
                         <input
                           type="number"
                           placeholder="e.g. 120"
@@ -5598,7 +5649,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                         }));
                       };
 
-                      let statusText = 'Pending Upload';
+                      let statusText = 'Upload';
                       let statusColor = 'var(--text-muted, #94a3b8)';
                       let statusBg = 'rgba(156, 163, 175, 0.1)';
                       if (docObj.doc) {
@@ -5786,74 +5837,82 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 )}
 
                 {/* Submit buttons */}
-                <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                <div style={{ display: 'flex', gap: '10px', marginTop: '16px', justifyContent: 'flex-end' }}>
                   <button
                     type="button"
                     onClick={() => { setShowModal(false); resetFormFields(); }}
                     disabled={submitting}
-                    style={{ flex: 1, padding: '10px', fontSize: '13px', fontWeight: 600, border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                    style={{
+                      padding: '7px 16px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '6px',
+                      background: 'var(--bg-primary)',
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      minWidth: '90px'
+                    }}
                   >
                     Cancel
                   </button>
 
-                  <div style={{ display: 'flex', gap: '12px', flex: 2 }}>
-                    {safeTabIdx < activeSections.length - 1 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const currentFields = activeSections[safeTabIdx]?.fields || [];
-                          const missing = currentFields.filter(f => isFieldRequired(f, dynamicFormValues) && (dynamicFormValues[f.fieldname] === undefined || dynamicFormValues[f.fieldname] === null || String(dynamicFormValues[f.fieldname]).trim() === ''));
-                          if (missing.length > 0) {
-                            alert(`Please fill in the following mandatory fields first: ${missing.map(f => f.label || f.fieldname).join(', ')}`, 'error');
-                            return;
-                          }
-                          setActiveDynamicTabIdx(safeTabIdx + 1);
-                        }}
-                        style={{
-                          flex: 1,
-                          padding: '10px',
-                          fontSize: '13px',
-                          fontWeight: 700,
-                          border: '1.5px solid var(--brand-color, #2563eb)',
-                          borderRadius: '6px',
-                          background: 'var(--bg-accent-alpha, rgba(37, 99, 235, 0.08))',
-                          color: 'var(--brand-color, #2563eb)',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 6,
-                          boxShadow: '0 2px 6px rgba(37, 99, 235, 0.05)',
-                          transition: 'all 0.2s ease'
-                        }}
-                      >
-                        <span>Save & Next</span>
-                        <ArrowRight size={14} />
-                      </button>
-                    )}
+                  {safeTabIdx < activeSections.length - 1 && (
                     <button
-                      type="submit"
-                      disabled={submitting || uploadingFile || !isFormValid}
+                      type="button"
+                      onClick={() => {
+                        const currentFields = activeSections[safeTabIdx]?.fields || [];
+                        const missing = currentFields.filter(f => isFieldRequired(f, dynamicFormValues) && (dynamicFormValues[f.fieldname] === undefined || dynamicFormValues[f.fieldname] === null || String(dynamicFormValues[f.fieldname]).trim() === ''));
+                        if (missing.length > 0) {
+                          alert(`Please fill in the following mandatory fields first: ${missing.map(f => f.label || f.fieldname).join(', ')}`, 'error');
+                          return;
+                        }
+                        setActiveDynamicTabIdx(safeTabIdx + 1);
+                      }}
                       style={{
-                        flex: 1,
-                        padding: '10px',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        border: 'none',
+                        padding: '7px 16px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        border: '1.5px solid var(--brand-color, #2563eb)',
                         borderRadius: '6px',
-                        background: (submitting || uploadingFile || !isFormValid) ? 'var(--border-color, #d1d5db)' : 'var(--brand-color, #2563eb)',
-                        color: (submitting || uploadingFile || !isFormValid) ? 'var(--text-muted, #9ca3af)' : '#fff',
-                        cursor: (submitting || uploadingFile || !isFormValid) ? 'not-allowed' : 'pointer',
+                        background: 'var(--bg-accent-alpha, rgba(37, 99, 235, 0.08))',
+                        color: 'var(--brand-color, #2563eb)',
+                        cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         gap: 6,
+                        minWidth: '110px',
+                        boxShadow: '0 2px 6px rgba(37, 99, 235, 0.05)',
                         transition: 'all 0.2s ease'
                       }}
                     >
-                      {submitting ? 'Creating...' : 'Submit'}
+                      <span>Save & Next</span>
+                      <ArrowRight size={14} />
                     </button>
-                  </div>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={submitting || uploadingFile || !isFormValid}
+                    style={{
+                      padding: '7px 16px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      border: 'none',
+                      borderRadius: '6px',
+                      background: (submitting || uploadingFile || !isFormValid) ? 'var(--border-color, #d1d5db)' : 'var(--brand-color, #2563eb)',
+                      color: (submitting || uploadingFile || !isFormValid) ? 'var(--text-muted, #9ca3af)' : '#fff',
+                      cursor: (submitting || uploadingFile || !isFormValid) ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      minWidth: '90px',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    {submitting ? 'Creating...' : 'Submit'}
+                  </button>
                 </div>
 
               </form>

@@ -3138,7 +3138,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
           <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input
             type="text"
-            placeholder="Search by ID, customer name, unit or quotation..."
+            placeholder="Search by ID, tenant name, unit or quotation..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="form-control"
@@ -3160,12 +3160,14 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
             <option value="Sale">Sale</option>
             <option value="Lease">Lease</option>
           </select>
+        </div>
 
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="form-control"
-            style={{ width: 140, fontSize: 13, padding: '4px 8px' }}
+            className="form-select"
+            style={{ minWidth: 120, fontSize: 12 }}
           >
             <option value="All">All Statuses</option>
             <option value="Confirmed">Confirmed</option>
@@ -3179,10 +3181,10 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
 
         {/* Customer Sync API Filter Form */}
         <form onSubmit={handleCustomerFilterSubmit} style={{ display: 'flex', gap: 6, alignItems: 'center', borderLeft: '1px solid var(--border-color)', paddingLeft: 14 }}>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Filter Customer ID:</span>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Filter Tenant ID:</span>
           <input
             type="text"
-            placeholder="e.g. CUST-0001"
+            placeholder="e.g. TEN-0001"
             value={customerFilter}
             onChange={(e) => {
               setCustomerFilter(e.target.value);
@@ -3469,7 +3471,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <User size={14} style={{ color: '#10b981' }} />
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Customer Name</span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Tenant Name</span>
                           </div>
                           <strong style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)' }}>{selectedBookingDetails.customer_name}</strong>
                         </div>
@@ -3478,7 +3480,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                               <Mail size={14} style={{ color: '#10b981' }} />
-                              <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Customer Email</span>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Tenant Email</span>
                             </div>
                             <strong style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)', wordBreak: 'break-all', marginLeft: '10px' }}>{selectedBookingDetails.customer_email}</strong>
                           </div>
@@ -3516,7 +3518,22 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                             <input
                               type="date"
                               value={editStartDate}
-                              onChange={(e) => setEditStartDate(e.target.value)}
+                              onChange={(e) => {
+                                const newStart = e.target.value;
+                                setEditStartDate(newStart);
+                                if (newStart) {
+                                  const d = new Date(newStart);
+                                  d.setFullYear(d.getFullYear() + 1);
+                                  const minEndStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                                  if (!editEndDate || new Date(editEndDate) < d) {
+                                    setEditEndDate(minEndStr);
+                                  }
+                                }
+                              }}
+                              min={(() => {
+                                const d = new Date();
+                                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                              })()}
                               style={{
                                 width: '100%',
                                 fontSize: '12px',
@@ -3545,6 +3562,12 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                               type="date"
                               value={editEndDate}
                               onChange={(e) => setEditEndDate(e.target.value)}
+                              min={(() => {
+                                if (!editStartDate) return '';
+                                const d = new Date(editStartDate);
+                                d.setFullYear(d.getFullYear() + 1);
+                                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                              })()}
                               style={{
                                 width: '100%',
                                 fontSize: '12px',
@@ -3803,12 +3826,6 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                       </div>
                       <span style={{ fontSize: '12px', fontWeight: 800, color: '#137333', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Billing Summary</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
-                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Total Booking Amt:</span>
-                      <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '13px', fontWeight: 700 }}>
-                        ${parseFloat(selectedBookingDetails.booking_amount || selectedBookingDetails.amount_to_pay || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </strong>
-                    </div>
 
                     {/* Monthly Breakdown separator */}
                     <div style={{ fontSize: '10px', color: '#137333', fontWeight: 700, textTransform: 'uppercase', marginTop: '6px', borderBottom: '1px dashed #f1f5f9', paddingBottom: '3px' }}>
@@ -3857,10 +3874,19 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px', borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '2px' }}>
-                      <span style={{ color: 'var(--text-primary, #0f172a)', fontWeight: 700 }}>Pending Balance:</span>
-                      <strong style={{ color: '#ef4444', fontSize: '13px', fontWeight: 800 }}>
-                        ${parseFloat(selectedBookingDetails.pending_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </strong>
+                      {(() => {
+                        const monthlyGrandTotal = parseFloat(selectedBookingDetails.grand_totalmonthly || selectedBookingDetails.per_month_billing_amount || 0);
+                        const paidAmount = parseFloat(selectedBookingDetails.paid_amount || 0);
+                        const pendingBalance = monthlyGrandTotal - paidAmount;
+                        return (
+                          <>
+                            <span style={{ color: 'var(--text-primary, #0f172a)', fontWeight: 700 }}>Pending Balance:</span>
+                            <strong style={{ color: '#ef4444', fontSize: '13px', fontWeight: 800 }}>
+                              ${pendingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </strong>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
 
