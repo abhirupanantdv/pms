@@ -5326,6 +5326,65 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   // Handle detailed Quotation view & retrieve client CRM metadata
   const fetchQuotationDetail = async (qName, customerId) => {
     if (!erpnextConfig || !erpnextConfig.url) return;
+
+    const parseNegotiationFromComment = (commentText) => {
+      if (!commentText) return null;
+
+      const decoded = commentText
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&');
+      const stripped = decoded.replace(/<[^>]*>?/gm, '');
+
+      if (!stripped.includes('Quotation Negotiation Version')) return null;
+
+      const getValue = (key) => {
+        const keys = [
+          'Quotation:',
+          'Current Version:',
+          'Total Versions:',
+          'Negotiation Date:',
+          'Negotiated By:',
+          'Previous Discount:',
+          'Current Discount:',
+          'Discount Percentage:',
+          'Discount Difference:',
+          'Previous Grand Total:',
+          'Current Grand Total:',
+          'Negotiation Status:'
+        ];
+
+        const keyIndex = stripped.indexOf(key);
+        if (keyIndex === -1) return '';
+
+        const startPos = keyIndex + key.length;
+        let endPos = stripped.length;
+        for (const k of keys) {
+          const kIndex = stripped.indexOf(k, startPos);
+          if (kIndex !== -1 && kIndex < endPos) {
+            endPos = kIndex;
+          }
+        }
+        return stripped.substring(startPos, endPos).trim();
+      };
+
+      const verNo = parseInt(getValue('Current Version:'), 10) || 0;
+      return {
+        name: `${getValue('Quotation:')}-v${verNo}`,
+        version_no: verNo,
+        negotiation_date: getValue('Negotiation Date:'),
+        negotiation_by: getValue('Negotiated By:'),
+        current_discount: parseFloat(getValue('Current Discount:')) || 0,
+        current_grand_total: parseFloat(getValue('Current Grand Total:')) || 0,
+        previous_discount: parseFloat(getValue('Previous Discount:')) || 0,
+        previous_grand_total: parseFloat(getValue('Previous Grand Total:')) || 0,
+        discount_difference: parseFloat(getValue('Discount Difference:')) || 0,
+        discount_percentage: getValue('Discount Percentage:'),
+        negotiation_status: getValue('Negotiation Status:')
+      };
+    };
+
     try {
       const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${qName}`, {
         credentials: 'include',
@@ -5378,20 +5437,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           }
         }
 
-        // Fetch Quotation Negotiation versions & Comments
-        try {
-          const negRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation Negotiation?filters=[["quotation", "=", "${qName}"]]&fields=["name","version_no","negotiation_date","negotiation_by","current_discount","current_grand_total","previous_discount","previous_grand_total","discount_difference","discount_percentage","negotiation_status"]&limit_page_length=100&order_by=version_no desc`, {
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' }
-          });
-          if (negRes.ok) {
-            const negJson = await negRes.json();
-            setNegotiations(negJson.data || []);
-          }
-        } catch (negErr) {
-          console.warn('Failed fetching negotiations:', negErr);
-        }
-
+        // Fetch Comments and parse negotiations
         try {
           const commentRes = await fetch(`${erpnextConfig.url}/api/resource/Comment?filters=[["reference_doctype", "=", "Quotation"], ["reference_name", "=", "${qName}"]]&fields=["name","comment_email","content","creation","comment_by"]&limit_page_length=100&order_by=creation desc`, {
             credentials: 'include',
@@ -5399,10 +5445,22 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           });
           if (commentRes.ok) {
             const commentJson = await commentRes.json();
-            setComments(commentJson.data || []);
+            const commentsData = commentJson.data || [];
+            setComments(commentsData);
+
+            // Parse negotiations history from comments instead of fetching Quotation Negotiation Doctype
+            const parsedNegotiations = [];
+            commentsData.forEach(c => {
+              const neg = parseNegotiationFromComment(c.content);
+              if (neg) {
+                parsedNegotiations.push(neg);
+              }
+            });
+            parsedNegotiations.sort((a, b) => b.version_no - a.version_no);
+            setNegotiations(parsedNegotiations);
           }
         } catch (cErr) {
-          console.warn('Failed fetching comments:', cErr);
+          console.warn('Failed fetching comments and parsing negotiations:', cErr);
         }
 
         // Fetch active workflow actions from get_quotation_workflow_actions API
@@ -6455,13 +6513,6 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   const currentPrice = selectedQuotationDetail.grand_total || 0;
                   const offeredPrice = selectedQuotationDetail.total || 0;
                   const discount = selectedQuotationDetail.discount_amount || 0;
-                  const diffPct = originalPrice > 0 ? (Math.abs((originalPrice - offeredPrice) / originalPrice) * 100).toFixed(2) : '0.00';
-
-                  const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
-                  const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
-                  const isDiscountDisabled = isTerminal;
-                  const isApproved = (selectedQuotationDetail.workflow_state || selectedQuotationDetail.status) === "Approved";
-                  const isDisabled = isTerminal;
 
                   const activeNegotiations = negotiations.length > 0 ? negotiations : [
                     { name: `${selectedQuotationDetail.name}-v4`, version_no: selectedQuotationDetail.custom_total_versions || 4, negotiation_date: selectedQuotationDetail.modified || '2026-07-30 15:54:28', negotiation_by: selectedQuotationDetail.custom_last_negotiated_by || 'devteam@anantdv.com', current_discount: selectedQuotationDetail.discount_amount || 98.5, current_grand_total: selectedQuotationDetail.grand_total || 3184.75, previous_discount: 75, previous_grand_total: 3208.25, discount_difference: 23.5, discount_percentage: 3, negotiation_status: selectedQuotationDetail.status || 'Draft' },
@@ -6469,6 +6520,17 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     { name: `${selectedQuotationDetail.name}-v2`, version_no: 2, negotiation_date: '2026-07-24 10:15:00', negotiation_by: selectedQuotationDetail.custom_customer_email || 'biswajitmaity@icloud.com', current_discount: 50.00, current_grand_total: 3233.25, previous_discount: 0.00, previous_grand_total: 3283.25, discount_difference: 50.00, discount_percentage: 1.5, negotiation_status: 'Counter Offer' },
                     { name: `${selectedQuotationDetail.name}-v1`, version_no: 1, negotiation_date: selectedQuotationDetail.creation || '2026-07-23 09:30:00', negotiation_by: 'devteam@anantdv.com', current_discount: 0.00, current_grand_total: 3283.25, previous_discount: 0.00, previous_grand_total: 3283.25, discount_difference: 0.00, discount_percentage: 0.00, negotiation_status: 'Initial Quote' }
                   ];
+
+                  const lastVersionDiscount = activeNegotiations.length > 1 ? activeNegotiations[1].previous_discount : 0;
+                  const diffPct = originalPrice > 0 ? ((lastVersionDiscount / originalPrice) * 100).toFixed(2) : '0.00';
+
+                  const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
+                  const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
+                  const isDiscountDisabled = isTerminal;
+                  const isApproved = (selectedQuotationDetail.workflow_state || selectedQuotationDetail.status) === "Approved";
+                  const isDisabled = isTerminal;
+
+
 
                   const activeComments = comments.length > 0 ? comments : [
                     { comment_by: selectedQuotationDetail.custom_last_negotiated_by || 'devteam@anantdv.com', content: selectedQuotationDetail.custom_negotiation_status || 'Initial quotation created.', creation: selectedQuotationDetail.modified || '2026-07-30 15:54:28' }
@@ -6513,7 +6575,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
                               Price Breakdown (Current)
                             </div>
-                             <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
+                            <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
                               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
                                 <thead>
                                   <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#4b5563' }}>
@@ -6525,7 +6587,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 <tbody>
                                   {(selectedQuotationDetail.items || []).map((item, idx) => {
                                     const matchedUnit = spaceUnits.find(u => u.name === item.item_code || u.item_code === item.item_code);
-                                    
+
                                     // Resolve area value
                                     let areaVal = '—';
                                     const isFee = (item.item_name || item.item_code || '').toLowerCase().match(/fee|charge|service|deposit|tax/);
@@ -6539,7 +6601,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                       else if (matchedUnit) {
                                         areaVal = matchedUnit.total_areasqm || matchedUnit.custom_total_area || matchedUnit.total_area || matchedUnit.area || matchedUnit.custom_total_area_sqft || '—';
                                       }
-                                      
+
                                       if (areaVal === '—') {
                                         // Fallback scan: find any item in the quote with qty > 1
                                         const otherWithQty = (selectedQuotationDetail.items || []).find(it => it.qty > 1);
@@ -6652,6 +6714,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
                               Negotiation Remarks
                             </div>
+                            {selectedQuotationDetail && selectedQuotationDetail.remarks && (
+                              <p style={{ margin: '8px 0', fontSize: 10, color: '#4b5563', lineHeight: 1.4, background: '#f9fafb', padding: '8px', borderRadius: 4 }}>
+                                {selectedQuotationDetail.remarks}
+                              </p>
+                            )}
                             <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, flex: 1, maxHeight: 180, overflowY: 'auto' }}>
                               {activeComments.map((c, idx) => {
                                 const isSales = c.comment_by?.includes('devteam') || c.comment_by?.includes('sales') || c.comment_email?.includes('devteam') || c.comment_email?.includes('sales') || c.owner?.includes('devteam');
@@ -6912,19 +6979,6 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             style={{ fontSize: 10, padding: '4px 8px', boxSizing: 'border-box', background: isDiscountDisabled ? '#f3f4f6' : '#ffffff', minHeight: 28 }}
                           />
                         </div>
-                      </div>
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <label style={{ fontSize: 8, color: '#6b7280', fontWeight: 700 }}>Manager Comment</label>
-                        <textarea
-                          placeholder="Enter comments here..."
-                          value={messageText}
-                          onChange={(e) => setMessageText(e.target.value)}
-                          disabled={isDisabled}
-                          className="form-input"
-                          rows={1}
-                          style={{ fontSize: 10, padding: '4px 8px', boxSizing: 'border-box', resize: 'none', background: isDisabled ? '#f3f4f6' : '#ffffff', minHeight: 28 }}
-                        />
                       </div>
 
                       {/* BUTTONS ROW (Dynamic workflow buttons + Booking + Print) */}
@@ -7510,7 +7564,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                       >
                         <span style={{ fontSize: 13, fontWeight: 700 }}>+</span>
-                        <span>Add Row</span>
+                        <span>Add More Units</span>
                       </button>
                     </div>
 

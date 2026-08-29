@@ -18,22 +18,22 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://192.168.101.180:8980',
+        target: 'http://182.71.135.110:8610',
         changeOrigin: true,
         secure: false,
       },
       '/printview': {
-        target: 'http://192.168.101.180:8980',
+        target: 'http://182.71.135.110:8610',
         changeOrigin: true,
         secure: false,
       },
       '/files': {
-        target: 'http://192.168.101.180:8980',
+        target: 'http://182.71.135.110:8610',
         changeOrigin: true,
         secure: false,
       },
       '/private': {
-        target: 'http://192.168.101.180:8980',
+        target: 'http://182.71.135.110:8610',
         changeOrigin: true,
         secure: false,
       }
