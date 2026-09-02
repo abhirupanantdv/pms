@@ -5326,16 +5326,22 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   // Handle detailed Quotation view & retrieve client CRM metadata
   const fetchQuotationDetail = async (qName, customerId) => {
     if (!erpnextConfig || !erpnextConfig.url) return;
+    setNegotiations([]);
+    setComments([]);
+    setWorkflowActions(null);
 
     const parseNegotiationFromComment = (commentText) => {
       if (!commentText) return null;
 
       const decoded = commentText
+        .replace(/<br\s*[\/]?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<\/div>/gi, '\n')
         .replace(/&nbsp;/g, ' ')
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
         .replace(/&amp;/g, '&');
-      const stripped = decoded.replace(/<[^>]*>?/gm, '');
+      const stripped = decoded.replace(/<[^>]*>?/gm, ' ').trim();
 
       if (!stripped.includes('Quotation Negotiation Version')) return null;
 
@@ -5361,6 +5367,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const startPos = keyIndex + key.length;
         let endPos = stripped.length;
         for (const k of keys) {
+          if (k === key) continue;
           const kIndex = stripped.indexOf(k, startPos);
           if (kIndex !== -1 && kIndex < endPos) {
             endPos = kIndex;
@@ -5369,10 +5376,14 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         return stripped.substring(startPos, endPos).trim();
       };
 
-      const verNo = parseInt(getValue('Current Version:'), 10) || 0;
+      const totalVerRaw = getValue('Total Versions:');
+      const currVerRaw = getValue('Current Version:');
+      const verNo = parseInt(totalVerRaw, 10) || parseInt(currVerRaw, 10) || 1;
+      const qtnName = getValue('Quotation:') || qName;
       return {
-        name: `${getValue('Quotation:')}-v${verNo}`,
+        name: `${qtnName}-v${verNo}`,
         version_no: verNo,
+        total_versions: parseInt(totalVerRaw, 10) || verNo,
         negotiation_date: getValue('Negotiation Date:'),
         negotiation_by: getValue('Negotiated By:'),
         current_discount: parseFloat(getValue('Current Discount:')) || 0,
@@ -5380,8 +5391,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         previous_discount: parseFloat(getValue('Previous Discount:')) || 0,
         previous_grand_total: parseFloat(getValue('Previous Grand Total:')) || 0,
         discount_difference: parseFloat(getValue('Discount Difference:')) || 0,
-        discount_percentage: getValue('Discount Percentage:'),
-        negotiation_status: getValue('Negotiation Status:')
+        discount_percentage: getValue('Discount Percentage:') || 0,
+        negotiation_status: getValue('Negotiation Status:') || 'Quotation Created'
       };
     };
 
@@ -5458,9 +5469,14 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             });
             parsedNegotiations.sort((a, b) => b.version_no - a.version_no);
             setNegotiations(parsedNegotiations);
+          } else {
+            setComments([]);
+            setNegotiations([]);
           }
         } catch (cErr) {
           console.warn('Failed fetching comments and parsing negotiations:', cErr);
+          setComments([]);
+          setNegotiations([]);
         }
 
         // Fetch active workflow actions from get_quotation_workflow_actions API
@@ -5501,6 +5517,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
   const handleRowClick = (quote) => {
     setSelectedQuotation(quote);
+    setSelectedQuotationDetail(null);
+    setNegotiations([]);
+    setComments([]);
+    setWorkflowActions(null);
     fetchQuotationDetail(quote.name, quote.party_name || quote.customer);
   };
 
@@ -5839,6 +5859,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       // Auto-select the newly created quotation in the preview pane by default
       if (createdName) {
         setSelectedQuotation({ name: createdName });
+        setSelectedQuotationDetail(null);
+        setNegotiations([]);
+        setComments([]);
+        setWorkflowActions(null);
         fetchQuotationDetail(createdName, quoteCustomer);
       }
     } catch (err) {
@@ -6370,7 +6394,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         {/* Backdrop with Blur Effect */}
         {selectedQuotation && selectedQuotationDetail && (
           <div
-            onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); }}
+            onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); setNegotiations([]); setComments([]); setWorkflowActions(null); }}
             style={{
               position: 'fixed',
               top: 0,
@@ -6407,7 +6431,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
               {/* Close details button */}
               <button
-                onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); }}
+                onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); setNegotiations([]); setComments([]); setWorkflowActions(null); }}
                 style={{ position: 'absolute', top: 12, right: 12, background: '#f3f4f6', border: 'none', borderRadius: '50%', color: '#374151', cursor: 'pointer', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}
               >
                 ×
@@ -6514,15 +6538,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   const offeredPrice = selectedQuotationDetail.total || 0;
                   const discount = selectedQuotationDetail.discount_amount || 0;
 
-                  const activeNegotiations = negotiations.length > 0 ? negotiations : [
-                    { name: `${selectedQuotationDetail.name}-v4`, version_no: selectedQuotationDetail.custom_total_versions || 4, negotiation_date: selectedQuotationDetail.modified || '2026-07-30 15:54:28', negotiation_by: selectedQuotationDetail.custom_last_negotiated_by || 'devteam@anantdv.com', current_discount: selectedQuotationDetail.discount_amount || 98.5, current_grand_total: selectedQuotationDetail.grand_total || 3184.75, previous_discount: 75, previous_grand_total: 3208.25, discount_difference: 23.5, discount_percentage: 3, negotiation_status: selectedQuotationDetail.status || 'Draft' },
-                    { name: `${selectedQuotationDetail.name}-v3`, version_no: 3, negotiation_date: '2026-07-26 16:30:00', negotiation_by: 'devteam@anantdv.com', current_discount: 75.00, current_grand_total: 3208.25, previous_discount: 50.00, previous_grand_total: 3233.25, discount_difference: 25.00, discount_percentage: 2, negotiation_status: 'Revised' },
-                    { name: `${selectedQuotationDetail.name}-v2`, version_no: 2, negotiation_date: '2026-07-24 10:15:00', negotiation_by: selectedQuotationDetail.custom_customer_email || 'biswajitmaity@icloud.com', current_discount: 50.00, current_grand_total: 3233.25, previous_discount: 0.00, previous_grand_total: 3283.25, discount_difference: 50.00, discount_percentage: 1.5, negotiation_status: 'Counter Offer' },
-                    { name: `${selectedQuotationDetail.name}-v1`, version_no: 1, negotiation_date: selectedQuotationDetail.creation || '2026-07-23 09:30:00', negotiation_by: 'devteam@anantdv.com', current_discount: 0.00, current_grand_total: 3283.25, previous_discount: 0.00, previous_grand_total: 3283.25, discount_difference: 0.00, discount_percentage: 0.00, negotiation_status: 'Initial Quote' }
-                  ];
+                  const activeNegotiations = negotiations || [];
 
-                  const lastVersionDiscount = activeNegotiations.length > 1 ? activeNegotiations[1].previous_discount : 0;
-                  const diffPct = originalPrice > 0 ? ((lastVersionDiscount / originalPrice) * 100).toFixed(2) : '0.00';
+                  const diffPct = originalPrice > 0 ? ((discount / originalPrice) * 100).toFixed(2) : '0.00';
 
                   const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
                   const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
@@ -6530,10 +6548,12 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   const isApproved = (selectedQuotationDetail.workflow_state || selectedQuotationDetail.status) === "Approved";
                   const isDisabled = isTerminal;
 
-
-
                   const activeComments = comments.length > 0 ? comments : [
-                    { comment_by: selectedQuotationDetail.custom_last_negotiated_by || 'devteam@anantdv.com', content: selectedQuotationDetail.custom_negotiation_status || 'Initial quotation created.', creation: selectedQuotationDetail.modified || '2026-07-30 15:54:28' }
+                    {
+                      comment_by: selectedQuotationDetail.custom_last_negotiated_by || selectedQuotationDetail.owner || 'Sales Team',
+                      content: selectedQuotationDetail.custom_negotiation_status || 'Initial quotation created.',
+                      creation: selectedQuotationDetail.creation ? selectedQuotationDetail.creation.split('.')[0] : (selectedQuotationDetail.modified ? selectedQuotationDetail.modified.split('.')[0] : new Date().toISOString().split('T')[0])
+                    }
                   ];
 
                   const stripHtml = (html) => {
@@ -6565,7 +6585,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               </div>
                               <div style={{ borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb', paddingTop: 8, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                                 <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Difference</div>
-                                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: '#ef4444' }}>-{diffPct}%</div>
+                                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: '#ef4444' }}>
+                                  {parseFloat(diffPct) > 0 ? `-${diffPct}%` : '0.00%'}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -6660,54 +6682,56 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         </div>
 
                         {/* ROW 2: Negotiation Timeline & Negotiation Remarks */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flexShrink: 0, alignItems: 'start' }}>
-                          {/* Negotiation Timeline */}
-                          <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
-                              Negotiation Timeline
-                            </div>
-                            <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
-                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
-                                <thead>
-                                  <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#4b5563' }}>
-                                    <th style={{ padding: '6px 12px' }}>Version</th>
-                                    <th style={{ padding: '6px 12px' }}>Date</th>
-                                    <th style={{ padding: '6px 12px' }}>By</th>
-                                    <th style={{ padding: '6px 12px', textAlign: 'right' }}>Discount</th>
-                                    <th style={{ padding: '6px 12px', textAlign: 'right' }}>Grand Total</th>
-                                    <th style={{ padding: '6px 12px' }}>Status</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {activeNegotiations.map((n, idx) => (
-                                    <tr key={n.name || idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                      <td style={{ padding: '6px 12px', fontWeight: 600, color: idx === 0 ? 'var(--brand-color)' : '#4b5563' }}>
-                                        V{n.version_no} {idx === 0 ? '(Current)' : idx === activeNegotiations.length - 1 ? '(Initial)' : ''}
-                                      </td>
-                                      <td style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>{n.negotiation_date ? n.negotiation_date.split(' ')[0] : '—'}</td>
-                                      <td style={{ padding: '6px 12px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 100 }} title={n.negotiation_by}>
-                                        {n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}
-                                      </td>
-                                      <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString()}</td>
-                                      <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
-                                      <td style={{ padding: '6px 12px' }}>
-                                        <span style={{
-                                          padding: '2px 6px',
-                                          borderRadius: 8,
-                                          fontSize: 8,
-                                          fontWeight: 700,
-                                          backgroundColor: n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#fef3c7' : n.negotiation_status === 'Initial Quote' ? '#e0f2fe' : '#e5e7eb',
-                                          color: n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#d97706' : n.negotiation_status === 'Initial Quote' ? '#0369a1' : '#374151'
-                                        }}>
-                                          {n.negotiation_status || 'Submitted'}
-                                        </span>
-                                      </td>
+                        <div style={{ display: 'grid', gridTemplateColumns: activeNegotiations.length > 0 ? '1fr 1fr' : '1fr', gap: 14, flexShrink: 0, alignItems: 'start' }}>
+                          {/* Negotiation Timeline - Only rendered when negotiation comments exist */}
+                          {activeNegotiations.length > 0 && (
+                            <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                              <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
+                                Negotiation Timeline
+                              </div>
+                              <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                                  <thead>
+                                    <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#4b5563' }}>
+                                      <th style={{ padding: '6px 12px' }}>Version</th>
+                                      <th style={{ padding: '6px 12px' }}>Date</th>
+                                      <th style={{ padding: '6px 12px' }}>By</th>
+                                      <th style={{ padding: '6px 12px', textAlign: 'right' }}>Discount</th>
+                                      <th style={{ padding: '6px 12px', textAlign: 'right' }}>Grand Total</th>
+                                      <th style={{ padding: '6px 12px' }}>Status</th>
                                     </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                                  </thead>
+                                  <tbody>
+                                    {activeNegotiations.map((n, idx) => (
+                                      <tr key={`${n.name || 'neg'}-${idx}`} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                        <td style={{ padding: '6px 12px', fontWeight: 600, color: idx === 0 ? 'var(--brand-color)' : '#4b5563' }}>
+                                          V{n.version_no} {idx === 0 ? '(Current)' : idx === activeNegotiations.length - 1 ? '(Initial)' : ''}
+                                        </td>
+                                        <td style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>{n.negotiation_date ? n.negotiation_date.split(' ')[0] : '—'}</td>
+                                        <td style={{ padding: '6px 12px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 100 }} title={n.negotiation_by}>
+                                          {n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}
+                                        </td>
+                                        <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString()}</td>
+                                        <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
+                                        <td style={{ padding: '6px 12px' }}>
+                                          <span style={{
+                                            padding: '2px 6px',
+                                            borderRadius: 8,
+                                            fontSize: 8,
+                                            fontWeight: 700,
+                                            backgroundColor: n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#fef3c7' : n.negotiation_status === 'Initial Quote' ? '#e0f2fe' : '#e5e7eb',
+                                            color: n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#d97706' : n.negotiation_status === 'Initial Quote' ? '#0369a1' : '#374151'
+                                          }}>
+                                            {n.negotiation_status || 'Submitted'}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
                             </div>
-                          </div>
+                          )}
 
                           {/* Negotiation Remarks */}
                           <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -6751,20 +6775,26 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     return (
                       <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, overflowY: 'auto', minHeight: 0 }}>
                         <span style={{ fontWeight: 700, fontSize: 10, color: '#4b5563', textTransform: 'uppercase' }}>Revision Version History</span>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                          {activeNegotiations.map((n, idx) => (
-                            <div key={n.name || idx} style={{ borderLeft: '2px solid var(--brand-color)', paddingLeft: 12, position: 'relative' }}>
-                              <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--brand-color)', position: 'absolute', left: -5, top: 4 }} />
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <strong style={{ fontSize: 11 }}>Version {n.version_no} ({n.negotiation_status})</strong>
-                                <span style={{ fontSize: 9, color: '#6b7280' }}>{n.negotiation_date}</span>
+                        {activeNegotiations.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '40px 0', color: '#6b7280', fontSize: 11 }}>
+                            No negotiation version history found for this quotation.
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            {activeNegotiations.map((n, idx) => (
+                              <div key={`${n.name || 'neg'}-${idx}`} style={{ borderLeft: '2px solid var(--brand-color)', paddingLeft: 12, position: 'relative' }}>
+                                <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--brand-color)', position: 'absolute', left: -5, top: 4 }} />
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <strong style={{ fontSize: 11 }}>Version {n.version_no} ({n.negotiation_status})</strong>
+                                  <span style={{ fontSize: 9, color: '#6b7280' }}>{n.negotiation_date}</span>
+                                </div>
+                                <p style={{ margin: '4px 0 0 0', fontSize: 10, color: '#4b5563', lineHeight: 1.4 }}>
+                                  Negotiated by <strong>{n.negotiation_by}</strong>. Changed grand total from <strong>${(n.previous_grand_total || 0).toLocaleString()}</strong> to <strong>${(n.current_grand_total || 0).toLocaleString()}</strong> (Discount: <strong>${(n.current_discount || 0).toLocaleString()}</strong>).
+                                </p>
                               </div>
-                              <p style={{ margin: '4px 0 0 0', fontSize: 10, color: '#4b5563', lineHeight: 1.4 }}>
-                                Negotiated by <strong>{n.negotiation_by}</strong>. Changed grand total from <strong>${(n.previous_grand_total || 0).toLocaleString()}</strong> to <strong>${(n.current_grand_total || 0).toLocaleString()}</strong> (Discount: <strong>${(n.current_discount || 0).toLocaleString()}</strong>).
-                              </p>
-                            </div>
-                          ))}
-                        </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   }
@@ -6775,46 +6805,52 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
                           Version-by-Version Comparison
                         </div>
-                        <div style={{ overflowX: 'auto', flex: 1 }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left', minWidth: 350 }}>
-                            <thead>
-                              <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb' }}>
-                                <th style={{ padding: '8px 12px' }}>Parameter</th>
-                                {activeNegotiations.map(n => (
-                                  <th key={n.name} style={{ padding: '8px 12px', textAlign: 'right' }}>V{n.version_no}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                <td style={{ padding: '8px 12px', fontWeight: 600 }}>Discount Amount</td>
-                                {activeNegotiations.map(n => (
-                                  <td key={n.name} style={{ padding: '8px 12px', textAlign: 'right', color: '#eab308', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString()}</td>
-                                ))}
-                              </tr>
-                              <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                <td style={{ padding: '8px 12px', fontWeight: 600 }}>Grand Total</td>
-                                {activeNegotiations.map(n => (
-                                  <td key={n.name} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--brand-color)', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
-                                ))}
-                              </tr>
-                              <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                <td style={{ padding: '8px 12px', fontWeight: 600 }}>Negotiated By</td>
-                                {activeNegotiations.map(n => (
-                                  <td key={n.name} style={{ padding: '8px 12px', textAlign: 'right', color: '#4b5563' }}>{n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}</td>
-                                ))}
-                              </tr>
-                              <tr>
-                                <td style={{ padding: '8px 12px', fontWeight: 600 }}>Status</td>
-                                {activeNegotiations.map(n => (
-                                  <td key={n.name} style={{ padding: '8px 12px', textAlign: 'right' }}>
-                                    <span style={{ fontSize: 8, fontWeight: 700, color: 'var(--brand-color)' }}>{n.negotiation_status}</span>
-                                  </td>
-                                ))}
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
+                        {activeNegotiations.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '40px 0', color: '#6b7280', fontSize: 11 }}>
+                            No negotiation versions available to compare.
+                          </div>
+                        ) : (
+                          <div style={{ overflowX: 'auto', flex: 1 }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left', minWidth: 350 }}>
+                              <thead>
+                                <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb' }}>
+                                  <th style={{ padding: '8px 12px' }}>Parameter</th>
+                                  {activeNegotiations.map((n, idx) => (
+                                    <th key={`${n.name || 'th'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right' }}>V{n.version_no}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                  <td style={{ padding: '8px 12px', fontWeight: 600 }}>Discount Amount</td>
+                                  {activeNegotiations.map((n, idx) => (
+                                    <td key={`${n.name || 'disc'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right', color: '#eab308', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString()}</td>
+                                  ))}
+                                </tr>
+                                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                  <td style={{ padding: '8px 12px', fontWeight: 600 }}>Grand Total</td>
+                                  {activeNegotiations.map((n, idx) => (
+                                    <td key={`${n.name || 'gt'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--brand-color)', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
+                                  ))}
+                                </tr>
+                                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                  <td style={{ padding: '8px 12px', fontWeight: 600 }}>Negotiated By</td>
+                                  {activeNegotiations.map((n, idx) => (
+                                    <td key={`${n.name || 'by'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right', color: '#4b5563' }}>{n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}</td>
+                                  ))}
+                                </tr>
+                                <tr>
+                                  <td style={{ padding: '8px 12px', fontWeight: 600 }}>Status</td>
+                                  {activeNegotiations.map((n, idx) => (
+                                    <td key={`${n.name || 'st'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right' }}>
+                                      <span style={{ fontSize: 8, fontWeight: 700, color: 'var(--brand-color)' }}>{n.negotiation_status}</span>
+                                    </td>
+                                  ))}
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
                     );
                   }
@@ -6867,6 +6903,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 const isDiscountDisabled = isTerminal;
                 const isApproved = (selectedQuotationDetail.workflow_state || selectedQuotationDetail.status) === "Approved";
                 const isDisabled = isTerminal;
+                const activeNegotiations = negotiations || [];
 
                 return (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, borderTop: '1px solid #e5e7eb', paddingTop: 10, flexShrink: 0 }}>
@@ -6934,7 +6971,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
                           <span style={{ color: '#6b7280' }}>Versions Created</span>
-                          <strong style={{ color: '#111827' }}>{selectedQuotationDetail.custom_total_versions || 1}</strong>
+                          <strong style={{ color: activeNegotiations.length > 0 ? '#111827' : 'var(--brand-color)' }}>
+                            {activeNegotiations.length > 0
+                              ? (activeNegotiations[0].version_no || selectedQuotationDetail.custom_total_versions || activeNegotiations.length)
+                              : 'Quotation Created'}
+                          </strong>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
                           <span style={{ color: '#6b7280' }}>Total Discount</span>
@@ -7543,7 +7584,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         </div>
                         <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>Selected Units</span>
                       </div>
-                      <button
+                      {/* <button
                         type="button"
                         onClick={addQuoteItem}
                         style={{
@@ -7565,7 +7606,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       >
                         <span style={{ fontSize: 13, fontWeight: 700 }}>+</span>
                         <span>Add More Units</span>
-                      </button>
+                      </button> */}
                     </div>
 
                     <div style={{ border: '1px solid var(--border-color, #e2e8f0)', borderRadius: 12, overflow: 'hidden', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)' }}>
@@ -7830,7 +7871,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 <AlertCircle size={20} />
               </div>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
-                Confirm Action
+                Confirm
               </h3>
             </div>
             <p style={{ margin: 0, fontSize: '13.5px', color: 'var(--text-secondary, #475569)', lineHeight: 1.5 }}>
@@ -7949,7 +7990,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 onMouseEnter={(e) => { e.currentTarget.style.boxShadow = '0 6px 16px rgba(15, 23, 42, 0.25)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.boxShadow = '0 4px 12px rgba(15, 23, 42, 0.15)'; }}
               >
-                Acknowledge
+                Dimiss
               </button>
             </div>
           </div>

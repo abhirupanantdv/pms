@@ -2199,7 +2199,7 @@ const getCsrfToken = () => {
 // Lightweight toast system — no external deps, self-contained styles/animation.
 let toastIdCounter = 0;
 
-export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
+export default function Booking({ erpnextConfig, initialSearchTerm = '', onClearInitialSearch }) {
   const [bookings, setBookings] = useState([]);
   const [selectedBookingId, setSelectedBookingId] = useState(null);
   const [selectedBookingDetails, setSelectedBookingDetails] = useState(null);
@@ -2793,8 +2793,12 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
     if (initialSearchTerm) {
       setSearchTerm(initialSearchTerm);
       setCurrentPage(1);
+      // Consume one-time search term so it does not persist across future visits
+      if (typeof onClearInitialSearch === 'function') {
+        onClearInitialSearch();
+      }
     }
-  }, [initialSearchTerm]);
+  }, [initialSearchTerm, onClearInitialSearch]);
 
   useEffect(() => {
     if (selectedBookingDetails) {
@@ -3098,7 +3102,11 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
         <div style={{ display: 'flex', gap: 10 }}>
           <button
             className="btn btn-secondary"
-            onClick={() => fetchBookings()}
+            onClick={() => {
+              setSearchTerm('');
+              if (typeof onClearInitialSearch === 'function') onClearInitialSearch();
+              fetchBookings();
+            }}
             style={{ display: 'flex', alignItems: 'center', gap: 6 }}
           >
             <RefreshCw size={14} className={loadingList ? 'spin' : ''} />
@@ -3142,8 +3150,35 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '' }) {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="form-control"
-            style={{ paddingLeft: 34, fontSize: 13 }}
+            style={{ paddingLeft: 34, paddingRight: searchTerm ? 32 : 12, fontSize: 13 }}
           />
+          {searchTerm && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchTerm('');
+                if (typeof onClearInitialSearch === 'function') onClearInitialSearch();
+              }}
+              style={{
+                position: 'absolute',
+                right: 10,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 2,
+                borderRadius: '50%'
+              }}
+              title="Clear search"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

@@ -324,6 +324,80 @@ const validatePhoneValue = (phoneVal, label) => {
   return true;
 };
 
+const getTodayDateString = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getYesterdayDateString = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const isPastOnlyDateFieldName = (fieldname, label) => {
+  const fnLower = (fieldname || '').toLowerCase();
+  const lblLower = (label || '').toLowerCase();
+  return fnLower === 'date_of_birth' || 
+         fnLower === 'date_of_incorporation' ||
+         lblLower.includes('date of birth') || 
+         lblLower.includes('date of incorporation') ||
+         lblLower.includes('incorporation date');
+};
+
+const validatePastOnlyDateField = (val, label, fieldname) => {
+  if (!val) return true;
+  const fnLower = (fieldname || '').toLowerCase();
+  const lblLower = (label || '').toLowerCase();
+  
+  const isDob = fnLower === 'date_of_birth' || lblLower.includes('date of birth');
+  const isDoinc = fnLower === 'date_of_incorporation' || lblLower.includes('date of incorporation') || lblLower.includes('incorporation date');
+
+  if (isDob || isDoinc) {
+    const todayStr = getTodayDateString();
+    if (val >= todayStr) {
+      const fieldTitle = isDob ? 'Date of Birth' : 'Date of Incorporation';
+      alert(`${label ? label + ': ' : ''}${fieldTitle} cannot be today or a future date.`);
+      return false;
+    }
+  }
+  return true;
+};
+
+const isFutureOrTodayDateFieldName = (fieldname, label) => {
+  const fnLower = (fieldname || '').toLowerCase();
+  const lblLower = (label || '').toLowerCase();
+  return fnLower === 'lease_commencement_date' || 
+         fnLower === 'vacant_possession_date' ||
+         lblLower.includes('lease commencement') || 
+         lblLower.includes('vacant possession');
+};
+
+const validateFutureOrTodayDateField = (val, label, fieldname) => {
+  if (!val) return true;
+  const fnLower = (fieldname || '').toLowerCase();
+  const lblLower = (label || '').toLowerCase();
+  
+  const isLeaseComm = fnLower === 'lease_commencement_date' || lblLower.includes('lease commencement');
+  const isVacantPoss = fnLower === 'vacant_possession_date' || lblLower.includes('vacant possession');
+
+  if (isLeaseComm || isVacantPoss) {
+    const todayStr = getTodayDateString();
+    if (val < todayStr) {
+      const fieldTitle = isLeaseComm ? 'Lease Commencement Date' : 'Vacant Possession Date';
+      alert(`${label ? label + ': ' : ''}${fieldTitle} should not be a past date.`);
+      return false;
+    }
+  }
+  return true;
+};
+
 const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkOptions, getDocTypeFields, erpnextConfig, getCsrfToken, formValues = {}, isNew = false }) => {
   const fieldtype = field.fieldtype;
   let label = field.label || field.fieldname;
@@ -655,6 +729,8 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
       );
 
     case 'Date':
+      const isPastOnly = isPastOnlyDateFieldName(field.fieldname, label);
+      const isFutureOrToday = isFutureOrTodayDateFieldName(field.fieldname, label);
       return (
         <div style={fieldContainerStyle}>
           <label style={labelStyle}>
@@ -662,8 +738,25 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
           </label>
           <input
             type="date"
+            max={isPastOnly ? getYesterdayDateString() : undefined}
+            min={isFutureOrToday ? getTodayDateString() : undefined}
             value={value || ''}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => {
+              const newVal = e.target.value;
+              if (isPastOnly && newVal && newVal >= getTodayDateString()) {
+                const title = (field.fieldname === 'date_of_birth' || label.toLowerCase().includes('date of birth')) ? 'Date of Birth' : 'Date of Incorporation';
+                alert(`${title} cannot be today or a future date.`);
+                onChange('');
+                return;
+              }
+              if (isFutureOrToday && newVal && newVal < getTodayDateString()) {
+                const title = (field.fieldname === 'lease_commencement_date' || label.toLowerCase().includes('lease commencement')) ? 'Lease Commencement Date' : 'Vacant Possession Date';
+                alert(`${title} should not be a past date.`, 'error');
+                onChange('');
+                return;
+              }
+              onChange(newVal);
+            }}
             disabled={isReadOnly}
             style={inputStyle}
           />
@@ -702,9 +795,25 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
           <input
             type="number"
             step={fieldtype === 'Int' ? '1' : 'any'}
+            min={(
+              field.fieldname === 'required_space' ||
+              field.fieldname === 'budget' ||
+              field.fieldname === 'lease_period' ||
+              field.fieldname === 'rental_charges' ||
+              field.fieldname === 'service_promotional_charges' ||
+              field.fieldname === 'security_deposit_booking_fee' ||
+              field.fieldname === 'fitout_period'
+            ) ? (fieldtype === 'Int' ? "1" : "0.01") : undefined}
             placeholder={getPlaceholder(label, field.fieldname).includes(label) ? '0' : getPlaceholder(label, field.fieldname)}
             value={value === undefined || value === null ? '' : value}
-            onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
+            onChange={(e) => {
+              if (e.target.value === '') {
+                onChange('');
+              } else {
+                const val = Number(e.target.value);
+                onChange(fieldtype === 'Int' ? Math.floor(val) : val);
+              }
+            }}
             disabled={isReadOnly}
             style={inputStyle}
           />
@@ -1331,7 +1440,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
   const [alertModal, setAlertModal] = useState({ show: false, title: '', message: '', type: 'info' });
   const showAlert = (message, type = 'info', title = '') => {
-    const defaultTitle = type === 'error' ? 'Error' : (type === 'success' ? 'Success' : 'Notification');
+    const defaultTitle = type === 'error' ? 'Attention Required' : (type === 'success' ? 'Success' : 'Notification');
     setAlertModal({
       show: true,
       title: title || defaultTitle,
@@ -1995,6 +2104,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
             }
           }
         });
+        defaults['is_internal_customer'] = 0;
         setDynamicFormValues(defaults);
       }
     });
@@ -2190,8 +2300,38 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         }
       }
 
+      if ([
+        'required_space',
+        'budget',
+        'lease_period',
+        'rental_charges',
+        'service_promotional_charges',
+        'security_deposit_booking_fee',
+        'fitout_period'
+      ].includes(field.fieldname) && val !== undefined && val !== null && String(val).trim() !== '') {
+        const num = parseFloat(val);
+        if (isNaN(num) || num <= 0) {
+          alert(`${field.label || field.fieldname} should not be 0 or negative value.`, 'error');
+          return;
+        }
+        if ((field.fieldname === 'lease_period' || field.fieldtype === 'Int') && !Number.isInteger(num)) {
+          alert(`${field.label || field.fieldname} must be a whole number (integer).`, 'error');
+          return;
+        }
+      }
+
       if (isPhoneField(field) && val) {
         const isValid = validatePhoneValue(val, field.label || field.fieldname);
+        if (!isValid) return;
+      }
+
+      if (isPastOnlyDateFieldName(field.fieldname, field.label) && val) {
+        const isValid = validatePastOnlyDateField(val, field.label || field.fieldname, field.fieldname);
+        if (!isValid) return;
+      }
+
+      if (isFutureOrTodayDateFieldName(field.fieldname, field.label) && val) {
+        const isValid = validateFutureOrTodayDateField(val, field.label || field.fieldname, field.fieldname);
         if (!isValid) return;
       }
 
@@ -2219,11 +2359,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                   return;
                 }
               }
-              // 3. Child table phone number validation
+              // 3. Child table phone number & date validation
               for (const cf of childFieldsSchema) {
                 const rowVal = row[cf.fieldname];
                 if (isPhoneField(cf) && rowVal) {
                   const isValid = validatePhoneValue(rowVal, `Row ${rIdx + 1}: ${cf.label || cf.fieldname}`);
+                  if (!isValid) return;
+                }
+                if (isPastOnlyDateFieldName(cf.fieldname, cf.label) && rowVal) {
+                  const isValid = validatePastOnlyDateField(rowVal, `Row ${rIdx + 1}: ${cf.label || cf.fieldname}`, cf.fieldname);
                   if (!isValid) return;
                 }
               }
@@ -2371,6 +2515,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         defaults[field.fieldname] = field.default;
       }
     });
+    defaults['is_internal_customer'] = 0;
     setDynamicFormValues(defaults);
     setContactName('');
     setEmailId('');
@@ -2514,8 +2659,46 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
             }
           }
 
+          if ([
+            'required_space',
+            'budget',
+            'lease_period',
+            'rental_charges',
+            'service_promotional_charges',
+            'security_deposit_booking_fee',
+            'fitout_period'
+          ].includes(field.fieldname) && val !== undefined && val !== null && String(val).trim() !== '') {
+            const num = parseFloat(val);
+            if (isNaN(num) || num <= 0) {
+              alert(`${field.label || field.fieldname} should not be 0 or negative value.`, 'error');
+              setSubmitting(false);
+              return;
+            }
+            if ((field.fieldname === 'lease_period' || field.fieldtype === 'Int') && !Number.isInteger(num)) {
+              alert(`${field.label || field.fieldname} must be a whole number (integer).`, 'error');
+              setSubmitting(false);
+              return;
+            }
+          }
+
           if (isPhoneField(field) && val) {
             const isValid = validatePhoneValue(val, field.label || field.fieldname);
+            if (!isValid) {
+              setSubmitting(false);
+              return;
+            }
+          }
+
+          if (isPastOnlyDateFieldName(field.fieldname, field.label) && val) {
+            const isValid = validatePastOnlyDateField(val, field.label || field.fieldname, field.fieldname);
+            if (!isValid) {
+              setSubmitting(false);
+              return;
+            }
+          }
+
+          if (isFutureOrTodayDateFieldName(field.fieldname, field.label) && val) {
+            const isValid = validateFutureOrTodayDateField(val, field.label || field.fieldname, field.fieldname);
             if (!isValid) {
               setSubmitting(false);
               return;
@@ -2548,11 +2731,18 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       return;
                     }
                   }
-                  // 3. Child table phone number validation
+                  // 3. Child table phone number & date validation
                   for (const cf of childFieldsSchema) {
                     const rowVal = row[cf.fieldname];
                     if (isPhoneField(cf) && rowVal) {
                       const isValid = validatePhoneValue(rowVal, `Row ${rIdx + 1}: ${cf.label || cf.fieldname}`);
+                      if (!isValid) {
+                        setSubmitting(false);
+                        return;
+                      }
+                    }
+                    if (isPastOnlyDateFieldName(cf.fieldname, cf.label) && rowVal) {
+                      const isValid = validatePastOnlyDateField(rowVal, `Row ${rIdx + 1}: ${cf.label || cf.fieldname}`, cf.fieldname);
                       if (!isValid) {
                         setSubmitting(false);
                         return;
@@ -5867,6 +6057,36 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           alert(`Please fill in the following mandatory fields first: ${missing.map(f => f.label || f.fieldname).join(', ')}`, 'error');
                           return;
                         }
+
+                        // Validate numeric and date fields in the current tab
+                        for (const field of currentFields) {
+                          const val = dynamicFormValues[field.fieldname];
+                          if ([
+                            'required_space',
+                            'budget',
+                            'lease_period',
+                            'rental_charges',
+                            'service_promotional_charges',
+                            'security_deposit_booking_fee',
+                            'fitout_period'
+                          ].includes(field.fieldname) && val !== undefined && val !== null && String(val).trim() !== '') {
+                            const num = parseFloat(val);
+                            if (isNaN(num) || num <= 0) {
+                              alert(`${field.label || field.fieldname} should not be 0 or negative value.`, 'error');
+                              return;
+                            }
+                            if ((field.fieldname === 'lease_period' || field.fieldtype === 'Int') && !Number.isInteger(num)) {
+                              alert(`${field.label || field.fieldname} must be a whole number (integer).`, 'error');
+                              return;
+                            }
+                          }
+
+                          if (isFutureOrTodayDateFieldName(field.fieldname, field.label) && val) {
+                            const isValid = validateFutureOrTodayDateField(val, field.label || field.fieldname, field.fieldname);
+                            if (!isValid) return;
+                          }
+                        }
+
                         setActiveDynamicTabIdx(safeTabIdx + 1);
                       }}
                       style={{
@@ -6171,7 +6391,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 <Info size={20} />
               </div>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
-                Confirm Action
+                Confirm
               </h3>
             </div>
             <p style={{ margin: 0, fontSize: '13.5px', color: 'var(--text-secondary, #475569)', lineHeight: 1.5 }}>

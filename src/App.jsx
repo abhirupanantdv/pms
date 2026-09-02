@@ -4057,7 +4057,10 @@ export default function App() {
         no_of_floors: newProp.noOfFloors || undefined,
         listed_online: 0, // match form default; toggle separately via onToggleListOnline
         custom_latitude: newProp.latitude || undefined,
-        custom_longitude: newProp.longitude || undefined
+        custom_longitude: newProp.longitude || undefined,
+        attachments: newProp.attachments || undefined,
+        custom_attachments: newProp.custom_attachments || newProp.attachments || undefined,
+        image: newProp.image || newProp.attachments || undefined
       };
 
       const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Property%20Group`, {
@@ -4092,7 +4095,11 @@ export default function App() {
         rent: newProp.rent,
         area: newProp.area,
         listedOnline: false,
-        occupancy: 0
+        occupancy: 0,
+        image: newProp.image || newProp.attachments || doc.image || doc.attachments || null,
+        attachments: newProp.attachments || doc.attachments || null,
+        custom_attachments: newProp.custom_attachments || doc.custom_attachments || null,
+        gallery: newProp.gallery || doc.gallery || []
       };
 
       setProperties(prev => [...prev, addedProp]);
@@ -5105,7 +5112,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer' }} onClick={() => setCurrentTab('bookings')}>
+          <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer' }} onClick={() => { setBookingSearchFromQuotation(''); setCurrentTab('bookings'); }}>
             <div style={{ background: 'linear-gradient(135deg, #8b5cf6, #d946ef)', color: '#fff', padding: 12, borderRadius: 12, display: 'flex' }}>
               <TrendingUp size={24} />
             </div>
@@ -5538,7 +5545,13 @@ export default function App() {
           />
         );
       case 'bookings':
-        return <Booking erpnextConfig={ERPNEXT_CONFIG} initialSearchTerm={bookingSearchFromQuotation} />;
+        return (
+          <Booking
+            erpnextConfig={ERPNEXT_CONFIG}
+            initialSearchTerm={bookingSearchFromQuotation}
+            onClearInitialSearch={() => setBookingSearchFromQuotation('')}
+          />
+        );
       case 'quotation':
         return <Quotation erpnextConfig={ERPNEXT_CONFIG} properties={properties} onGoToBooking={handleGoToBooking} />;
       default:
@@ -5882,7 +5895,7 @@ export default function App() {
             <Building size={18} />
             <span>Properties</span>
           </li>
-          <li className={`menu-item ${currentTab === 'bookings' ? 'active' : ''}`} onClick={() => setCurrentTab('bookings')}>
+          <li className={`menu-item ${currentTab === 'bookings' ? 'active' : ''}`} onClick={() => { setBookingSearchFromQuotation(''); setCurrentTab('bookings'); }}>
             <Bookmark size={18} />
             <span>Property Bookings</span>
           </li>

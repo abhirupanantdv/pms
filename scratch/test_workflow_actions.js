@@ -1,5 +1,5 @@
 async function tryLogin(usr, pwd) {
-    const baseUrl = 'http://182.71.135.110:8610';
+    const baseUrl = 'http://192.168.101.180:8980';
     try {
         console.log(`Trying login for ${usr}...`);
         const loginRes = await fetch(`${baseUrl}/api/method/login`, {
