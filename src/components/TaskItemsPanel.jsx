@@ -2446,52 +2446,92 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
 
             const result = await response.json();
 
-            // HTTP error
+            // Check if booking is available on the task
+            let bookingAvailable = Boolean(
+                (taskDoc?.custom_booking_number && String(taskDoc.custom_booking_number).trim()) ||
+                (taskDoc?.custom_booking_id && String(taskDoc.custom_booking_id).trim()) ||
+                (taskDoc?.custom_booking && String(taskDoc.custom_booking).trim()) ||
+                (taskDoc?.booking_id && String(taskDoc.booking_id).trim()) ||
+                (taskDoc?.booking && String(taskDoc.booking).trim()) ||
+                (taskDoc?.custom_booking_no && String(taskDoc.custom_booking_no).trim()) ||
+                Object.keys(taskDoc || {}).some(k => k.toLowerCase().includes("booking") && taskDoc[k] && String(taskDoc[k]).trim() !== "")
+            );
+
+            // Fallback: check fresh doc from ERPNext if booking not already detected
+            if (!bookingAvailable && erpnextConfig?.url && taskDoc?.name) {
+                try {
+                    const checkRes = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                        credentials: "include",
+                        headers: { "Content-Type": "application/json" }
+                    });
+                    if (checkRes.ok) {
+                        const checkJson = await checkRes.json();
+                        const fullDoc = checkJson?.data || checkJson;
+                        if (
+                            fullDoc?.custom_booking_number ||
+                            fullDoc?.custom_booking_id ||
+                            fullDoc?.custom_booking ||
+                            fullDoc?.booking ||
+                            Object.keys(fullDoc || {}).some(k => k.toLowerCase().includes("booking") && fullDoc[k] && String(fullDoc[k]).trim() !== "")
+                        ) {
+                            bookingAvailable = true;
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Could not check task booking:", e);
+                }
+            }
+
+            let stockoutSuccess = false;
+            let stockoutError = null;
+            let stockEntryId = null;
+
             if (!response.ok) {
-                showToast?.(
+                stockoutError =
                     result?.exception ||
                     result?.message ||
                     result?._server_messages ||
-                    "Request failed.",
-                    "error"
-                );
-                return;
+                    "Request failed.";
+            } else {
+                const data = result?.message;
+                if (!data) {
+                    stockoutError = "Invalid server response.";
+                } else if (!data.success) {
+                    stockoutError =
+                        data.error ||
+                        data.msg ||
+                        "Stock-out validation failed.";
+                } else {
+                    stockoutSuccess = true;
+                    stockEntryId = data.stock_entry;
+                }
             }
 
-            const data = result?.message;
+            // Check if we should bypass stock-out failure
+            if (!stockoutSuccess) {
+                const errorStr = String(stockoutError || "");
+                const errorLower = errorStr.toLowerCase();
+                const isNonStockError = errorLower.includes("not a stock item") || errorLower.includes("stock item");
 
-            // Invalid response
-            if (!data) {
-                showToast?.("Invalid server response.", "error");
-                return;
-            }
-
-            // Business validation failed
-            if (!data.success) {
-                const error =
-                    data.error ||
-                    data.msg ||
-                    "Stock-out validation failed.";
-
-                showToast?.(error, "error");
-                console.error("Stock-out Error:", data);
-
-                return;
-            }
-
-            // Success
-            if (data.stock_entry) {
+                if (bookingAvailable || isNonStockError) {
+                    console.warn("Bypassing stock-out error (booking available or non-stock item):", stockoutError);
+                } else {
+                    showToast?.(stockoutError || "Stock-out validation failed.", "error");
+                    console.error("Stock-out Error:", stockoutError);
+                    return;
+                }
+            } else if (stockEntryId) {
                 showToast?.(
-                    `Stock Entry ${data.stock_entry} created.`,
+                    `Stock Entry ${stockEntryId} created.`,
                     "success"
                 );
             }
 
-            // 3. Mark Task as Completed in ERPNext
+            // 3. Mark Task as Completed in ERPNext (forcefully submit)
             const today = new Date().toISOString().slice(0, 10);
             let updatedTaskDoc = null;
             try {
-                const updateRes = await fetch(`${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`, {
+                const updateRes = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
                     method: "PUT",
                     credentials: "include",
                     headers: {
@@ -2507,6 +2547,28 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                 if (updateRes.ok) {
                     const updateJson = await updateRes.json();
                     updatedTaskDoc = updateJson?.data;
+                } else {
+                    const errJson = await updateRes.json().catch(() => ({}));
+                    console.warn("Primary Task update failed, retrying minimal payload:", errJson);
+                    try {
+                        const retryRes = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                            method: "PUT",
+                            credentials: "include",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "X-Frappe-CSRF-Token": getCsrfToken?.(),
+                            },
+                            body: JSON.stringify({
+                                status: "Completed",
+                            }),
+                        });
+                        if (retryRes.ok) {
+                            const retryJson = await retryRes.json();
+                            updatedTaskDoc = retryJson?.data;
+                        }
+                    } catch (retryErr) {
+                        console.warn("Retry failed:", retryErr);
+                    }
                 }
             } catch (updateErr) {
                 console.warn("Could not update Task status via REST:", updateErr);
