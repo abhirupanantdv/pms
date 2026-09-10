@@ -2845,12 +2845,6 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Is Internal?</span>
-                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    {selectedTenant.is_internal_customer ? 'Yes' : 'No'}
-                  </span>
-                </div>
-                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Currency</span>
                   <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
                     {selectedTenant.default_currency || 'FJD'}

@@ -208,8 +208,25 @@ const extractErrorMessage = async (res) => {
   return message;
 };
 
+const isInternalTenantField = (field) => {
+  if (!field) return false;
+  const fieldNameLower = (field.fieldname || '').toLowerCase();
+  const fieldLabelLower = (field.label || '').toLowerCase();
+  return (
+    fieldNameLower === 'is_internal_customer' ||
+    fieldNameLower === 'is_internal_tenant' ||
+    fieldNameLower === 'internal_customer' ||
+    fieldNameLower === 'internal_tenant' ||
+    fieldLabelLower.includes('is internal tenant') ||
+    fieldLabelLower.includes('is internal customer') ||
+    (fieldLabelLower.includes('internal tenant') && field.fieldtype === 'Check') ||
+    (fieldLabelLower.includes('internal customer') && field.fieldtype === 'Check')
+  );
+};
+
 const isFieldRequired = (field, formValues = {}) => {
   if (!field) return false;
+  if (isInternalTenantField(field)) return false;
   const selectedType = formValues?.type || '';
 
   // If conditionally hidden based on Type, it is not required
@@ -220,7 +237,7 @@ const isFieldRequired = (field, formValues = {}) => {
     return false;
   }
 
-  const isInternal = !!formValues?.is_internal_customer;
+  const isInternal = false;
   const fieldLabelLower = (field.label || '').toLowerCase();
   const fieldNameLower = (field.fieldname || '').toLowerCase();
   if (!isInternal) {
@@ -344,18 +361,18 @@ const getYesterdayDateString = () => {
 const isPastOnlyDateFieldName = (fieldname, label) => {
   const fnLower = (fieldname || '').toLowerCase();
   const lblLower = (label || '').toLowerCase();
-  return fnLower === 'date_of_birth' || 
-         fnLower === 'date_of_incorporation' ||
-         lblLower.includes('date of birth') || 
-         lblLower.includes('date of incorporation') ||
-         lblLower.includes('incorporation date');
+  return fnLower === 'date_of_birth' ||
+    fnLower === 'date_of_incorporation' ||
+    lblLower.includes('date of birth') ||
+    lblLower.includes('date of incorporation') ||
+    lblLower.includes('incorporation date');
 };
 
 const validatePastOnlyDateField = (val, label, fieldname) => {
   if (!val) return true;
   const fnLower = (fieldname || '').toLowerCase();
   const lblLower = (label || '').toLowerCase();
-  
+
   const isDob = fnLower === 'date_of_birth' || lblLower.includes('date of birth');
   const isDoinc = fnLower === 'date_of_incorporation' || lblLower.includes('date of incorporation') || lblLower.includes('incorporation date');
 
@@ -373,17 +390,17 @@ const validatePastOnlyDateField = (val, label, fieldname) => {
 const isFutureOrTodayDateFieldName = (fieldname, label) => {
   const fnLower = (fieldname || '').toLowerCase();
   const lblLower = (label || '').toLowerCase();
-  return fnLower === 'lease_commencement_date' || 
-         fnLower === 'vacant_possession_date' ||
-         lblLower.includes('lease commencement') || 
-         lblLower.includes('vacant possession');
+  return fnLower === 'lease_commencement_date' ||
+    fnLower === 'vacant_possession_date' ||
+    lblLower.includes('lease commencement') ||
+    lblLower.includes('vacant possession');
 };
 
 const validateFutureOrTodayDateField = (val, label, fieldname) => {
   if (!val) return true;
   const fnLower = (fieldname || '').toLowerCase();
   const lblLower = (label || '').toLowerCase();
-  
+
   const isLeaseComm = fnLower === 'lease_commencement_date' || lblLower.includes('lease commencement');
   const isVacantPoss = fnLower === 'vacant_possession_date' || lblLower.includes('vacant possession');
 
@@ -399,6 +416,9 @@ const validateFutureOrTodayDateField = (val, label, fieldname) => {
 };
 
 const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkOptions, getDocTypeFields, erpnextConfig, getCsrfToken, formValues = {}, isNew = false }) => {
+  if (isInternalTenantField(field)) {
+    return null;
+  }
   const fieldtype = field.fieldtype;
   let label = field.label || field.fieldname;
   if (label === 'Required Space' || label === 'Required Space (sq mtr)' || label === 'Space Required') {
@@ -2112,6 +2132,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           }
         });
         defaults['is_internal_customer'] = 0;
+        defaults['is_internal_tenant'] = 0;
         setDynamicFormValues(defaults);
       }
     });
@@ -2395,12 +2416,11 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       cleanedValues.date_of_incorporation = null;
     }
 
-    const isInternal = !!cleanedValues.is_internal_customer;
-    if (!isInternal) {
-      cleanedValues.represents_company = null;
-      cleanedValues.allowed_to_transact_with = null;
-      cleanedValues.allowed_to_transact = null;
-    }
+    cleanedValues.is_internal_customer = 0;
+    cleanedValues.is_internal_tenant = 0;
+    cleanedValues.represents_company = null;
+    cleanedValues.allowed_to_transact_with = null;
+    cleanedValues.allowed_to_transact = null;
 
     doctypeFields.forEach(f => {
       if (['Int', 'Float', 'Currency', 'Percent'].includes(f.fieldtype)) {
@@ -2539,6 +2559,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       }
     });
     defaults['is_internal_customer'] = 0;
+    defaults['is_internal_tenant'] = 0;
     setDynamicFormValues(defaults);
     setContactName('');
     setEmailId('');
@@ -2787,12 +2808,11 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           delete cleanedValues.date_of_incorporation;
         }
 
-        const isInternal = !!cleanedValues.is_internal_customer;
-        if (!isInternal) {
-          delete cleanedValues.represents_company;
-          delete cleanedValues.allowed_to_transact_with;
-          delete cleanedValues.allowed_to_transact;
-        }
+        cleanedValues.is_internal_customer = 0;
+        cleanedValues.is_internal_tenant = 0;
+        delete cleanedValues.represents_company;
+        delete cleanedValues.allowed_to_transact_with;
+        delete cleanedValues.allowed_to_transact;
 
         doctypeFields.forEach(f => {
           if (['Int', 'Float', 'Currency', 'Percent'].includes(f.fieldtype)) {
@@ -2833,7 +2853,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           company_search_documents: childDocs,
           type: type,
           company_vat_id: companyVatId,
-          is_internal_customer: isInternalCustomer ? 1 : 0,
+          is_internal_customer: 0,
+          is_internal_tenant: 0,
           date_of_birth: dateOfBirth || null,
           address_line_1: addressLine1,
           address_line_2: addressLine2,
@@ -3504,6 +3525,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 }
                               }
                             });
+                            initialDynamic['is_internal_customer'] = 0;
+                            initialDynamic['is_internal_tenant'] = 0;
                             setDynamicFormValues(initialDynamic);
                             setActiveDynamicTabIdx(0);
                             setIsEditingDetails(true);
@@ -3714,110 +3737,111 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                       {/* Scrollable Fields & Checklist Container */}
                       <div style={{ flex: 1, overflowY: 'auto', paddingRight: '6px', display: 'flex', flexDirection: 'column', gap: '16px', minHeight: 0 }}>
-                         {/* Dynamic Fields for the Active Section */}
-                          {(() => {
-                            const fields = activeSections[safeTabIdx]?.fields.filter(field => {
-                              if (field.fieldname === 'company_search_documents') return false;
-                              const selectedType = dynamicFormValues['type'] || '';
-                              if (field.fieldname === 'date_of_birth' && selectedType !== 'Individual') {
-                                return false;
-                              }
-                              if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
-                                return false;
-                              }
-                              const isInternal = !!dynamicFormValues['is_internal_customer'];
-                              const fieldLabelLower = (field.label || '').toLowerCase();
-                              const fieldNameLower = (field.fieldname || '').toLowerCase();
-                              if (!isInternal) {
-                                if (fieldLabelLower.includes('represents company') || fieldNameLower.includes('represents_company')) {
-                                  return false;
-                                }
-                                if (fieldLabelLower.includes('allowed to transact with') || fieldNameLower.includes('allowed_to_transact_with') || fieldNameLower.includes('allowed_to_transact')) {
-                                  return false;
-                                }
-                              }
-                              return true;
-                            }) || [];
-
-                            const addressFieldNames = ['address_line_1', 'address_line_2', 'city', 'state', 'country'];
-                            const hasAddress = fields.some(f => addressFieldNames.includes(f.fieldname));
-                            const hasGeneral = fields.some(f => !addressFieldNames.includes(f.fieldname));
-
-                            if (hasAddress && hasGeneral) {
-                              const generalFields = fields.filter(f => !addressFieldNames.includes(f.fieldname));
-                              const addressFields = fields.filter(f => addressFieldNames.includes(f.fieldname));
-
-                              return (
-                                <>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                    {generalFields.map(field => (
-                                      <DynamicFormField
-                                        key={field.fieldname}
-                                        field={field}
-                                        value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
-                                        onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
-                                        linkOptionsCache={linkOptionsCache}
-                                        fetchLinkOptions={fetchLinkOptions}
-                                        getDocTypeFields={getDocTypeFields}
-                                        erpnextConfig={erpnextConfig}
-                                        getCsrfToken={getCsrfToken}
-                                        formValues={dynamicFormValues}
-                                      />
-                                    ))}
-                                  </div>
-
-                                  <div style={{
-                                    fontSize: '12px',
-                                    fontWeight: 700,
-                                    color: 'var(--brand-color, #065f46)',
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.75px',
-                                    marginTop: '8px',
-                                    paddingBottom: '6px',
-                                    borderBottom: '1.5px solid var(--border-color)'
-                                  }}>
-                                    Address Info
-                                  </div>
-
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                    {addressFields.map(field => (
-                                      <DynamicFormField
-                                        key={field.fieldname}
-                                        field={field}
-                                        value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
-                                        onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
-                                        linkOptionsCache={linkOptionsCache}
-                                        fetchLinkOptions={fetchLinkOptions}
-                                        getDocTypeFields={getDocTypeFields}
-                                        erpnextConfig={erpnextConfig}
-                                        getCsrfToken={getCsrfToken}
-                                        formValues={dynamicFormValues}
-                                      />
-                                    ))}
-                                  </div>
-                                </>
-                              );
+                        {/* Dynamic Fields for the Active Section */}
+                        {(() => {
+                          const fields = activeSections[safeTabIdx]?.fields.filter(field => {
+                            if (field.fieldname === 'company_search_documents') return false;
+                            if (isInternalTenantField(field)) return false;
+                            const selectedType = dynamicFormValues['type'] || '';
+                            if (field.fieldname === 'date_of_birth' && selectedType !== 'Individual') {
+                              return false;
                             }
+                            if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
+                              return false;
+                            }
+                            const isInternal = false;
+                            const fieldLabelLower = (field.label || '').toLowerCase();
+                            const fieldNameLower = (field.fieldname || '').toLowerCase();
+                            if (!isInternal) {
+                              if (fieldLabelLower.includes('represents company') || fieldNameLower.includes('represents_company')) {
+                                return false;
+                              }
+                              if (fieldLabelLower.includes('allowed to transact with') || fieldNameLower.includes('allowed_to_transact_with') || fieldNameLower.includes('allowed_to_transact')) {
+                                return false;
+                              }
+                            }
+                            return true;
+                          }) || [];
+
+                          const addressFieldNames = ['address_line_1', 'address_line_2', 'city', 'state', 'country'];
+                          const hasAddress = fields.some(f => addressFieldNames.includes(f.fieldname));
+                          const hasGeneral = fields.some(f => !addressFieldNames.includes(f.fieldname));
+
+                          if (hasAddress && hasGeneral) {
+                            const generalFields = fields.filter(f => !addressFieldNames.includes(f.fieldname));
+                            const addressFields = fields.filter(f => addressFieldNames.includes(f.fieldname));
 
                             return (
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                {fields.map(field => (
-                                  <DynamicFormField
-                                    key={field.fieldname}
-                                    field={field}
-                                    value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
-                                    onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
-                                    linkOptionsCache={linkOptionsCache}
-                                    fetchLinkOptions={fetchLinkOptions}
-                                    getDocTypeFields={getDocTypeFields}
-                                    erpnextConfig={erpnextConfig}
-                                    getCsrfToken={getCsrfToken}
-                                    formValues={dynamicFormValues}
-                                  />
-                                ))}
-                              </div>
+                              <>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                  {generalFields.map(field => (
+                                    <DynamicFormField
+                                      key={field.fieldname}
+                                      field={field}
+                                      value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+                                      onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
+                                      linkOptionsCache={linkOptionsCache}
+                                      fetchLinkOptions={fetchLinkOptions}
+                                      getDocTypeFields={getDocTypeFields}
+                                      erpnextConfig={erpnextConfig}
+                                      getCsrfToken={getCsrfToken}
+                                      formValues={dynamicFormValues}
+                                    />
+                                  ))}
+                                </div>
+
+                                <div style={{
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  color: 'var(--brand-color, #065f46)',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.75px',
+                                  marginTop: '8px',
+                                  paddingBottom: '6px',
+                                  borderBottom: '1.5px solid var(--border-color)'
+                                }}>
+                                  Address Info
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                  {addressFields.map(field => (
+                                    <DynamicFormField
+                                      key={field.fieldname}
+                                      field={field}
+                                      value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+                                      onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
+                                      linkOptionsCache={linkOptionsCache}
+                                      fetchLinkOptions={fetchLinkOptions}
+                                      getDocTypeFields={getDocTypeFields}
+                                      erpnextConfig={erpnextConfig}
+                                      getCsrfToken={getCsrfToken}
+                                      formValues={dynamicFormValues}
+                                    />
+                                  ))}
+                                </div>
+                              </>
                             );
-                          })()}
+                          }
+
+                          return (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                              {fields.map(field => (
+                                <DynamicFormField
+                                  key={field.fieldname}
+                                  field={field}
+                                  value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+                                  onChange={(newVal) => setDynamicFormValues(prev => ({ ...prev, [field.fieldname]: newVal }))}
+                                  linkOptionsCache={linkOptionsCache}
+                                  fetchLinkOptions={fetchLinkOptions}
+                                  getDocTypeFields={getDocTypeFields}
+                                  erpnextConfig={erpnextConfig}
+                                  getCsrfToken={getCsrfToken}
+                                  formValues={dynamicFormValues}
+                                />
+                              ))}
+                            </div>
+                          );
+                        })()}
 
                         {/* Unified Checklist UI for Company Search tab inside dynamic edit panel */}
                         {activeSections[safeTabIdx]?.fields.some(f => f.fieldname === 'company_search_documents') && (
@@ -4334,7 +4358,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             );
                           })()}
 
-                          <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gridColumn: 'span 2' }}>
+                          {/* <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gridColumn: 'span 2' }}>
                             <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Is Internal Tenant?</span>
                             {isEditingDetails ? (
                               <input
@@ -4348,7 +4372,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 {selectedCase.is_internal_customer ? 'Yes' : 'No'}
                               </div>
                             )}
-                          </div>
+                          </div> */}
 
                           {selectedCase.type === 'Individual' && (
                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -5494,6 +5518,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', height: '380px', overflowY: 'auto', paddingRight: '6px' }}>
                       {activeSections[safeTabIdx]?.fields
                         .filter(field => {
+                          if (isInternalTenantField(field)) return false;
                           const selectedType = dynamicFormValues['type'] || '';
                           if (field.fieldname === 'date_of_birth' && selectedType !== 'Individual') {
                             return false;
@@ -5501,7 +5526,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           if (field.fieldname === 'date_of_incorporation' && selectedType !== 'Company') {
                             return false;
                           }
-                          const isInternal = !!dynamicFormValues['is_internal_customer'];
+                          const isInternal = false;
                           const fieldLabelLower = (field.label || '').toLowerCase();
                           const fieldNameLower = (field.fieldname || '').toLowerCase();
                           if (!isInternal) {

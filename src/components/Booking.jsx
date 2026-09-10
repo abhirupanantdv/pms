@@ -4367,15 +4367,21 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                 )}
 
                 <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                  {/* Hidden: Print button preserved per request */}
-                  {/* <button
+                  {/* Print Lease Agreement Action */}
+                  <button
                     className="btn btn-primary"
                     onClick={() => {
                       if (selectedBookingDetails?.status === 'Cancelled' || selectedBookingDetails?.workflow_state === 'Cancelled') {
                         showToast('error', 'Not allowed to print cancelled documents');
                         return;
                       }
-                      const contractId = selectedBookingDetails?.custom_contract || selectedBookingDetails?.contract;
+                      let contractId = selectedBookingDetails?.custom_contract || selectedBookingDetails?.contract;
+                      if (!contractId) {
+                        const matched = bookings.find(b => (b.name === selectedBookingDetails?.name || b.id === selectedBookingDetails?.name));
+                        if (matched) {
+                          contractId = matched.custom_contract || matched.contract;
+                        }
+                      }
                       if (!contractId) {
                         showToast('error', 'No linked contract found for this booking');
                         return;
@@ -4449,7 +4455,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                   >
                     <Printer size={14} />
                     <span>Print Lease Agreement</span>
-                  </button> */}
+                  </button>
 
                   {/* Approve Booking Action */}
                   {!isBookingApproved && (
