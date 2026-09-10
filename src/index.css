@@ -772,4 +772,31 @@ textarea::placeholder {
   opacity: 0.75 !important;
 }
 
+/* Quotation Details Drawer (covering full main area) */
+.quotation-details-drawer {
+  position: fixed;
+  top: 0;
+  right: -120vw;
+  width: calc(100vw - 240px);
+  max-width: 100vw;
+  height: 100vh;
+  background: var(--bg-primary);
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.15);
+  z-index: 999;
+  transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.quotation-details-drawer.open {
+  right: 0 !important;
+}
+
+@media (max-width: 992px) {
+  .quotation-details-drawer {
+    width: 100vw !important;
+  }
+}
+
 

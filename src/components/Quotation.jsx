@@ -4798,7 +4798,7 @@
 
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, Check, RotateCcw, Zap, Home, Send, XCircle, Layers } from 'lucide-react';
+import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, Check, RotateCcw, Zap, Home, Send, XCircle, Layers, Bookmark, GitBranch } from 'lucide-react';
 import houseImg from '../assets/new-house.png';
 
 const getCsrfToken = () => {
@@ -4903,22 +4903,99 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   const [selectedQuotationDetail, setSelectedQuotationDetail] = useState(null);
   const itemsPerPage = selectedQuotation ? 6 : 10;
 
+  // Date Helpers for Quotations
+  const formatDateToYMD = (date) => {
+    if (!date) return '';
+    const d = date instanceof Date ? date : new Date(date);
+    if (isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const calcNextDay = (dateStr) => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return '';
+    const [y, m, d] = parts.map(Number);
+    const dt = new Date(y, m - 1, d);
+    if (isNaN(dt.getTime())) return '';
+    dt.setDate(dt.getDate() + 1);
+    return formatDateToYMD(dt);
+  };
+
+  const calcOneYearLater = (startDateStr) => {
+    if (!startDateStr) return '';
+    const parts = startDateStr.split('-');
+    if (parts.length !== 3) return '';
+    const [y, m, d] = parts.map(Number);
+    const dt = new Date(y, m - 1, d);
+    if (isNaN(dt.getTime())) return '';
+    dt.setFullYear(dt.getFullYear() + 1);
+    return formatDateToYMD(dt);
+  };
+
   // Form states
   const [quoteCustomer, setQuoteCustomer] = useState('');
   const [quotetamplate, setQuotetamplate] = useState('');
+  const [quoteCompany, setQuoteCompany] = useState('CARPENTERS PROPERTIES PTE LIMITED');
+  const [defaultValidityDays, setDefaultValidityDays] = useState(7);
 
-  const [quoteEstBookingStart, setQuoteEstBookingStart] = useState(() => new Date().toISOString().split('T')[0]); // Start Date
+  const [quoteValidTill, setQuoteValidTill] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return formatDateToYMD(d);
+  });
+
+  const [quoteEstBookingStart, setQuoteEstBookingStart] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7 + 1); // Start Date always starts from next date of valid till (only for new quotation)
+    return formatDateToYMD(d);
+  });
   const [quoteEstBookingEnd, setQuoteEstBookingEnd] = useState(() => {
     const d = new Date();
-    d.setDate(d.getDate() + 30);
-    return d.toISOString().split('T')[0];
-  }); // End Date
+    d.setDate(d.getDate() + 7 + 1);
+    d.setFullYear(d.getFullYear() + 1);
+    return formatDateToYMD(d);
+  });
+
+  const handleValidTillChange = (val) => {
+    setQuoteValidTill(val);
+    if (val) {
+      const nextDay = calcNextDay(val);
+      setQuoteEstBookingStart(nextDay);
+      const nextEnd = calcOneYearLater(nextDay);
+      setQuoteEstBookingEnd(nextEnd);
+    }
+  };
+
+  const handleStartDateChange = (newStart) => {
+    setQuoteEstBookingStart(newStart);
+    if (newStart) {
+      const oneYear = calcOneYearLater(newStart);
+      if (!quoteEstBookingEnd || new Date(quoteEstBookingEnd) < new Date(oneYear)) {
+        setQuoteEstBookingEnd(oneYear);
+      }
+    }
+  };
   const [quoteStatus, setQuoteStatus] = useState('Draft');
-  const [quoteCompany, setQuoteCompany] = useState('CARPENTERS PROPERTIES PTE LIMITED');
-  const [quoteItems, setQuoteItems] = useState([{ unitId: '', qty: 1, uom: '', standardRate: '', offeredRate: '', propertyGroup: '', locality: '', district: '', totalArea: '', loadingDetail: false }]);
+  const [quoteItems, setQuoteItems] = useState([{ unitId: '', qty: 1, uom: 'Sq Ft', stock_uom: 'Sq Ft', standardRate: '', offeredRate: '', propertyGroup: '', locality: '', district: '', totalArea: '', carpetArea: 0, item_group: 'Commercial', loadingDetail: false }]);
+  const [defaultServiceItems, setDefaultServiceItems] = useState([]);
+  const [creatingBooking, setCreatingBooking] = useState(false);
+  const [creatingBookingId, setCreatingBookingId] = useState(null);
   const [discountAmount, setDiscountAmount] = useState('');
   const [messageText, setMessageText] = useState('');
   const [savingDiscount, setSavingDiscount] = useState(false);
+
+  // New Version Modal States
+  const [showNewVersionModal, setShowNewVersionModal] = useState(false);
+  const [versionTargetQuotation, setVersionTargetQuotation] = useState(null);
+  const [versionItems, setVersionItems] = useState([]);
+  const [versionNote, setVersionNote] = useState('');
+  const [versionSubmitting, setVersionSubmitting] = useState(false);
+  const [versionStartDate, setVersionStartDate] = useState('');
+  const [versionEndDate, setVersionEndDate] = useState('');
 
   const [countries, setCountries] = useState([]);
   const [selCountry, setSelCountry] = useState('');
@@ -4989,6 +5066,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             name: doc.name || prev.name,
             currency: doc.default_currency || prev.currency,
           }));
+          if (doc.name) {
+            setQuoteCompany(doc.name);
+          }
 
           // Fetch Address
           const filters = encodeURIComponent(JSON.stringify([
@@ -5069,13 +5149,12 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
   };
 
-  // Fetch ALL Space Units (Items) — unfiltered, using only fields known to exist
-  // so the request can never silently fail because of a guessed custom fieldname.
+  // Fetch ALL Space Units (Items) — Commercial units with their area specs
   const fetchSpaceUnits = async () => {
     if (!erpnextConfig || !erpnextConfig.url) return;
     try {
       const filters = encodeURIComponent(JSON.stringify([["item_group", "=", "Commercial"]]));
-      const url = `${erpnextConfig.url}/api/resource/Item?fields=["name","item_name","standard_rate","valuation_rate","custom_property_group","custom_property_reference","stock_uom","custom_floor"]&filters=${filters}&limit_page_length=500`;
+      const url = `${erpnextConfig.url}/api/resource/Item?fields=["name","item_name","standard_rate","valuation_rate","custom_property_group","custom_property_reference","stock_uom","custom_floor","item_group","custom_7average_carpet_area_of_units"]&filters=${filters}&limit_page_length=500`;
       const res = await fetch(url, {
         credentials: 'include',
         headers: {
@@ -5097,6 +5176,33 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       console.warn('Failed fetching Space Units (Items):', e);
       setDebugMsg(`Item fetch error: ${e.message}`);
     }
+  };
+
+  // Fetch Default Service Items from ERPNext (item_group: "Services", custom_service_group: "Default Service", disabled: 0)
+  const fetchDefaultServices = async () => {
+    if (!erpnextConfig || !erpnextConfig.url) return [];
+    try {
+      const filters = encodeURIComponent(JSON.stringify([
+        ["item_group", "=", "Services"],
+        ["custom_service_group", "=", "Default Service"],
+        ["disabled", "=", 0]
+      ]));
+      const fields = encodeURIComponent(JSON.stringify(["name", "item_name", "charges", "standard_rate", "item_group", "stock_uom"]));
+      const url = `${erpnextConfig.url}/api/resource/Item?filters=${filters}&fields=${fields}&limit_page_length=0`;
+      const res = await fetch(url, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const items = json.data || [];
+        setDefaultServiceItems(items);
+        return items;
+      }
+    } catch (e) {
+      console.warn('Failed fetching default service items:', e);
+    }
+    return [];
   };
 
   const fetchPropertyGroups = async () => {
@@ -5197,15 +5303,24 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   };
 
   const addUnitToQuoteItems = async (unitId) => {
+    if (!unitId) return;
+    const isAlreadyAdded = quoteItems.some(it => it.unitId === unitId);
+    if (isAlreadyAdded) {
+      showToast('error', `Unit "${unitId}" has already been added to this quotation.`);
+      showAlert('Duplicate Unit', `Unit "${unitId}" has already been added. The same unit cannot be added twice.`);
+      return;
+    }
     const listMatch = spaceUnits.find(u => u.name === unitId);
     const valRate = listMatch ? (listMatch.valuation_rate || listMatch.standard_rate || 0) : 0;
+    const initialCarpetArea = listMatch ? parseFloat(listMatch.custom_7average_carpet_area_of_units || 0) : 0;
 
     const newRow = {
       unitId,
       qty: 1,
       standardRate: valRate,
       offeredRate: valRate,
-      uom: listMatch ? (listMatch.stock_uom || 'Unit') : 'Unit',
+      uom: listMatch ? (listMatch.stock_uom || 'Sq Ft') : 'Sq Ft',
+      stock_uom: listMatch ? (listMatch.stock_uom || 'Sq Ft') : 'Sq Ft',
       propertyGroup: listMatch
         ? (typeof listMatch.custom_property_group === 'string'
           ? listMatch.custom_property_group
@@ -5215,19 +5330,22 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         : '',
       locality: '',
       district: '',
-      totalArea: '',
+      totalArea: initialCarpetArea > 0 ? `${initialCarpetArea} sqft` : '',
+      carpetArea: initialCarpetArea,
+      item_group: listMatch?.item_group || 'Commercial',
       loadingDetail: true
     };
 
-    setQuoteItems(prev => {
-      if (prev.length === 1 && prev[0].unitId === '') {
-        return [newRow];
-      }
-      return [...prev, newRow];
-    });
+    let updatedRows = [];
+    if (quoteItems.length === 1 && quoteItems[0].unitId === '') {
+      updatedRows = [newRow];
+    } else {
+      updatedRows = [...quoteItems, newRow];
+    }
+    setQuoteItems(updatedRows);
 
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Item/${unitId}`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Item/${encodeURIComponent(unitId)}`, {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' }
       });
@@ -5246,27 +5364,91 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           return '';
         };
 
+        const carpetAreaVal = parseFloat(
+          doc.custom_7average_carpet_area_of_units !== undefined && doc.custom_7average_carpet_area_of_units !== null && doc.custom_7average_carpet_area_of_units !== ''
+            ? doc.custom_7average_carpet_area_of_units
+            : (initialCarpetArea || 0)
+        );
+        const itemGroupVal = doc.item_group || listMatch?.item_group || 'Commercial';
+
         setQuoteItems(prev => {
-          return prev.map(item => {
+          const currentList = prev.map(item => {
             if (item.unitId === unitId) {
               return {
                 ...item,
                 propertyGroup: findVal(['custom_property_group', 'custom_property_reference', 'property_group', 'property']) || item.propertyGroup,
                 locality: findVal(['locality']),
                 district: findVal(['district']),
-                totalArea: findVal(['total_area', 'area_sqft', 'area']),
+                totalArea: carpetAreaVal > 0 ? `${carpetAreaVal} sqft` : (findVal(['total_area', 'area_sqft', 'area']) || '—'),
+                carpetArea: carpetAreaVal,
+                item_group: itemGroupVal,
                 loadingDetail: false
               };
             }
             return item;
           });
+          syncDefaultServices(currentList).then(synced => setQuoteItems(synced));
+          return currentList;
         });
       } else {
-        setQuoteItems(prev => prev.map(item => item.unitId === unitId ? { ...item, loadingDetail: false } : item));
+        setQuoteItems(prev => {
+          const currentList = prev.map(item => item.unitId === unitId ? { ...item, loadingDetail: false } : item);
+          syncDefaultServices(currentList).then(synced => setQuoteItems(synced));
+          return currentList;
+        });
       }
     } catch (e) {
-      setQuoteItems(prev => prev.map(item => item.unitId === unitId ? { ...item, loadingDetail: false } : item));
+      setQuoteItems(prev => {
+        const currentList = prev.map(item => item.unitId === unitId ? { ...item, loadingDetail: false } : item);
+        syncDefaultServices(currentList).then(synced => setQuoteItems(synced));
+        return currentList;
+      });
     }
+  };
+
+  // Helper to identify Commercial Unit rows in Quotation items child table
+  const isCommercialItem = (item) => {
+    if (!item) return false;
+    if (item.isDefaultService) return false;
+    if (item.item_group && item.item_group.toLowerCase() === 'commercial') return true;
+    if (item.item_group && item.item_group.toLowerCase() !== 'commercial') return false;
+    if (spaceUnits.some(u => u.name === item.item_code || u.item_code === item.item_code)) return true;
+    const nameLower = (item.item_name || item.item_code || '').toLowerCase();
+    const isOther = nameLower.match(/fee|charge|service|deposit|tax|promo|discount/);
+    return !isOther;
+  };
+
+  // Helper to extract root quotation name (e.g. 'QTN-09-00295' from 'QTN-09-00295-1')
+  const getRootQuotationName = (qName, doc) => {
+    if (doc && doc.amended_from) {
+      let current = doc.amended_from;
+      const parts = current.split('-');
+      if (parts.length > 3 && !isNaN(parseInt(parts[parts.length - 1], 10)) && parts[parts.length - 1].length <= 3) {
+        return parts.slice(0, -1).join('-');
+      }
+      return current;
+    }
+    if (!qName) return '';
+    const parts = qName.split('-');
+    if (parts.length > 3 && !isNaN(parseInt(parts[parts.length - 1], 10)) && parts[parts.length - 1].length <= 3) {
+      return parts.slice(0, -1).join('-');
+    }
+    return qName;
+  };
+
+  // Helper to get version number and amendment status
+  const getQuotationVersionInfo = (qName, rootName) => {
+    if (!qName) return { version_no: 1, isAmendment: false };
+    const rName = rootName || getRootQuotationName(qName);
+    if (qName === rName) return { version_no: 1, isAmendment: false };
+    const parts = qName.split('-');
+    if (parts.length > 3) {
+      const lastNum = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(lastNum)) {
+        return { version_no: lastNum + 1, isAmendment: true };
+      }
+    }
+    return { version_no: 1, isAmendment: false };
   };
 
   // Fetch quotations from ERPNext
@@ -5281,7 +5463,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
     setLoading(true);
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=["name","customer_name","party_name","transaction_date","valid_till","grand_total","status","workflow_state"]&limit_page_length=100&order_by=creation desc`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=["name","customer_name","party_name","transaction_date","valid_till","grand_total","status","workflow_state","booking_id","docstatus"]&limit_page_length=100&order_by=creation desc`, {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json'
@@ -5303,18 +5485,57 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
   };
 
+  // Fetch default validity days from ERPNext Selling Settings or Quotation doctype
+  const fetchDefaultValidity = async () => {
+    if (!erpnextConfig || !erpnextConfig.url) return;
+    try {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Selling%20Settings/Selling%20Settings`, {
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const days = json?.data?.default_valid_till;
+        if (days && Number(days) > 0) {
+          const numDays = Number(days);
+          setDefaultValidityDays(numDays);
+          const today = new Date();
+          const validDate = new Date(today);
+          validDate.setDate(validDate.getDate() + numDays);
+          const validStr = formatDateToYMD(validDate);
+          const startStr = calcNextDay(validStr);
+          const endStr = calcOneYearLater(startStr);
+          setQuoteValidTill(validStr);
+          setQuoteEstBookingStart(startStr);
+          setQuoteEstBookingEnd(endStr);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch Selling Settings default_valid_till (fallback to 7 days):', e);
+    }
+  };
+
   useEffect(() => {
     fetchQuotations();
     fetchCustomersList();
     fetchtamplateList();
     fetchSpaceUnits();
+    fetchDefaultServices();
     fetchPropertyGroups();
     fetchCountries();
+    fetchDefaultValidity();
   }, [erpnextConfig]);
 
   useEffect(() => {
     if (selectedQuotationDetail) {
-      setDiscountAmount(selectedQuotationDetail.discount_amount !== undefined && selectedQuotationDetail.discount_amount !== null ? String(selectedQuotationDetail.discount_amount) : '');
+      const commercialItem = (selectedQuotationDetail.items || []).find(isCommercialItem);
+      const existingDiscount = (commercialItem && commercialItem.discount_amount !== undefined && commercialItem.discount_amount !== null && commercialItem.discount_amount !== '')
+        ? commercialItem.discount_amount
+        : (selectedQuotationDetail.discount_amount || 0);
+
+      setDiscountAmount(existingDiscount !== undefined && existingDiscount !== null && existingDiscount !== '' ? String(existingDiscount) : '0');
       setMessageText('');
     } else {
       setDiscountAmount('');
@@ -5324,7 +5545,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   }, [selectedQuotationDetail]);
 
   // Handle detailed Quotation view & retrieve client CRM metadata
-  const fetchQuotationDetail = async (qName, customerId) => {
+  const fetchQuotationDetail = async (qName, customerId, preferLatest = false) => {
     if (!erpnextConfig || !erpnextConfig.url) return;
     setNegotiations([]);
     setComments([]);
@@ -5406,7 +5627,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       if (res.ok) {
         const json = await res.json();
         const doc = json.data || json;
-        setSelectedQuotationDetail(doc);
+        if (!preferLatest) {
+          setSelectedQuotationDetail(doc);
+        }
 
         // Fetch Customer Address & Contact
         const actualCustomer = customerId || doc.party_name || doc.customer;
@@ -5448,46 +5671,178 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           }
         }
 
-        // Fetch Comments and parse negotiations
-        try {
-          const commentRes = await fetch(`${erpnextConfig.url}/api/resource/Comment?filters=[["reference_doctype", "=", "Quotation"], ["reference_name", "=", "${qName}"]]&fields=["name","comment_email","content","creation","comment_by"]&limit_page_length=100&order_by=creation desc`, {
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' }
-          });
-          if (commentRes.ok) {
-            const commentJson = await commentRes.json();
-            const commentsData = commentJson.data || [];
-            setComments(commentsData);
+        // 1. Resolve root quotation name (e.g. 'QTN-09-00295' from 'QTN-09-00295-1')
+        const rootName = getRootQuotationName(qName, doc);
 
-            // Parse negotiations history from comments instead of fetching Quotation Negotiation Doctype
-            const parsedNegotiations = [];
-            commentsData.forEach(c => {
-              const neg = parseNegotiationFromComment(c.content);
-              if (neg) {
-                parsedNegotiations.push(neg);
+        // 2. Fetch all quotation versions in this family from ERPNext
+        let detailedVersions = [doc];
+        try {
+          let versionList = [];
+          if (erpnextConfig && erpnextConfig.url) {
+            const verRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation?filters=[["name", "like", "${rootName}%"]]&fields=["name","customer_name","party_name","transaction_date","creation","modified","owner","modified_by","status","workflow_state","discount_amount","total","net_total","grand_total","docstatus","amended_from","custom_last_negotiated_by","custom_last_negotiation_date"]&order_by=creation asc&limit_page_length=50`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (verRes.ok) {
+              const verJson = await verRes.json();
+              const rawList = verJson.data || [];
+              versionList = rawList.filter(v => v.name === rootName || v.name.startsWith(`${rootName}-`) || v.amended_from === rootName);
+            }
+          }
+
+          // Fallback / supplement from local quotations list
+          if (quotations && quotations.length > 0) {
+            const localMatches = quotations.filter(q => q.name === rootName || q.name.startsWith(`${rootName}-`) || q.amended_from === rootName);
+            localMatches.forEach(l => {
+              if (!versionList.some(v => v.name === l.name)) {
+                versionList.push(l);
               }
             });
-            parsedNegotiations.sort((a, b) => b.version_no - a.version_no);
-            setNegotiations(parsedNegotiations);
-          } else {
-            setComments([]);
-            setNegotiations([]);
           }
-        } catch (cErr) {
-          console.warn('Failed fetching comments and parsing negotiations:', cErr);
-          setComments([]);
-          setNegotiations([]);
+
+          if (!versionList.some(v => v.name === qName)) {
+            versionList.push(doc);
+          }
+
+          // Sort in ascending order of version number
+          versionList.sort((a, b) => {
+            const vA = getQuotationVersionInfo(a.name, rootName).version_no;
+            const vB = getQuotationVersionInfo(b.name, rootName).version_no;
+            return vA - vB;
+          });
+
+          // Fetch items child table for other versions so comparison has complete data
+          if (erpnextConfig && erpnextConfig.url && versionList.length > 1) {
+            detailedVersions = await Promise.all(versionList.map(async (v) => {
+              if (v.name === qName) return doc;
+              try {
+                const vRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${v.name}`, {
+                  credentials: 'include',
+                  headers: { 'Content-Type': 'application/json' }
+                });
+                if (vRes.ok) {
+                  const vJson = await vRes.json();
+                  return vJson.data || vJson;
+                }
+              } catch (_) {}
+              return v;
+            }));
+          } else {
+            detailedVersions = versionList.length > 0 ? versionList : [doc];
+          }
+        } catch (vErr) {
+          console.warn('Failed fetching quotation versions:', vErr);
+          detailedVersions = [doc];
         }
 
-        // Fetch active workflow actions from get_quotation_workflow_actions API
+        // Sort detailedVersions ascending by version_no
+        detailedVersions.sort((a, b) => {
+          const vA = getQuotationVersionInfo(a.name, rootName).version_no;
+          const vB = getQuotationVersionInfo(b.name, rootName).version_no;
+          return vA - vB;
+        });
+
+        // 3. Resolve active document (if preferLatest enabled and multiple versions exist, select the last version)
+        let activeDoc = doc;
+        let activeName = qName;
+        if (preferLatest && detailedVersions.length > 1) {
+          const lastDoc = detailedVersions[detailedVersions.length - 1];
+          if (lastDoc) {
+            activeDoc = lastDoc;
+            activeName = lastDoc.name;
+            if (activeName !== qName) {
+              setSelectedQuotation(prev => (prev ? { ...prev, ...lastDoc } : lastDoc));
+              const latestVInfo = getQuotationVersionInfo(activeName, rootName);
+              showToast('info', `Showing latest version V${latestVInfo.version_no} (${activeName})`);
+            }
+          }
+        }
+        setSelectedQuotationDetail(activeDoc);
+
+        // 4. Build version history / negotiations array from actual quotation documents
+        const parsedNegotiations = detailedVersions.map((vDoc, index) => {
+          const vInfo = getQuotationVersionInfo(vDoc.name, rootName);
+          const commItem = (vDoc.items || []).find(isCommercialItem);
+          const itemDisc = commItem && commItem.discount_amount !== undefined ? parseFloat(commItem.discount_amount) : 0;
+          const docDisc = parseFloat(vDoc.discount_amount) || 0;
+          const discAmount = itemDisc > 0 ? itemDisc : docDisc;
+
+          // Previous version for diff calculation
+          const prevDoc = index > 0 ? detailedVersions[index - 1] : null;
+          const prevGrandTotal = prevDoc ? parseFloat(prevDoc.grand_total || 0) : parseFloat(vDoc.grand_total || 0);
+          const prevCommItem = prevDoc ? (prevDoc.items || []).find(isCommercialItem) : null;
+          const prevItemDisc = prevCommItem && prevCommItem.discount_amount !== undefined ? parseFloat(prevCommItem.discount_amount) : 0;
+          const prevDocDisc = prevDoc ? (parseFloat(prevDoc.discount_amount) || 0) : 0;
+          const prevDisc = prevItemDisc > 0 ? prevItemDisc : prevDocDisc;
+
+          // Calculate total price list rate for commercial items
+          const commItems = (vDoc.items || []).filter(isCommercialItem);
+          const targetCommItems = commItems.length > 0 ? commItems : (vDoc.items || []);
+          const vPriceListRate = targetCommItems.reduce((acc, it) => {
+            const itQty = parseFloat(it.qty) || 1;
+            const itDisc = parseFloat(it.discount_amount) || 0;
+            const itRate = parseFloat(it.price_list_rate) || ((parseFloat(it.rate) || 0) + (itDisc / itQty));
+            return acc + (itRate * itQty);
+          }, 0) || parseFloat(vDoc.total || vDoc.grand_total || 0);
+
+          return {
+            name: vDoc.name,
+            version_no: vInfo.version_no,
+            total_versions: detailedVersions.length,
+            is_current: vDoc.name === activeName,
+            negotiation_date: vDoc.custom_last_negotiation_date || vDoc.transaction_date || (vDoc.creation ? vDoc.creation.split(' ')[0] : '—'),
+            negotiation_by: vDoc.custom_last_negotiated_by || vDoc.owner || vDoc.modified_by || 'Sales Team',
+            price_list_rate: vPriceListRate,
+            current_discount: discAmount,
+            current_grand_total: parseFloat(vDoc.grand_total || 0),
+            current_net_total: parseFloat(vDoc.net_total || vDoc.total || 0),
+            previous_discount: prevDisc,
+            previous_grand_total: prevGrandTotal,
+            discount_difference: discAmount - prevDisc,
+            negotiation_status: vDoc.workflow_state || vDoc.status || (vDoc.docstatus === 1 ? 'Submitted' : vDoc.docstatus === 2 ? 'Cancelled' : 'Draft'),
+            items: vDoc.items || [],
+            doc: vDoc
+          };
+        });
+
+        // Set negotiations in descending order (latest version first)
+        setNegotiations(parsedNegotiations.slice().reverse());
+
+        // 5. Fetch Comments across all versions in this quotation family
         try {
-          const wfRes = await fetch(`${erpnextConfig.url}/api/method/get_quotation_workflow_actions?quotation=${qName}`, {
+          const versionNames = detailedVersions.map(v => v.name);
+          const commentPromises = versionNames.map(vName =>
+            fetch(`${erpnextConfig.url}/api/resource/Comment?filters=[["reference_doctype", "=", "Quotation"], ["reference_name", "=", "${vName}"]]&fields=["name","comment_email","content","creation","comment_by","reference_name"]&limit_page_length=50&order_by=creation desc`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            }).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
+          );
+          const commentsResults = await Promise.all(commentPromises);
+          const allComments = commentsResults.flatMap(r => r.data || []);
+          const uniqueComments = [];
+          const seenIds = new Set();
+          for (const c of allComments) {
+            if (c.name && !seenIds.has(c.name)) {
+              seenIds.add(c.name);
+              uniqueComments.push(c);
+            }
+          }
+          uniqueComments.sort((a, b) => new Date(b.creation || 0) - new Date(a.creation || 0));
+          setComments(uniqueComments);
+        } catch (cErr) {
+          console.warn('Failed fetching comments across versions:', cErr);
+          setComments([]);
+        }
+
+        // Fetch active workflow actions from get_quotation_workflow_actions API for activeName
+        try {
+          const wfRes = await fetch(`${erpnextConfig.url}/api/method/get_quotation_workflow_actions?quotation=${activeName}`, {
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' }
           });
           if (wfRes.ok) {
             const wfJson = await wfRes.json();
-            console.log('Workflow API Response for', qName, ':', wfJson);
+            console.log('Workflow API Response for', activeName, ':', wfJson);
             const message = wfJson.message || {};
             setWorkflowActions(message);
 
@@ -5516,69 +5871,252 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   };
 
   const handleRowClick = (quote) => {
-    setSelectedQuotation(quote);
+    // If multiple versions of this quotation are available in local list, resolve to latest version
+    const rootName = getRootQuotationName(quote.name, quote);
+    let targetQuote = quote;
+    if (quotations && quotations.length > 0) {
+      const familyQuotes = quotations.filter(q => getRootQuotationName(q.name, q) === rootName);
+      if (familyQuotes.length > 1) {
+        familyQuotes.sort((a, b) => {
+          const vA = getQuotationVersionInfo(a.name, rootName).version_no;
+          const vB = getQuotationVersionInfo(b.name, rootName).version_no;
+          return vB - vA; // Latest version first
+        });
+        targetQuote = familyQuotes[0];
+      }
+    }
+
+    setSelectedQuotation(targetQuote);
     setSelectedQuotationDetail(null);
     setNegotiations([]);
     setComments([]);
     setWorkflowActions(null);
-    fetchQuotationDetail(quote.name, quote.party_name || quote.customer);
+    fetchQuotationDetail(targetQuote.name, targetQuote.party_name || targetQuote.customer, true);
+  };
+
+  // SYNC DEFAULT SERVICES
+  // Matches ERPNext client script:
+  // 1. Calculate all commercial items: commercial_count and total_carpet_area
+  // 2. If commercial_count === 0: remove default services
+  // 3. If commercial_count > 0:
+  //    rate = total_carpet_area * flt(service.charges || 0)
+  //    add or update default service rows
+  //    keep default services positioned immediately after commercial items
+  const syncDefaultServices = async (rows) => {
+    let serviceItems = defaultServiceItems;
+    if (!serviceItems || serviceItems.length === 0) {
+      serviceItems = await fetchDefaultServices();
+    }
+
+    const serviceNames = new Set((serviceItems || []).map(d => d.name));
+
+    // Separate default service rows from other rows
+    const serviceRows = [];
+    const otherRows = [];
+
+    for (const row of rows) {
+      if (row.isDefaultService || serviceNames.has(row.unitId)) {
+        serviceRows.push(row);
+      } else {
+        otherRows.push(row);
+      }
+    }
+
+    // Calculate all commercial items
+    let totalCarpetArea = 0;
+    let commercialCount = 0;
+    let lastCommercialIdx = -1;
+
+    for (let i = 0; i < otherRows.length; i++) {
+      const row = otherRows[i];
+      if (!row.unitId) continue;
+
+      let itemGroup = row.item_group;
+      let carpetArea = parseFloat(row.carpetArea !== undefined && row.carpetArea !== null ? row.carpetArea : 0);
+
+      // Check spaceUnits lookup if not directly present on row
+      if (!itemGroup) {
+        const foundUnit = spaceUnits.find(u => u.name === row.unitId);
+        if (foundUnit) {
+          itemGroup = foundUnit.item_group || 'Commercial';
+          if (!carpetArea && foundUnit.custom_7average_carpet_area_of_units) {
+            carpetArea = parseFloat(foundUnit.custom_7average_carpet_area_of_units) || 0;
+          }
+        }
+      }
+
+      if (itemGroup === 'Commercial') {
+        commercialCount++;
+        totalCarpetArea += carpetArea;
+        lastCommercialIdx = i;
+      }
+    }
+
+    // If commercial items exist but no active default service items in system
+    if ((!serviceItems || serviceItems.length === 0) && commercialCount > 0) {
+      showAlert('Notice', 'No active Default Service Item found.');
+      showToast('error', 'No active Default Service Item found.');
+    }
+
+    // NO COMMERCIAL ITEM -> REMOVE DEFAULT SERVICES
+    if (commercialCount === 0) {
+      if (otherRows.length === 0) {
+        return [{ unitId: '', qty: 1, uom: 'Sq Ft', stock_uom: 'Sq Ft', standardRate: '', offeredRate: '', propertyGroup: '', locality: '', district: '', totalArea: '', carpetArea: 0, item_group: 'Commercial', loadingDetail: false }];
+      }
+      return otherRows;
+    }
+
+    // ADD / UPDATE DEFAULT SERVICES
+    const updatedServiceRows = [...serviceRows];
+
+    for (const service of (serviceItems || [])) {
+      const charges = parseFloat(service.charges || 0);
+      const calculatedRate = Math.round((totalCarpetArea * charges) * 100) / 100;
+
+      const existingIdx = updatedServiceRows.findIndex(r => r.unitId === service.name);
+      if (existingIdx >= 0) {
+        updatedServiceRows[existingIdx] = {
+          ...updatedServiceRows[existingIdx],
+          itemName: service.item_name || service.name,
+          standardRate: calculatedRate,
+          offeredRate: calculatedRate,
+          charges: charges,
+          totalArea: `${totalCarpetArea} sqft`,
+          carpetArea: 0,
+          qty: updatedServiceRows[existingIdx].qty || 1,
+          uom: service.stock_uom || 'Nos',
+          stock_uom: service.stock_uom || 'Nos',
+        };
+      } else {
+        updatedServiceRows.push({
+          unitId: service.name,
+          itemName: service.item_name || service.name,
+          qty: 1,
+          standardRate: calculatedRate,
+          offeredRate: calculatedRate,
+          uom: service.stock_uom || 'Nos',
+          stock_uom: service.stock_uom || 'Nos',
+          propertyGroup: 'Default Service',
+          locality: '—',
+          district: '—',
+          totalArea: `${totalCarpetArea} sqft`,
+          carpetArea: 0,
+          item_group: 'Services',
+          isDefaultService: true,
+          charges: charges,
+          loadingDetail: false
+        });
+      }
+    }
+
+    // KEEP SERVICES AFTER COMMERCIAL ITEMS
+    let resultItems = [];
+    if (lastCommercialIdx >= 0) {
+      resultItems = [
+        ...otherRows.slice(0, lastCommercialIdx + 1),
+        ...updatedServiceRows,
+        ...otherRows.slice(lastCommercialIdx + 1)
+      ];
+    } else {
+      resultItems = [...otherRows, ...updatedServiceRows];
+    }
+
+    return resultItems;
   };
 
   // Form helpers
   const addQuoteItem = () => {
-    setQuoteItems([...quoteItems, { unitId: '', qty: 1, uom: '', standardRate: '', offeredRate: '', propertyGroup: '', locality: '', district: '', totalArea: '', loadingDetail: false }]);
+    setQuoteItems(prev => [
+      ...prev,
+      {
+        unitId: '',
+        qty: 1,
+        uom: 'Sq Ft',
+        stock_uom: 'Sq Ft',
+        standardRate: '',
+        offeredRate: '',
+        propertyGroup: '',
+        locality: '',
+        district: '',
+        totalArea: '',
+        carpetArea: 0,
+        item_group: 'Commercial',
+        loadingDetail: false
+      }
+    ]);
   };
 
-  const removeQuoteItem = (index) => {
+  const removeQuoteItem = async (index) => {
+    if (quoteItems[index]?.isDefaultService) return;
     const updated = [...quoteItems];
     updated.splice(index, 1);
-    setQuoteItems(updated);
+    const synced = await syncDefaultServices(updated);
+    setQuoteItems(synced);
   };
 
   const handleQtyOrRateChange = (index, field, value) => {
-    const updated = [...quoteItems];
-    updated[index][field] = value;
-    setQuoteItems(updated);
+    setQuoteItems(prev => {
+      const updated = [...prev];
+      if (updated[index]) {
+        updated[index] = { ...updated[index], [field]: value };
+      }
+      return updated;
+    });
   };
 
   // Selecting a Unit fetches the FULL Item document (works regardless of the
   // exact custom fieldnames on your site) and auto-populates the row —
   // rate, UOM, Property Group, Locality, District, Total Area.
   const handleItemChange = async (index, unitId) => {
+    if (unitId) {
+      const isAlreadyAdded = quoteItems.some((it, i) => i !== index && it.unitId === unitId);
+      if (isAlreadyAdded) {
+        showToast('error', `Unit "${unitId}" is already added to this quotation.`);
+        showAlert('Duplicate Unit', `Unit "${unitId}" has already been added. The same unit cannot be added twice.`);
+        return;
+      }
+    }
     const listMatch = spaceUnits.find(u => u.name === unitId);
+    const initialCarpetArea = listMatch ? parseFloat(listMatch.custom_7average_carpet_area_of_units || 0) : 0;
+    const initialValRate = listMatch ? (listMatch.valuation_rate || listMatch.standard_rate || 0) : 0;
 
-    setQuoteItems(prev => {
-      const updated = [...prev];
-      const valRate = listMatch ? (listMatch.valuation_rate || listMatch.standard_rate || 0) : 0;
-      updated[index] = {
-        ...updated[index],
-        unitId,
-        standardRate: valRate,
-        offeredRate: valRate,
-        uom: listMatch ? (listMatch.stock_uom || 'Unit') : 'Unit',
-        propertyGroup: listMatch
-          ? (typeof listMatch.custom_property_group === 'string'
-            ? listMatch.custom_property_group
-            : (typeof listMatch.custom_property_reference === 'string'
-              ? listMatch.custom_property_reference
-              : ''))
-          : '',
-        loadingDetail: true
-      };
-      return updated;
-    });
+    const initialUpdatedRow = {
+      ...(quoteItems[index] || {}),
+      unitId,
+      standardRate: initialValRate,
+      offeredRate: initialValRate,
+      uom: listMatch ? (listMatch.stock_uom || 'Sq Ft') : 'Sq Ft',
+      stock_uom: listMatch ? (listMatch.stock_uom || 'Sq Ft') : 'Sq Ft',
+      propertyGroup: listMatch
+        ? (typeof listMatch.custom_property_group === 'string'
+          ? listMatch.custom_property_group
+          : (typeof listMatch.custom_property_reference === 'string'
+            ? listMatch.custom_property_reference
+            : ''))
+        : '',
+      carpetArea: initialCarpetArea,
+      totalArea: initialCarpetArea > 0 ? `${initialCarpetArea} sqft` : '',
+      item_group: listMatch?.item_group || 'Commercial',
+      loadingDetail: !!unitId
+    };
 
     if (!unitId || !erpnextConfig || !erpnextConfig.url) {
-      setQuoteItems(prev => {
-        const updated = [...prev];
-        if (updated[index]) updated[index].loadingDetail = false;
-        return updated;
-      });
+      initialUpdatedRow.loadingDetail = false;
+      const currentList = [...quoteItems];
+      currentList[index] = initialUpdatedRow;
+      const synced = await syncDefaultServices(currentList);
+      setQuoteItems(synced);
       return;
     }
 
+    setQuoteItems(prev => {
+      const currentList = [...prev];
+      currentList[index] = initialUpdatedRow;
+      return currentList;
+    });
+
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Item/${unitId}`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Item/${encodeURIComponent(unitId)}`, {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' }
       });
@@ -5596,45 +6134,69 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           }
           return '';
         };
+
+        const carpetAreaVal = parseFloat(
+          doc.custom_7average_carpet_area_of_units !== undefined && doc.custom_7average_carpet_area_of_units !== null && doc.custom_7average_carpet_area_of_units !== ''
+            ? doc.custom_7average_carpet_area_of_units
+            : (initialCarpetArea || 0)
+        );
+        const itemGroupVal = doc.item_group || listMatch?.item_group || 'Commercial';
+
         setQuoteItems(prev => {
-          const updated = [...prev];
-          if (updated[index] && updated[index].unitId === unitId) {
-            updated[index] = {
-              ...updated[index],
-              propertyGroup: findVal(['custom_property_group', 'custom_property_reference', 'property_group', 'property']) || updated[index].propertyGroup,
+          const currentList = [...prev];
+          const targetIdx = currentList.findIndex((item, i) => (i === index && item.unitId === unitId) || (item.unitId === unitId && !item.isDefaultService));
+          const idxToUpdate = targetIdx >= 0 ? targetIdx : index;
+          if (currentList[idxToUpdate]) {
+            currentList[idxToUpdate] = {
+              ...currentList[idxToUpdate],
+              propertyGroup: findVal(['custom_property_group', 'custom_property_reference', 'property_group', 'property']) || currentList[idxToUpdate].propertyGroup,
               locality: findVal(['locality']),
               district: findVal(['district']),
-              totalArea: findVal(['total_area', 'area_sqft', 'area']),
+              totalArea: carpetAreaVal > 0 ? `${carpetAreaVal} sqft` : (findVal(['total_area', 'area_sqft', 'area']) || '—'),
+              carpetArea: carpetAreaVal,
+              item_group: itemGroupVal,
               loadingDetail: false
             };
           }
-          return updated;
+          syncDefaultServices(currentList).then(synced => {
+            setQuoteItems(synced);
+          });
+          return currentList;
         });
       } else {
         const text = await res.text();
         setDebugMsg(`Item detail fetch failed (${res.status}): ${text.slice(0, 200)}`);
         setQuoteItems(prev => {
-          const updated = [...prev];
-          if (updated[index]) updated[index].loadingDetail = false;
-          return updated;
+          const currentList = prev.map((item, i) => i === index ? { ...item, loadingDetail: false } : item);
+          syncDefaultServices(currentList).then(synced => setQuoteItems(synced));
+          return currentList;
         });
       }
     } catch (e) {
       setDebugMsg(`Item detail fetch error: ${e.message}`);
       setQuoteItems(prev => {
-        const updated = [...prev];
-        if (updated[index]) updated[index].loadingDetail = false;
-        return updated;
+        const currentList = prev.map((item, i) => i === index ? { ...item, loadingDetail: false } : item);
+        syncDefaultServices(currentList).then(synced => setQuoteItems(synced));
+        return currentList;
       });
     }
   };
 
   const resetForm = () => {
+    const today = new Date();
+    const validDate = new Date(today);
+    validDate.setDate(validDate.getDate() + (defaultValidityDays || 7));
+    const validStr = formatDateToYMD(validDate);
+    const startStr = calcNextDay(validStr);
+    const endStr = calcOneYearLater(startStr);
+
     setQuoteCustomer('');
     setQuotetamplate('');
-    setQuoteEstBookingStart('');
-    setQuoteEstBookingEnd('');
-    setQuoteItems([{ unitId: '', qty: 1, uom: '', standardRate: '', offeredRate: '', propertyGroup: '', locality: '', district: '', totalArea: '', loadingDetail: false }]);
+    setQuoteCompany(companyDetails?.name || 'CARPENTERS PROPERTIES PTE LIMITED');
+    setQuoteValidTill(validStr);
+    setQuoteEstBookingStart(startStr);
+    setQuoteEstBookingEnd(endStr);
+    setQuoteItems([{ unitId: '', qty: 1, uom: 'Sq Ft', stock_uom: 'Sq Ft', standardRate: '', offeredRate: '', propertyGroup: '', locality: '', district: '', totalArea: '', carpetArea: 0, item_group: 'Commercial', loadingDetail: false }]);
     setErrorMsg('');
     setSelCountry('');
     setSelState('');
@@ -5679,13 +6241,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     // Specific match for booking conflicts
     const lower = clean.toLowerCase();
     if (lower.includes('already booked') || lower.includes('is booked') || lower.includes('booking conflict') || lower.includes('overlapping')) {
-      // Try to extract item/unit code if present (e.g., matching codes like 31CT18 or word boundaries)
-      const codeMatch = clean.match(/Item\s+([A-Za-z0-9-_]+)/i) || clean.match(/Unit\s+([A-Za-z0-9-_]+)/i) || clean.match(/\b([A-Z0-9]+-[A-Z0-9]+|[A-Z0-9]{4,10})\b/);
-      if (codeMatch) {
-        return `⚠️ Sorry, cannot book: Unit "${codeMatch[1]}" is already booked/occupied for the selected date range. Please select another unit or check the dates.`;
-      }
-      return `⚠️ Sorry, cannot book: One or more selected property units are already booked for the chosen dates. Please choose a different unit or date range.`;
+      const formatted = clean.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, '').trim();
+      return `⚠️ Booking Conflict:\n${formatted}`;
     }
+
+    clean = clean.replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]*>/g, '').trim();
 
     return clean;
   };
@@ -5693,7 +6253,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   // Submit new Quotation
   const handleCreateQuotation = async (e) => {
     e.preventDefault();
-    if (!quoteCustomer || !quoteEstBookingStart || !quoteEstBookingEnd) return;
+    if (!quoteCustomer || !quoteValidTill || !quoteEstBookingStart || !quoteEstBookingEnd) {
+      showAlert('Missing Fields', 'Please select Tenant Name and specify Valid Till, Start Date, and End Date.');
+      return;
+    }
 
     const todayStartCheck = new Date();
     todayStartCheck.setHours(0, 0, 0, 0);
@@ -5703,6 +6266,15 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     if (selectedStart < todayStartCheck) {
       showAlert('Invalid Date', 'Start Date cannot be in the past.');
       return;
+    }
+
+    if (quoteValidTill) {
+      const selectedValidTill = new Date(quoteValidTill);
+      selectedValidTill.setHours(0, 0, 0, 0);
+      if (selectedStart <= selectedValidTill) {
+        showAlert('Invalid Date', 'Start Date must always start from the next date of Valid Till.');
+        return;
+      }
     }
 
     const startDate = new Date(quoteEstBookingStart);
@@ -5721,20 +6293,58 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       const matched = spaceUnits.find(u => u.name === item.unitId);
       const standardRateNum = parseFloat(item.standardRate) || 0;
       const offeredRateNum = parseFloat(item.offeredRate) || 0;
+      const qtyNum = parseFloat(item.qty) || 1;
+
+      // Determine proper UOM based on item type
+      let itemUom = 'Sq Ft';
+      if (item.isDefaultService) {
+        itemUom = item.stock_uom || item.uom || 'Nos';
+        if (itemUom === 'Activity' || itemUom === 'Unit') itemUom = 'Nos';
+      } else {
+        itemUom = matched?.stock_uom || item.stock_uom || item.uom || 'Sq Ft';
+        if (itemUom === 'Activity' || itemUom === 'Unit') itemUom = 'Sq Ft';
+      }
+
+      const itemArea = parseFloat(item.carpetArea) || parseFloat(item.totalArea) || parseFloat(matched?.custom_7average_carpet_area_of_units) || 0;
 
       return {
         item_code: item.unitId,
-        qty: parseFloat(item.qty) || 1,
+        item_name: matched ? matched.item_name : (item.itemName || item.unitId),
+        description: item.itemName || matched?.item_name || item.unitId,
+        item_group: item.item_group || (item.isDefaultService ? 'Services' : (matched?.item_group || 'Commercial')),
+        qty: qtyNum,
+        stock_qty: qtyNum,
+        uom: itemUom,
+        stock_uom: itemUom,
+        conversion_factor: 1,
         rate: offeredRateNum,
+        base_rate: offeredRateNum,
         price_list_rate: standardRateNum,
-        amount: (parseFloat(item.qty) || 1) * offeredRateNum,
-        uom: item.uom || 'Unit',
-        item_name: matched ? matched.item_name : item.unitId
+        base_price_list_rate: standardRateNum,
+        amount: qtyNum * offeredRateNum,
+        base_amount: qtyNum * offeredRateNum,
+        net_rate: offeredRateNum,
+        net_amount: qtyNum * offeredRateNum,
+        base_net_rate: offeredRateNum,
+        base_net_amount: qtyNum * offeredRateNum,
+        total_areasqm: item.isDefaultService ? 0 : itemArea,
+        custom_area: 'Sqm',
+        custom_internal_valuation_ratemonthly: item.isDefaultService ? 0 : (parseFloat(matched?.valuation_rate || item.valuation_rate || standardRateNum) || 0),
+        property_group: item.propertyGroup || matched?.custom_property_group || matched?.custom_property_reference || null,
+        district: item.district || matched?.district || null
       };
     });
 
-    if (erpItems.length === 0) {
-      showAlert('Required Field', 'You must add at least one Property Unit.');
+    const commercialUnits = quoteItems.filter(item => item.unitId && !item.isDefaultService);
+    if (commercialUnits.length === 0) {
+      showAlert('Required Field', 'You must add at least one Commercial Property Unit.');
+      return;
+    }
+
+    const unitCodes = commercialUnits.map(u => u.unitId);
+    const hasDuplicates = unitCodes.some((code, idx) => unitCodes.indexOf(code) !== idx);
+    if (hasDuplicates) {
+      showAlert('Duplicate Unit', 'The same property unit cannot be added more than once. Please remove duplicate units.');
       return;
     }
 
@@ -5749,29 +6359,27 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     // Current date
     const today = new Date();
 
-    // Format date as YYYY-MM-DD
-    const formatDate = (date) => {
-      return date.toISOString().split("T")[0];
-    };
-
-    // Valid till = current date + 7 days
-    const validTill = new Date(today);
-    validTill.setDate(validTill.getDate() + 7);
-
     const payload = {
-      customer: quoteCustomer,
-      party_name: quoteCustomer,
-      customer_name: matchedCust
-        ? matchedCust.customer_name
-        : quoteCustomer,
+      order_type: "Sales",
       quotation_to: "Customer",
-      transaction_date: formatDate(today),
-      valid_till: formatDate(validTill),
-      company: quoteCompany,
-      status: quoteStatus,
+      party_name: quoteCustomer,
+      customer: quoteCustomer,
+      customer_name: matchedCust
+        ? (matchedCust.customer_name || matchedCust.name)
+        : quoteCustomer,
+      transaction_date: formatDateToYMD(today),
+      valid_till: quoteValidTill || formatDateToYMD(new Date(today.getTime() + (defaultValidityDays || 7) * 86400000)),
+      company: quoteCompany || companyDetails?.name || 'CARPENTERS PROPERTIES PTE LIMITED',
+      selling_price_list: "Standard Selling For Property Management",
+      currency: companyDetails?.currency || "FJD",
+      price_list_currency: companyDetails?.currency || "FJD",
+      conversion_rate: 1,
+      plc_conversion_rate: 1,
+      status: quoteStatus || "Draft",
       custom_start_date: quoteEstBookingStart || null,
       custom_end_date: quoteEstBookingEnd || null,
-      custom_template: quotetamplate,
+      custom_template: quotetamplate || "Quotation Template 1",
+      taxes_and_charges: "Fiji Tax - CFPL",
       items: erpItems
     };
     console.log(payload)
@@ -5871,6 +6479,698 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       showToast('error', cleanMsg);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Open New Version Modal
+  const handleOpenNewVersion = async (quotation) => {
+    const qDoc = quotation || selectedQuotationDetail;
+    if (!qDoc) return;
+
+    let fullDoc = qDoc;
+    // If items child table not loaded on shallow object, fetch full doc from ERPNext
+    if (!fullDoc.items || fullDoc.items.length === 0) {
+      try {
+        if (erpnextConfig && erpnextConfig.url) {
+          const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(qDoc.name)}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (res.ok) {
+            const json = await res.json();
+            fullDoc = json.data || json;
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch complete quotation for new version:', err);
+      }
+    }
+
+    setVersionTargetQuotation(fullDoc);
+
+    const rawItems = fullDoc.items || [];
+    const populatedRows = rawItems.map(item => {
+      const isService = item.item_group === 'Services' || (item.item_code || '').toLowerCase().includes('service') || (item.item_code || '').toLowerCase().includes('promo');
+      const matched = spaceUnits.find(u => u.name === item.item_code);
+      const carpetAreaVal = parseFloat(item.total_areasqm || item.carpetArea || item.custom_total_area || matched?.custom_7average_carpet_area_of_units || 0);
+      const valRate = parseFloat(item.price_list_rate || item.base_price_list_rate || item.custom_internal_valuation_ratemonthly || matched?.valuation_rate || matched?.standard_rate || item.rate || 0);
+      const offerRate = parseFloat(item.rate || 0);
+
+      return {
+        unitId: item.item_code,
+        itemName: item.item_name || matched?.item_name || item.item_code,
+        qty: parseFloat(item.qty) || 1,
+        standardRate: valRate,
+        offeredRate: offerRate,
+        uom: item.uom || item.stock_uom || (isService ? 'Nos' : 'Sq Ft'),
+        stock_uom: item.stock_uom || (isService ? 'Nos' : 'Sq Ft'),
+        propertyGroup: item.property_group || matched?.custom_property_group || matched?.custom_property_reference || (isService ? 'Default Service' : ''),
+        locality: item.locality || matched?.locality || '',
+        district: item.district || matched?.district || (isService ? '—' : ''),
+        totalArea: carpetAreaVal > 0 ? `${carpetAreaVal} sqft` : (item.total_area || '—'),
+        carpetArea: carpetAreaVal,
+        item_group: item.item_group || (isService ? 'Services' : 'Commercial'),
+        isDefaultService: isService,
+        charges: parseFloat(item.charges || 0),
+        loadingDetail: false
+      };
+    });
+
+    const syncedRows = await syncDefaultServices(populatedRows);
+    setVersionItems(syncedRows);
+    setVersionNote('');
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const initialStart = (fullDoc.custom_start_date && fullDoc.custom_start_date >= todayStr)
+      ? fullDoc.custom_start_date
+      : todayStr;
+
+    const calcOneYearLater = (startDateStr) => {
+      if (!startDateStr) return '';
+      const d = new Date(startDateStr);
+      d.setFullYear(d.getFullYear() + 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
+    const minEnd = calcOneYearLater(initialStart);
+    const initialEnd = (fullDoc.custom_end_date && fullDoc.custom_end_date >= minEnd)
+      ? fullDoc.custom_end_date
+      : minEnd;
+
+    setVersionStartDate(initialStart);
+    setVersionEndDate(initialEnd);
+    setShowNewVersionModal(true);
+  };
+
+  const handleVersionStartDateChange = (newStart) => {
+    setVersionStartDate(newStart);
+    if (newStart) {
+      const d = new Date(newStart);
+      d.setFullYear(d.getFullYear() + 1);
+      const minEndStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!versionEndDate || new Date(versionEndDate) < d) {
+        setVersionEndDate(minEndStr);
+      }
+    }
+  };
+
+  const handleVersionRateChange = (index, value) => {
+    setVersionItems(prev => {
+      const updated = [...prev];
+      if (updated[index]) {
+        updated[index] = { ...updated[index], offeredRate: value };
+      }
+      return updated;
+    });
+  };
+
+  const handleRemoveVersionItem = async (index) => {
+    if (versionItems[index]?.isDefaultService) return;
+    const updated = [...versionItems];
+    updated.splice(index, 1);
+    const synced = await syncDefaultServices(updated);
+    setVersionItems(synced);
+  };
+
+  const handleAddUnitToVersion = () => {
+    setVersionItems(prev => [
+      ...prev,
+      {
+        unitId: '',
+        qty: 1,
+        uom: 'Sq Ft',
+        stock_uom: 'Sq Ft',
+        standardRate: '',
+        offeredRate: '',
+        propertyGroup: '',
+        locality: '',
+        district: '',
+        totalArea: '',
+        carpetArea: 0,
+        item_group: 'Commercial',
+        loadingDetail: false
+      }
+    ]);
+  };
+
+  const handleVersionUnitChange = async (index, unitId) => {
+    if (unitId) {
+      const isAlreadyAdded = versionItems.some((it, i) => i !== index && it.unitId === unitId);
+      if (isAlreadyAdded) {
+        showToast('error', `Unit "${unitId}" is already added.`);
+        return;
+      }
+    }
+    const listMatch = spaceUnits.find(u => u.name === unitId);
+    const initialCarpetArea = listMatch ? parseFloat(listMatch.custom_7average_carpet_area_of_units || 0) : 0;
+    const initialValRate = listMatch ? (listMatch.valuation_rate || listMatch.standard_rate || 0) : 0;
+
+    const updatedRow = {
+      ...(versionItems[index] || {}),
+      unitId,
+      itemName: listMatch?.item_name || unitId,
+      standardRate: initialValRate,
+      offeredRate: initialValRate,
+      uom: listMatch ? (listMatch.stock_uom || 'Sq Ft') : 'Sq Ft',
+      stock_uom: listMatch ? (listMatch.stock_uom || 'Sq Ft') : 'Sq Ft',
+      propertyGroup: listMatch ? (listMatch.custom_property_group || listMatch.custom_property_reference || '') : '',
+      district: listMatch?.district || '',
+      carpetArea: initialCarpetArea,
+      totalArea: initialCarpetArea > 0 ? `${initialCarpetArea} sqft` : '',
+      item_group: listMatch?.item_group || 'Commercial',
+      loadingDetail: false
+    };
+
+    const updatedList = [...versionItems];
+    updatedList[index] = updatedRow;
+    const synced = await syncDefaultServices(updatedList);
+    setVersionItems(synced);
+  };
+
+  // Submit New Version to ERPNext
+  const handleCreateNewVersion = async (e) => {
+    if (e) e.preventDefault();
+    if (!versionTargetQuotation) return;
+
+    if (!versionStartDate || !versionEndDate) {
+      showAlert('Required Fields', 'Start Date and End Date are required.');
+      return;
+    }
+
+    const todayStartCheck = new Date();
+    todayStartCheck.setHours(0, 0, 0, 0);
+    const selectedStart = new Date(versionStartDate);
+    selectedStart.setHours(0, 0, 0, 0);
+
+    if (selectedStart < todayStartCheck) {
+      showAlert('Invalid Date', 'Start Date cannot be in the past.');
+      return;
+    }
+
+    const startDate = new Date(versionStartDate);
+    const endDate = new Date(versionEndDate);
+    const oneYearLater = new Date(startDate);
+    oneYearLater.setFullYear(startDate.getFullYear() + 1);
+
+    if (endDate < oneYearLater) {
+      showAlert('Invalid Date', 'Estimated Booking End Date must be at least 1 year from the Start Date.');
+      return;
+    }
+
+    const commercialUnits = versionItems.filter(item => item.unitId && !item.isDefaultService);
+    if (commercialUnits.length === 0) {
+      showAlert('Required Field', 'You must have at least one Commercial Property Unit.');
+      return;
+    }
+
+    const unitCodes = commercialUnits.map(u => u.unitId);
+    const hasDuplicates = unitCodes.some((code, idx) => unitCodes.indexOf(code) !== idx);
+    if (hasDuplicates) {
+      showAlert('Duplicate Unit', 'Duplicate property units detected. Please remove duplicates.');
+      return;
+    }
+
+    const rootName = getRootQuotationName(versionTargetQuotation.name, versionTargetQuotation);
+    const vInfo = getQuotationVersionInfo(versionTargetQuotation.name, rootName);
+    const nextVersionNo = vInfo.version_no + 1;
+
+    if (!(await confirm(`Create Version ${nextVersionNo} for quotation ${rootName}?`))) return;
+
+    setVersionSubmitting(true);
+    try {
+      if (!erpnextConfig || !erpnextConfig.url) {
+        throw new Error('ERPNext server is not configured.');
+      }
+
+      const today = new Date();
+      const formatDate = (date) => date.toISOString().split("T")[0];
+      const validTill = new Date(today);
+      validTill.setDate(validTill.getDate() + 7);
+
+      const erpItems = versionItems.filter(item => item.unitId).map(item => {
+        const matched = spaceUnits.find(u => u.name === item.unitId);
+        const standardRateNum = parseFloat(item.standardRate) || 0;
+        const offeredRateNum = parseFloat(item.offeredRate) || 0;
+        const qtyNum = parseFloat(item.qty) || 1;
+
+        let itemUom = 'Sq Ft';
+        if (item.isDefaultService) {
+          itemUom = item.stock_uom || item.uom || 'Nos';
+          if (itemUom === 'Activity' || itemUom === 'Unit') itemUom = 'Nos';
+        } else {
+          itemUom = matched?.stock_uom || item.stock_uom || item.uom || 'Sq Ft';
+          if (itemUom === 'Activity' || itemUom === 'Unit') itemUom = 'Sq Ft';
+        }
+
+        const itemArea = parseFloat(item.carpetArea) || parseFloat(item.totalArea) || parseFloat(matched?.custom_7average_carpet_area_of_units) || 0;
+
+        return {
+          item_code: item.unitId,
+          item_name: matched ? matched.item_name : (item.itemName || item.unitId),
+          description: item.itemName || matched?.item_name || item.unitId,
+          item_group: item.item_group || (item.isDefaultService ? 'Services' : (matched?.item_group || 'Commercial')),
+          qty: qtyNum,
+          stock_qty: qtyNum,
+          uom: itemUom,
+          stock_uom: itemUom,
+          conversion_factor: 1,
+          rate: offeredRateNum,
+          base_rate: offeredRateNum,
+          price_list_rate: standardRateNum,
+          base_price_list_rate: standardRateNum,
+          amount: qtyNum * offeredRateNum,
+          base_amount: qtyNum * offeredRateNum,
+          net_rate: offeredRateNum,
+          net_amount: qtyNum * offeredRateNum,
+          base_net_rate: offeredRateNum,
+          base_net_amount: qtyNum * offeredRateNum,
+          total_areasqm: item.isDefaultService ? 0 : itemArea,
+          custom_area: 'Sqm',
+          custom_internal_valuation_ratemonthly: item.isDefaultService ? 0 : (parseFloat(matched?.valuation_rate || item.valuation_rate || standardRateNum) || 0),
+          property_group: item.propertyGroup || matched?.custom_property_group || matched?.custom_property_reference || null,
+          district: item.district || matched?.district || null
+        };
+      });
+
+      // 1. Fetch fresh source quotation from ERPNext
+      let latestSource = versionTargetQuotation;
+      try {
+        const getRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(versionTargetQuotation.name)}`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (getRes.ok) {
+          const getJson = await getRes.json();
+          latestSource = getJson.data || getJson;
+        }
+      } catch (fErr) {
+        console.warn('Could not fetch fresh source quotation:', fErr);
+      }
+
+      // 2. Step 1: If previous quotation is Draft (docstatus === 0), SUBMIT IT FIRST
+      if (latestSource.docstatus === 0) {
+        let submitSuccess = false;
+        try {
+          const submitRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.submit`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Frappe-CSRF-Token': getCsrfToken()
+            },
+            body: JSON.stringify({
+              doc: { ...latestSource, docstatus: 1 }
+            })
+          });
+          const submitJson = await submitRes.json();
+          if (submitRes.ok && !submitJson.exc) {
+            submitSuccess = true;
+          }
+        } catch (e) {
+          console.warn('Submit RPC error:', e);
+        }
+
+        if (!submitSuccess) {
+          try {
+            const putRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(latestSource.name)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Frappe-CSRF-Token': getCsrfToken()
+              },
+              body: JSON.stringify({ docstatus: 1, status: 'Submitted' })
+            });
+            if (putRes.ok) submitSuccess = true;
+          } catch (e) {
+            console.warn('Submit PUT error:', e);
+          }
+        }
+
+        if (!submitSuccess) {
+          try {
+            await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Frappe-CSRF-Token': getCsrfToken()
+              },
+              body: JSON.stringify({
+                quotation: latestSource.name,
+                action: 'Submit'
+              })
+            });
+          } catch (_) {}
+        }
+      }
+
+      // 3. Step 2: CANCEL the previous quotation (docstatus: 2, status: 'Cancelled')
+      if (latestSource.docstatus !== 2) {
+        let cancelSuccess = false;
+        try {
+          const cancelRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.cancel`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Frappe-CSRF-Token': getCsrfToken()
+            },
+            body: JSON.stringify({ doctype: 'Quotation', name: latestSource.name })
+          });
+          const cancelJson = await cancelRes.json();
+          if (cancelRes.ok && !cancelJson.exc) {
+            cancelSuccess = true;
+          }
+        } catch (cErr) {
+          console.warn('Cancel RPC error:', cErr);
+        }
+
+        if (!cancelSuccess) {
+          try {
+            await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(latestSource.name)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Frappe-CSRF-Token': getCsrfToken()
+              },
+              body: JSON.stringify({ docstatus: 2, status: 'Cancelled' })
+            });
+          } catch (e) {
+            console.warn('Cancel PUT error:', e);
+          }
+        }
+      }
+
+      // 4. Step 3: Create Duplicate / Amended Quotation with new offered rates
+      const payload = {
+        order_type: "Sales",
+        quotation_to: "Customer",
+        party_name: latestSource.party_name || latestSource.customer,
+        customer: latestSource.party_name || latestSource.customer,
+        customer_name: latestSource.customer_name,
+        contact_person: latestSource.contact_person || null,
+        contact_display: latestSource.contact_display || null,
+        contact_mobile: latestSource.contact_mobile || null,
+        contact_email: latestSource.contact_email || null,
+        customer_address: latestSource.customer_address || null,
+        address_display: latestSource.address_display || null,
+        transaction_date: formatDate(today),
+        valid_till: formatDate(validTill),
+        company: latestSource.company || quoteCompany || 'CARPENTERS PROPERTIES PTE LIMITED',
+        company_address: latestSource.company_address || null,
+        company_address_display: latestSource.company_address_display || null,
+        selling_price_list: latestSource.selling_price_list || "Standard Selling For Property Management",
+        currency: latestSource.currency || companyDetails?.currency || "FJD",
+        price_list_currency: latestSource.price_list_currency || companyDetails?.currency || "FJD",
+        conversion_rate: 1,
+        plc_conversion_rate: 1,
+        status: "Draft",
+        docstatus: 0,
+        custom_start_date: versionStartDate || null,
+        custom_end_date: versionEndDate || null,
+        custom_template: latestSource.custom_template || quotetamplate || "Quotation Template 1",
+        taxes_and_charges: latestSource.taxes_and_charges || "Fiji Tax - CFPL",
+        amended_from: latestSource.name,
+        items: erpItems
+      };
+
+      if (latestSource.taxes && Array.isArray(latestSource.taxes) && latestSource.taxes.length > 0) {
+        payload.taxes = latestSource.taxes.map(t => ({
+          charge_type: t.charge_type,
+          account_head: t.account_head,
+          description: t.description,
+          rate: t.rate
+        }));
+      }
+
+      if (versionNote && versionNote.trim()) {
+        payload.remarks = `Version ${nextVersionNo}: ${versionNote.trim()}`;
+        payload.custom_negotiation_status = versionNote.trim();
+      }
+
+      let res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': getCsrfToken()
+        },
+        body: JSON.stringify(payload)
+      });
+
+      // If amended_from error, retry fallback
+      if (!res.ok) {
+        const errText = await res.text();
+        if (errText.includes('amend') || errText.includes('cancelled')) {
+          const fallbackPayload = { ...payload };
+          delete fallbackPayload.amended_from;
+          res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Frappe-CSRF-Token': getCsrfToken()
+            },
+            body: JSON.stringify(fallbackPayload)
+          });
+        } else {
+          throw new Error(errText);
+        }
+      }
+
+      if (!res.ok) {
+        let rawMsg = 'Failed to create new quotation version.';
+        try {
+          const errData = await res.json();
+          if (errData._server_messages) {
+            try {
+              const msgs = JSON.parse(errData._server_messages);
+              rawMsg = JSON.parse(msgs[0]).message || rawMsg;
+            } catch (_) {
+              rawMsg = errData._server_messages;
+            }
+          } else if (errData.message) {
+            rawMsg = errData.message;
+          } else if (errData.exception) {
+            rawMsg = errData.exception;
+          }
+        } catch (_) {}
+        throw new Error(rawMsg);
+      }
+
+      const created = await res.json();
+      const createdName = (created.data || created)?.name || null;
+
+      // Post comment if note provided
+      if (createdName && versionNote && versionNote.trim()) {
+        try {
+          await fetch(`${erpnextConfig.url}/api/resource/Comment`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': getCsrfToken() },
+            body: JSON.stringify({
+              comment_type: 'Comment',
+              reference_doctype: 'Quotation',
+              reference_name: createdName,
+              content: `New version created: ${versionNote.trim()}`
+            })
+          });
+        } catch (_) {}
+      }
+
+      showToast('success', `Revised quotation ${createdName || ''} created successfully.`);
+      showAlert('Success', `Revised quotation ${createdName || ''} has been created successfully.`);
+      setShowNewVersionModal(false);
+      await fetchQuotations();
+
+      if (createdName) {
+        setSelectedQuotation({ name: createdName });
+        setSelectedQuotationDetail(null);
+        setNegotiations([]);
+        setComments([]);
+        setWorkflowActions(null);
+        fetchQuotationDetail(createdName, payload.party_name);
+      }
+    } catch (err) {
+      const cleanMsg = cleanErrorMessage(err.message);
+      showAlert('Creation Failed', cleanMsg);
+      showToast('error', cleanMsg);
+    } finally {
+      setVersionSubmitting(false);
+    }
+  };
+
+  // Create Booking from Quotation
+  const handleCreateBooking = async (quotationToBook = null) => {
+    const qDoc = quotationToBook || selectedQuotationDetail;
+    if (!qDoc) return;
+    const qName = qDoc.name;
+    if (!(await confirm(`Create Booking from Quotation ${qName}?`))) return;
+
+    setCreatingBooking(true);
+    setCreatingBookingId(qName);
+    try {
+      if (!erpnextConfig || !erpnextConfig.url) {
+        throw new Error('ERPNext server is not configured.');
+      }
+
+      // Step 1: Ensure Quotation is submitted (docstatus === 1) first
+      if (qDoc.docstatus !== 1) {
+        let latestDoc = qDoc;
+        try {
+          const checkRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(qName)}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (checkRes.ok) {
+            const checkJson = await checkRes.json();
+            latestDoc = checkJson.data || latestDoc;
+          }
+        } catch (e) {
+          console.warn('Could not fetch latest quotation before submit:', e);
+        }
+
+        if (latestDoc.docstatus !== 1) {
+          let submitSuccess = false;
+          let submitErrorMsg = null;
+
+          // Attempt A: Standard Frappe submit RPC
+          try {
+            const submitRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.submit`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Frappe-CSRF-Token': getCsrfToken()
+              },
+              body: JSON.stringify({
+                doc: { ...latestDoc, docstatus: 1 }
+              })
+            });
+
+            const submitJson = await submitRes.json();
+            if (submitRes.ok && !submitJson.exc) {
+              submitSuccess = true;
+            } else {
+              if (submitJson._server_messages) {
+                try {
+                  const msgs = JSON.parse(submitJson._server_messages);
+                  submitErrorMsg = JSON.parse(msgs[0]).message || submitErrorMsg;
+                } catch (_) {
+                  submitErrorMsg = submitJson._server_messages;
+                }
+              } else {
+                submitErrorMsg = submitJson.exception || submitJson.message;
+              }
+            }
+          } catch (e) {
+            submitErrorMsg = e.message;
+          }
+
+          // Attempt B: Fallback via Resource PUT with docstatus = 1
+          if (!submitSuccess) {
+            try {
+              const putRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(qName)}`, {
+                method: 'PUT',
+                credentials: 'include',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Frappe-CSRF-Token': getCsrfToken()
+                },
+                body: JSON.stringify({ docstatus: 1, status: 'Submitted' })
+              });
+              const putJson = await putRes.json();
+              if (putRes.ok && !putJson.exc) {
+                submitSuccess = true;
+              }
+            } catch (e) {
+              // Ignore fallback error
+            }
+          }
+
+          // Attempt C: Fallback via custom workflow transition if site has workflow enabled
+          if (!submitSuccess) {
+            try {
+              const wfRes = await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Frappe-CSRF-Token': getCsrfToken()
+                },
+                body: JSON.stringify({
+                  quotation: qName,
+                  action: 'Submit'
+                })
+              });
+              const wfJson = await wfRes.json();
+              if (wfRes.ok && !wfJson.exc) {
+                submitSuccess = true;
+              }
+            } catch (e) {
+              // Ignore workflow fallback error
+            }
+          }
+
+          if (!submitSuccess && submitErrorMsg) {
+            throw new Error(`Failed to submit quotation first: ${cleanErrorMessage(submitErrorMsg)}`);
+          }
+        }
+      }
+
+      // Step 2: Now that docstatus is submitted (1), call create_booking_from_quotation
+      const res = await fetch(`${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.booking.booking.create_booking_from_quotation`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Frappe-CSRF-Token': getCsrfToken()
+        },
+        body: JSON.stringify({ quotation_name: qName })
+      });
+
+      const json = await res.json();
+      if (!res.ok || json.exc) {
+        let rawMsg = 'Failed to create booking from quotation.';
+        if (json._server_messages) {
+          try {
+            const msgs = JSON.parse(json._server_messages);
+            const firstMsgObj = JSON.parse(msgs[0]);
+            rawMsg = firstMsgObj.message || rawMsg;
+          } catch (inner) {
+            rawMsg = json._server_messages;
+          }
+        } else if (json.message && typeof json.message === 'string') {
+          rawMsg = json.message;
+        } else if (json.exception) {
+          rawMsg = json.exception;
+        }
+        throw new Error(rawMsg);
+      }
+
+      const bookingName = json.message;
+      showToast('success', `Booking ${bookingName} created successfully.`);
+      showAlert('Success', `Booking ${bookingName} created successfully.`);
+
+      // Refresh quotation detail and list
+      if (selectedQuotationDetail && selectedQuotationDetail.name === qName) {
+        await fetchQuotationDetail(qName, selectedQuotationDetail.party_name || selectedQuotationDetail.customer);
+      }
+      await fetchQuotations();
+
+      // Route to booking view
+      if (onGoToBooking) {
+        onGoToBooking({ ...(qDoc || {}), booking_id: bookingName, name: bookingName });
+      }
+    } catch (err) {
+      const cleanMsg = cleanErrorMessage(err.message);
+      showAlert('Booking Failed', cleanMsg);
+      showToast('error', cleanMsg);
+    } finally {
+      setCreatingBooking(false);
+      setCreatingBookingId(null);
     }
   };
 
@@ -6086,11 +7386,43 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
   const saveDiscountAndMessageSilently = async () => {
     try {
-      if (!erpnextConfig || !erpnextConfig.url) {
+      if (!erpnextConfig || !erpnextConfig.url || !selectedQuotationDetail) {
         return true;
       }
 
-      // Save discount amount to Quotation resource
+      const disc = parseFloat(discountAmount) || 0;
+
+      // Apply discount ONLY on Commercial Unit in items child table
+      const updatedItems = (selectedQuotationDetail.items || []).map(item => {
+        if (isCommercialItem(item)) {
+          const qty = parseFloat(item.qty) || 1;
+          const currentItemDisc = parseFloat(item.discount_amount) || 0;
+          const baseRate = parseFloat(item.price_list_rate) || ((parseFloat(item.rate) || 0) + (currentItemDisc / qty));
+          const baseAmount = baseRate * qty;
+          const itemDisc = Math.min(disc, baseAmount);
+          const newRate = Math.max(0, (baseAmount - itemDisc) / qty);
+          const newAmount = Math.max(0, baseAmount - itemDisc);
+
+          return {
+            ...item,
+            discount_amount: itemDisc,
+            discount_percentage: baseAmount > 0 ? (itemDisc / baseAmount) * 100 : 0,
+            rate: newRate,
+            price_list_rate: baseRate,
+            amount: newAmount,
+            net_rate: newRate,
+            net_amount: newAmount
+          };
+        } else {
+          return {
+            ...item,
+            discount_amount: 0,
+            discount_percentage: 0
+          };
+        }
+      });
+
+      // Save updated items to Quotation resource
       const discountRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${selectedQuotationDetail.name}`, {
         method: 'PUT',
         credentials: 'include',
@@ -6099,8 +7431,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           'X-Frappe-CSRF-Token': getCsrfToken()
         },
         body: JSON.stringify({
-          discount_amount: parseFloat(discountAmount) || 0,
-          apply_discount_on: "Net Total",
+          items: updatedItems,
+          discount_amount: 0,
+          apply_discount_on: "",
           additional_discount_percentage: 0
         })
       });
@@ -6151,6 +7484,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
     setSavingDiscount(true);
     try {
+      // Save item-level Commercial Unit discount first
+      await saveDiscountAndMessageSilently();
 
       const res = await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
         method: "POST",
@@ -6162,8 +7497,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         body: JSON.stringify({
           quotation: selectedQuotationDetail.name,
           action: actionName,
-          discount_amount: parseFloat(discountAmount) || 0,
-          apply_discount_on: "Net Total",
+          discount_amount: 0,
           comment: messageText,
           remarks: messageText,
           message: messageText,
@@ -6215,21 +7549,64 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
     setSavingDiscount(true);
     try {
+      const disc = parseFloat(discountAmount) || 0;
+
+      // Construct updated items where discount is applied ONLY on Commercial Unit
+      const updatedItems = (selectedQuotationDetail.items || []).map(item => {
+        if (isCommercialItem(item)) {
+          const qty = parseFloat(item.qty) || 1;
+          const currentItemDisc = parseFloat(item.discount_amount) || 0;
+          const baseRate = parseFloat(item.price_list_rate) || ((parseFloat(item.rate) || 0) + (currentItemDisc / qty));
+          const baseAmount = baseRate * qty;
+          const itemDisc = Math.min(disc, baseAmount);
+          const newRate = Math.max(0, (baseAmount - itemDisc) / qty);
+          const newAmount = Math.max(0, baseAmount - itemDisc);
+
+          return {
+            ...item,
+            discount_amount: itemDisc,
+            discount_percentage: baseAmount > 0 ? (itemDisc / baseAmount) * 100 : 0,
+            rate: newRate,
+            price_list_rate: baseRate,
+            amount: newAmount,
+            net_rate: newRate,
+            net_amount: newAmount
+          };
+        } else {
+          // Non-commercial items (services, promo, etc.) have 0 discount
+          const qty = parseFloat(item.qty) || 1;
+          const rate = parseFloat(item.rate) || 0;
+          return {
+            ...item,
+            discount_amount: 0,
+            discount_percentage: 0,
+            amount: item.amount !== undefined && item.amount !== null ? item.amount : (qty * rate)
+          };
+        }
+      });
+
       if (!erpnextConfig || !erpnextConfig.url) {
         setSelectedQuotationDetail(prev => {
           if (!prev) return prev;
-          const disc = parseFloat(discountAmount) || 0;
+          const newTotal = updatedItems.reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0);
+          const taxRate = prev.total > 0 ? (prev.total_taxes_and_charges || 0) / prev.total : 0.15;
+          const newTaxes = newTotal * taxRate;
           return {
             ...prev,
-            discount_amount: disc
+            items: updatedItems,
+            discount_amount: 0,
+            total: newTotal,
+            net_total: newTotal,
+            total_taxes_and_charges: newTaxes,
+            grand_total: newTotal + newTaxes
           };
         });
         setMessageText('');
-        showToast('success', 'Quotation updated locally.');
+        showToast('success', 'Quotation Commercial Unit discount updated locally.');
         return;
       }
 
-      // Save discount amount to Quotation resource
+      // Save updated items to Quotation resource on ERPNext
       const discountRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${selectedQuotationDetail.name}`, {
         method: 'PUT',
         credentials: 'include',
@@ -6238,8 +7615,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           'X-Frappe-CSRF-Token': getCsrfToken()
         },
         body: JSON.stringify({
-          discount_amount: parseFloat(discountAmount) || 0,
-          apply_discount_on: "Net Total",
+          items: updatedItems,
+          discount_amount: 0,
+          apply_discount_on: "",
           additional_discount_percentage: 0
         })
       });
@@ -6272,7 +7650,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         }
       }
 
-      showToast('success', 'Quotation details saved successfully.');
+      showToast('success', 'Quotation Commercial Unit discount saved successfully.');
       setMessageText('');
       await fetchQuotationDetail(selectedQuotationDetail.name, selectedQuotationDetail.party_name || selectedQuotationDetail.customer);
       await fetchQuotations();
@@ -6318,6 +7696,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   <th>Valid Till</th>
                   <th>Grand Total</th>
                   <th>Status</th>
+                  <th style={{ textAlign: 'right', paddingRight: 20 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -6329,28 +7708,155 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     <tr
                       key={q.name}
                       onClick={() => handleRowClick(q)}
+                      title="Click to view quotation (opens latest version)"
                       style={{
                         cursor: 'pointer',
                         backgroundColor: selectedQuotation?.name === q.name ? 'var(--bg-accent-alpha)' : '',
                         borderLeft: selectedQuotation?.name === q.name ? '3px solid var(--brand-color)' : ''
                       }}
                     >
-                      <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{q.name}</td>
+                      <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span>{q.name}</span>
+                          {(() => {
+                            const vInfo = getQuotationVersionInfo(q.name, getRootQuotationName(q.name, q));
+                            if (vInfo && vInfo.version_no > 1) {
+                              return (
+                                <span style={{
+                                  fontSize: 8.5,
+                                  fontWeight: 700,
+                                  padding: '1px 5px',
+                                  borderRadius: 4,
+                                  background: '#e0f2fe',
+                                  color: '#0369a1',
+                                  border: '1px solid #bae6fd'
+                                }}>
+                                  v{vInfo.version_no}
+                                </span>
+                              );
+                            }
+                            return null;
+                          })()}
+                        </div>
+                      </td>
                       <td style={{ fontWeight: 600 }}>{q.customer_name}</td>
                       <td>{q.transaction_date}</td>
                       <td>{q.valid_till}</td>
                       <td style={{ fontWeight: 600 }}>${(q.grand_total || 0).toLocaleString()}</td>
                       <td>
-                        <span className={`badge ${q.status === 'Submitted' ? 'badge-success' : q.status === 'Cancelled' ? 'badge-danger' : 'badge-warning'}`}>
-                          {q.workflow_state}
-                        </span>
+                        {(() => {
+                          const displayStatus = q.workflow_state || q.status || (q.docstatus === 1 ? 'Submitted' : q.docstatus === 2 ? 'Cancelled' : 'Draft');
+                          const lower = (displayStatus || '').toLowerCase();
+                          let badgeClass = 'badge-warning';
+                          if (lower === 'submitted' || lower === 'approved' || lower === 'ordered') {
+                            badgeClass = 'badge-success';
+                          } else if (lower === 'cancelled' || lower === 'rejected' || lower === 'lost') {
+                            badgeClass = 'badge-danger';
+                          } else if (lower === 'draft' || lower === 'open' || lower.includes('created')) {
+                            badgeClass = 'badge-info';
+                          }
+                          return (
+                            <span className={`badge ${badgeClass}`}>
+                              {displayStatus}
+                            </span>
+                          );
+                        })()}
+                      </td>
+                      <td style={{ textAlign: 'right', paddingRight: 16 }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                          {!q.booking_id && (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              style={{
+                                fontSize: 10.5,
+                                fontWeight: 600,
+                                padding: '4px 10px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                borderRadius: 6,
+                                border: '1px solid #93c5fd',
+                                color: '#1d4ed8',
+                                backgroundColor: '#eff6ff',
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#dbeafe'; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#eff6ff'; }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenNewVersion(q);
+                              }}
+                              title={`Create Revised Quotation from ${q.name}`}
+                            >
+                              <GitBranch size={11} />
+                              <span>Revised Quotation</span>
+                            </button>
+                          )}
+
+                          {q.booking_id ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{
+                                fontSize: 10.5,
+                                fontWeight: 600,
+                                padding: '4px 10px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                color: '#059669',
+                                borderColor: '#a7f3d0',
+                                backgroundColor: '#ecfdf5',
+                                cursor: 'pointer'
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (onGoToBooking) onGoToBooking(q);
+                              }}
+                              title={`Go to Booking ${q.booking_id}`}
+                            >
+                              <Check size={11} />
+                              <span>Go to Booking</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              style={{
+                                fontSize: 10.5,
+                                fontWeight: 600,
+                                padding: '4px 11px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                backgroundColor: '#2563eb',
+                                borderColor: '#2563eb',
+                                color: '#ffffff',
+                                boxShadow: '0 1px 2px rgba(37,99,235,0.2)',
+                                cursor: (creatingBookingId === q.name || q.status === 'Cancelled' || q.docstatus === 2) ? 'not-allowed' : 'pointer',
+                                opacity: (q.status === 'Cancelled' || q.docstatus === 2) ? 0.45 : 1
+                              }}
+                              disabled={creatingBookingId === q.name || q.status === 'Cancelled' || q.docstatus === 2}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCreateBooking(q);
+                              }}
+                              title={q.status === 'Cancelled' ? 'Cannot book cancelled quotation' : `Create Booking from ${q.name}`}
+                            >
+                              <Bookmark size={11} />
+                              <span>{creatingBookingId === q.name ? 'Creating...' : 'Create Booking'}</span>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ));
                 })()}
                 {quotations.length === 0 && (
                   <tr>
-                    <td colSpan="6" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
+                    <td colSpan="7" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
                       No quotations found. Click "Create Quotation" to add one.
                     </td>
                   </tr>
@@ -6410,41 +7916,75 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           />
         )}
 
-        {/* Details Drawer (Right Pane) */}
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          right: (selectedQuotation && selectedQuotationDetail) ? 0 : '-650px',
-          width: '650px',
-          maxWidth: '100%',
-          height: '100vh',
-          background: 'var(--bg-primary)',
-          boxShadow: '-8px 0 32px rgba(0, 0, 0, 0.15)',
-          zIndex: 999,
-          transition: 'right 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden'
-        }}>
+        {/* Details Drawer (Full Width covering all blur up to sidebar) */}
+        <div
+          className={`quotation-details-drawer ${(selectedQuotation && selectedQuotationDetail) ? 'open' : ''}`}
+          style={{
+            position: 'fixed',
+            top: 0,
+            right: (selectedQuotation && selectedQuotationDetail) ? 0 : '-120vw',
+            width: 'calc(100vw - 240px)',
+            maxWidth: '100vw',
+            height: '100vh',
+            background: 'var(--bg-primary)',
+            boxShadow: '-8px 0 32px rgba(0, 0, 0, 0.15)',
+            zIndex: 999,
+            transition: 'right 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden'
+          }}
+        >
           {selectedQuotation && selectedQuotationDetail && (
-            <div className="card-panel" style={{ padding: 24, background: '#ffffff', color: '#111827', display: 'flex', flexDirection: 'column', gap: 12, position: 'relative', height: '100%', overflowY: 'auto', minWidth: 0, border: 'none', borderRadius: 0 }}>
+            <div className="card-panel" style={{ padding: '24px 32px', background: '#ffffff', color: '#111827', display: 'flex', flexDirection: 'column', gap: 14, position: 'relative', height: '100%', overflowY: 'auto', minWidth: 0, border: 'none', borderRadius: 0 }}>
 
               {/* Close details button */}
-              <button
-                onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); setNegotiations([]); setComments([]); setWorkflowActions(null); }}
-                style={{ position: 'absolute', top: 12, right: 12, background: '#f3f4f6', border: 'none', borderRadius: '50%', color: '#374151', cursor: 'pointer', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}
-              >
-                ×
-              </button>
+              <div style={{ position: 'absolute', top: 14, right: 16, display: 'flex', alignItems: 'center', gap: 8, zIndex: 10 }}>
+                <button
+                  onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); setNegotiations([]); setComments([]); setWorkflowActions(null); }}
+                  style={{
+                    background: '#f3f4f6',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '50%',
+                    color: '#374151',
+                    cursor: 'pointer',
+                    width: 30,
+                    height: 30,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 16,
+                    fontWeight: 700,
+                    transition: 'all 0.15s'
+                  }}
+                  title="Close"
+                >
+                  ×
+                </button>
+              </div>
 
 
 
               {/* BILL TO / CUSTOMER INFO */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, fontSize: 10, paddingBottom: 6, flexShrink: 0 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 16, fontSize: 11.5, paddingBottom: 6, flexShrink: 0 }}>
                 <div>
-                  <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>Customer</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+                    <span style={{ color: '#6b7280', textTransform: 'uppercase', fontWeight: 700, fontSize: 10.5 }}>Customer</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--brand-color)' }}>{selectedQuotationDetail.name}</span>
+                      {(() => {
+                        const root = getRootQuotationName(selectedQuotationDetail.name, selectedQuotationDetail);
+                        const vInfo = getQuotationVersionInfo(selectedQuotationDetail.name, root);
+                        return (
+                          <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
+                            V{vInfo.version_no}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '4px' }}>
-                    <strong style={{ fontSize: 13, color: '#111827', fontWeight: 700 }}>{selectedQuotationDetail.customer_name}</strong>
+                    <strong style={{ fontSize: 16, color: '#111827', fontWeight: 700 }}>{selectedQuotationDetail.customer_name}</strong>
                     {(() => {
                       const status = selectedQuotationDetail.workflow_state || selectedQuotationDetail.status || 'Draft';
 
@@ -6479,9 +8019,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         <span style={{
                           display: 'inline-flex',
                           alignItems: 'center',
-                          padding: '2px 8px',
+                          padding: '3px 9px',
                           borderRadius: '12px',
-                          fontSize: '9px',
+                          fontSize: '10px',
                           fontWeight: 700,
                           backgroundColor: bg,
                           color: color,
@@ -6495,29 +8035,65 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       );
                     })()}
                   </div>
-                  <p style={{ color: '#4b5563', lineHeight: 1.3, marginTop: 2 }}>{customerAddress}</p>
-                  <p style={{ color: '#4b5563', fontSize: 9, marginTop: 4 }}>Contact: {selectedQuotationDetail.custom_customer_email || ''} | {selectedQuotationDetail.custom_customer_ph_no || ''}</p>
+                  <p style={{ color: '#4b5563', lineHeight: 1.4, marginTop: 2, fontSize: 11.5 }}>{customerAddress}</p>
+                  <p style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>Contact: {selectedQuotationDetail.custom_customer_email || ''} | {selectedQuotationDetail.custom_customer_ph_no || ''}</p>
+
+                  {/* Version switcher pills if multiple versions exist in this quotation family */}
+                  {negotiations.length > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap', background: '#f8fafc', padding: '6px 10px', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                      <span style={{ fontSize: 10.5, color: '#64748b', fontWeight: 700 }}>Versions:</span>
+                      {negotiations.slice().reverse().map(v => {
+                        const isCurrent = v.name === selectedQuotationDetail.name;
+                        return (
+                          <button
+                            key={v.name}
+                            type="button"
+                            onClick={() => {
+                              if (!isCurrent) {
+                                fetchQuotationDetail(v.name, selectedQuotationDetail.party_name || selectedQuotationDetail.customer);
+                              }
+                            }}
+                            title={`Switch to version ${v.version_no} (${v.name})`}
+                            style={{
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                              fontSize: 10,
+                              fontWeight: 700,
+                              cursor: isCurrent ? 'default' : 'pointer',
+                              border: isCurrent ? '1px solid var(--brand-color)' : '1px solid #cbd5e1',
+                              background: isCurrent ? 'var(--brand-color)' : '#ffffff',
+                              color: isCurrent ? '#ffffff' : '#334155',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            V{v.version_no} {isCurrent ? '• Active' : `(${v.negotiation_status})`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-                <div style={{ background: '#f9fafb', padding: '10px 12px', borderRadius: 6, border: '1px solid #e5e7eb', fontSize: 9, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <span style={{ color: '#6b7280', fontWeight: 700 }}>ESTIMATED BOOKING PERIOD</span>
+                <div style={{ background: '#f9fafb', padding: '12px 16px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 11, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ color: '#6b7280', fontWeight: 700, fontSize: 10 }}>VALIDITY &amp; BOOKING PERIOD</span>
+                  <div>Valid Till: <strong style={{ color: '#111827' }}>{selectedQuotationDetail.valid_till || 'N/A'}</strong></div>
                   <div>Start: <strong style={{ color: '#111827' }}>{selectedQuotationDetail.custom_start_date || 'N/A'}</strong></div>
                   <div>End: <strong style={{ color: '#111827' }}>{selectedQuotationDetail.custom_end_date || 'N/A'}</strong></div>
                 </div>
               </div>
 
               {/* TABS NAVIGATION */}
-              <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', gap: 16, flexShrink: 0 }}>
+              <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', gap: 20, flexShrink: 0 }}>
                 {['SUMMARY', 'NEGOTIATION HISTORY', 'COMPARISON', 'DOCUMENTS'].map(tab => (
                   <button
                     key={tab}
                     type="button"
                     onClick={() => setActiveTab(tab)}
                     style={{
-                      padding: '8px 4px',
+                      padding: '10px 6px',
                       border: 'none',
                       background: 'none',
                       fontWeight: 700,
-                      fontSize: 10,
+                      fontSize: 11.5,
                       letterSpacing: 0.5,
                       cursor: 'pointer',
                       borderBottom: activeTab === tab ? '2px solid var(--brand-color)' : '2px solid transparent',
@@ -6533,14 +8109,64 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               {/* TAB CONTENT WRAPPER */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
                 {(() => {
-                  const originalPrice = (selectedQuotationDetail.items || []).reduce((acc, item) => acc + ((item.price_list_rate || item.rate || 0) * (item.qty || 1)), 0);
-                  const currentPrice = selectedQuotationDetail.grand_total || 0;
-                  const offeredPrice = selectedQuotationDetail.total || 0;
-                  const discount = selectedQuotationDetail.discount_amount || 0;
+                  const commercialItem = (selectedQuotationDetail.items || []).find(isCommercialItem);
+                  const commercialDiscount = commercialItem && commercialItem.discount_amount !== undefined && commercialItem.discount_amount !== null
+                    ? (parseFloat(commercialItem.discount_amount) || 0)
+                    : (parseFloat(selectedQuotationDetail.discount_amount) || 0);
+
+                  const activeDiscount = (discountAmount !== '' && !isNaN(parseFloat(discountAmount)))
+                    ? (parseFloat(discountAmount) || 0)
+                    : commercialDiscount;
+                  const discount = activeDiscount;
+
+                  const allItems = selectedQuotationDetail.items || [];
+                  const commercialItems = allItems.filter(isCommercialItem);
+                  const targetComparisonItems = commercialItems.length > 0 ? commercialItems : allItems;
+
+                  // Price List Rate for Commercial items ONLY (Item_Group = "Commercial")
+                  const totalPriceListRate = targetComparisonItems.reduce((acc, item) => {
+                    const qty = parseFloat(item.qty) || 1;
+                    const currentItemDisc = parseFloat(item.discount_amount) || 0;
+                    const itemPriceListRate = parseFloat(item.price_list_rate) || ((parseFloat(item.rate) || 0) + (currentItemDisc / qty));
+                    return acc + (itemPriceListRate * qty);
+                  }, 0);
+
+                  // Commercial Offer Rate: discount_amount deduction from price_list_rate
+                  const offerRate = Math.max(0, totalPriceListRate - discount);
+
+                  // Map each item with its display amount (discount applied ONLY to Commercial Unit)
+                  const itemsWithAmounts = allItems.map(item => {
+                    const isComm = isCommercialItem(item);
+                    const qty = parseFloat(item.qty) || 1;
+                    let finalAmt = 0;
+                    if (isComm) {
+                      const currentItemDisc = parseFloat(item.discount_amount) || 0;
+                      const baseRate = parseFloat(item.price_list_rate) || ((parseFloat(item.rate) || 0) + (currentItemDisc / qty));
+                      const baseTotal = baseRate * qty;
+                      finalAmt = Math.max(0, baseTotal - discount);
+                    } else {
+                      finalAmt = item.amount !== undefined && item.amount !== null
+                        ? parseFloat(item.amount)
+                        : (qty * (parseFloat(item.rate) || 0));
+                    }
+                    return { ...item, finalAmt, isCommercial: isComm };
+                  });
+
+                  const calculatedNetTotal = itemsWithAmounts.reduce((acc, it) => acc + it.finalAmt, 0);
+                  const allItemsTotal = allItems.reduce((acc, it) => acc + ((parseFloat(it.price_list_rate) || parseFloat(it.rate) || 0) * (parseFloat(it.qty) || 1)), 0);
+                  const baseTotal = selectedQuotationDetail.total || allItemsTotal || totalPriceListRate;
+                  const taxRatePct = baseTotal > 0 && selectedQuotationDetail.total_taxes_and_charges
+                    ? (selectedQuotationDetail.total_taxes_and_charges / baseTotal)
+                    : 0.15;
+                  const calculatedTaxes = calculatedNetTotal * taxRatePct;
+                  const calculatedGrandTotal = calculatedNetTotal + calculatedTaxes;
+
+                  const offeredPrice = offerRate;
+                  const currentPrice = calculatedGrandTotal;
 
                   const activeNegotiations = negotiations || [];
 
-                  const diffPct = originalPrice > 0 ? ((discount / originalPrice) * 100).toFixed(2) : '0.00';
+                  const diffPct = totalPriceListRate > 0 ? ((discount / totalPriceListRate) * 100).toFixed(2) : '0.00';
 
                   const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
                   const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
@@ -6563,29 +8189,29 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                   if (activeTab === 'SUMMARY') {
                     return (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto', paddingRight: 4, minHeight: 0 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, overflowY: 'auto', paddingRight: 4, minHeight: 0 }}>
 
                         {/* ROW 1: Price Comparison & Price Breakdown */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flexShrink: 0, alignItems: 'start' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, flexShrink: 0, alignItems: 'start' }}>
                           {/* Price Comparison */}
                           <div>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: '#4b5563', textTransform: 'uppercase', marginBottom: 4 }}>Price Comparison</div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: 'auto auto', gap: 10, padding: 12, background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb', textAlign: 'center', minHeight: 120, boxSizing: 'border-box' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#4b5563', textTransform: 'uppercase', marginBottom: 6 }}>Price Comparison</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: 'auto auto', gap: 12, padding: 14, background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb', textAlign: 'center', minHeight: 135, boxSizing: 'border-box' }}>
                               <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Valuation Rate</div>
-                                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2 }}>${originalPrice.toLocaleString()}</div>
+                                <div style={{ fontSize: 10.5, color: '#6b7280', fontWeight: 600 }}>Price List Rate</div>
+                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3 }}>${totalPriceListRate.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
                               </div>
                               <div style={{ borderLeft: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Offered Price</div>
-                                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: 'var(--brand-color)' }}>${offeredPrice.toLocaleString()}</div>
+                                <div style={{ fontSize: 10.5, color: '#6b7280', fontWeight: 600 }}>Offer Rate</div>
+                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: 'var(--brand-color)' }}>${offerRate.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
                               </div>
-                              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 8, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Negotiated Discount ({companyDetails.currency || 'FJD'})</div>
-                                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: '#eab308' }}>${discount.toLocaleString()}</div>
+                              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 10, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                <div style={{ fontSize: 10.5, color: '#6b7280', fontWeight: 600 }}>Negotiated Discount ({companyDetails.currency || 'FJD'})</div>
+                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: '#eab308' }}>${discount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
                               </div>
-                              <div style={{ borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb', paddingTop: 8, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                                <div style={{ fontSize: 8, color: '#6b7280', fontWeight: 600 }}>Difference</div>
-                                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2, color: '#ef4444' }}>
+                              <div style={{ borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb', paddingTop: 10, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                <div style={{ fontSize: 10.5, color: '#6b7280', fontWeight: 600 }}>Difference</div>
+                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: '#ef4444' }}>
                                   {parseFloat(diffPct) > 0 ? `-${diffPct}%` : '0.00%'}
                                 </div>
                               </div>
@@ -6594,20 +8220,20 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                           {/* Price Breakdown */}
                           <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 135, boxSizing: 'border-box' }}>
-                            <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
+                            <div style={{ background: '#f9fafb', padding: '10px 14px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
                               Price Breakdown (Current)
                             </div>
                             <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
-                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, textAlign: 'left' }}>
                                 <thead>
                                   <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#4b5563' }}>
-                                    <th style={{ padding: '6px 12px' }}>Unit / Fee Name</th>
-                                    <th style={{ padding: '6px 12px', textAlign: 'center' }}>Total Area (sqft)</th>
-                                    <th style={{ padding: '6px 12px', textAlign: 'right' }}>Amount</th>
+                                    <th style={{ padding: '8px 12px' }}>Unit / Fee Name</th>
+                                    <th style={{ padding: '8px 12px', textAlign: 'center' }}>Total Area (sqft)</th>
+                                    <th style={{ padding: '8px 12px', textAlign: 'right' }}>Amount</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {(selectedQuotationDetail.items || []).map((item, idx) => {
+                                  {itemsWithAmounts.map((item, idx) => {
                                     const matchedUnit = spaceUnits.find(u => u.name === item.item_code || u.item_code === item.item_code);
 
                                     // Resolve area value
@@ -6625,7 +8251,6 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                       }
 
                                       if (areaVal === '—') {
-                                        // Fallback scan: find any item in the quote with qty > 1
                                         const otherWithQty = (selectedQuotationDetail.items || []).find(it => it.qty > 1);
                                         if (otherWithQty) {
                                           areaVal = otherWithQty.qty;
@@ -6637,12 +8262,17 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                       <tr key={idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
                                         <td style={{ padding: '8px 12px', color: '#374151', fontWeight: 600 }}>
                                           {item.item_name || item.item_code}
+                                          {item.isCommercial && discount > 0 && (
+                                            <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 600, marginLeft: 6 }}>
+                                              (Disc: -${discount.toLocaleString()})
+                                            </span>
+                                          )}
                                         </td>
                                         <td style={{ padding: '8px 12px', textAlign: 'center', color: '#4b5563', fontWeight: 500 }}>
                                           {areaVal && areaVal !== '—' ? `${areaVal} sqft` : '—'}
                                         </td>
                                         <td style={{ padding: '8px 12px', textAlign: 'right', color: '#111827', fontWeight: 700 }}>
-                                          ${((item.qty || 1) * (item.rate || 0)).toLocaleString()}
+                                          ${item.finalAmt.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                                         </td>
                                       </tr>
                                     );
@@ -6650,83 +8280,103 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 </tbody>
                               </table>
                             </div>
-                            <div style={{ padding: 10, background: '#f9fafb', borderTop: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 10, flexShrink: 0 }}>
+                            <div style={{ padding: '10px 14px', background: '#f9fafb', borderTop: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', gap: 5, fontSize: 11, flexShrink: 0 }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
                                 <span>Net Total</span>
-                                <span>${(selectedQuotationDetail.total || 0).toLocaleString()}</span>
+                                <span style={{ fontWeight: 600, color: '#111827' }}>${calculatedNetTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#ef4444', fontWeight: 600 }}>
                                 <span>Negotiated Discount</span>
-                                <span>-${discount.toLocaleString()}</span>
+                                <span>-${discount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
-                                {(() => {
-                                  const taxes = selectedQuotationDetail.total_taxes_and_charges || 0;
-                                  const total = selectedQuotationDetail.total || 0;
-                                  const taxableAmount = total - discount;
-                                  const taxRate = taxableAmount > 0 ? ((taxes / taxableAmount) * 100).toFixed(1) : '0.0';
-                                  return (
-                                    <>
-                                      <span>Taxes (VAT @ {taxRate}%)</span>
-                                      <span>${taxes.toLocaleString()}</span>
-                                    </>
-                                  );
-                                })()}
+                                <span>Taxes (VAT @ {(taxRatePct * 100).toFixed(1)}%)</span>
+                                <span>${calculatedTaxes.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                               </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#059669', fontWeight: 800, fontSize: 12, borderTop: '1px solid #e5e7eb', paddingTop: 6 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#059669', fontWeight: 800, fontSize: 13, borderTop: '1px solid #e5e7eb', paddingTop: 6 }}>
                                 <span>Grand Total ({companyDetails.currency || 'FJD'})</span>
-                                <span>${currentPrice.toLocaleString()}</span>
+                                <span>${calculatedGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                               </div>
                             </div>
                           </div>
                         </div>
 
                         {/* ROW 2: Negotiation Timeline & Negotiation Remarks */}
-                        <div style={{ display: 'grid', gridTemplateColumns: activeNegotiations.length > 0 ? '1fr 1fr' : '1fr', gap: 14, flexShrink: 0, alignItems: 'start' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: activeNegotiations.length > 0 ? '1fr 1fr' : '1fr', gap: 16, flexShrink: 0, alignItems: 'start' }}>
                           {/* Negotiation Timeline - Only rendered when negotiation comments exist */}
                           {activeNegotiations.length > 0 && (
                             <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                              <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
+                              <div style={{ background: '#f9fafb', padding: '10px 14px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
                                 Negotiation Timeline
                               </div>
                               <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, textAlign: 'left' }}>
                                   <thead>
                                     <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#4b5563' }}>
-                                      <th style={{ padding: '6px 12px' }}>Version</th>
-                                      <th style={{ padding: '6px 12px' }}>Date</th>
-                                      <th style={{ padding: '6px 12px' }}>By</th>
-                                      <th style={{ padding: '6px 12px', textAlign: 'right' }}>Discount</th>
-                                      <th style={{ padding: '6px 12px', textAlign: 'right' }}>Grand Total</th>
-                                      <th style={{ padding: '6px 12px' }}>Status</th>
+                                      <th style={{ padding: '8px 10px' }}>Version</th>
+                                      <th style={{ padding: '8px 10px' }}>Date</th>
+                                      <th style={{ padding: '8px 10px' }}>By</th>
+                                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Discount</th>
+                                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Grand Total</th>
+                                      <th style={{ padding: '8px 10px' }}>Status</th>
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {activeNegotiations.map((n, idx) => (
-                                      <tr key={`${n.name || 'neg'}-${idx}`} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                        <td style={{ padding: '6px 12px', fontWeight: 600, color: idx === 0 ? 'var(--brand-color)' : '#4b5563' }}>
-                                          V{n.version_no} {idx === 0 ? '(Current)' : idx === activeNegotiations.length - 1 ? '(Initial)' : ''}
-                                        </td>
-                                        <td style={{ padding: '6px 12px', whiteSpace: 'nowrap' }}>{n.negotiation_date ? n.negotiation_date.split(' ')[0] : '—'}</td>
-                                        <td style={{ padding: '6px 12px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 100 }} title={n.negotiation_by}>
-                                          {n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}
-                                        </td>
-                                        <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString()}</td>
-                                        <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
-                                        <td style={{ padding: '6px 12px' }}>
-                                          <span style={{
-                                            padding: '2px 6px',
-                                            borderRadius: 8,
-                                            fontSize: 8,
-                                            fontWeight: 700,
-                                            backgroundColor: n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#fef3c7' : n.negotiation_status === 'Initial Quote' ? '#e0f2fe' : '#e5e7eb',
-                                            color: n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#d97706' : n.negotiation_status === 'Initial Quote' ? '#0369a1' : '#374151'
-                                          }}>
-                                            {n.negotiation_status || 'Submitted'}
-                                          </span>
-                                        </td>
-                                      </tr>
-                                    ))}
+                                    {activeNegotiations.map((n, idx) => {
+                                      const isCurrent = n.name === selectedQuotationDetail.name;
+                                      return (
+                                        <tr
+                                          key={`${n.name || 'neg'}-${idx}`}
+                                          style={{
+                                            borderBottom: '1px solid #e5e7eb',
+                                            backgroundColor: isCurrent ? 'rgba(16, 185, 129, 0.05)' : 'transparent'
+                                          }}
+                                        >
+                                          <td style={{ padding: '8px 10px', fontWeight: 600 }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                <span style={{
+                                                  fontSize: 10,
+                                                  fontWeight: 700,
+                                                  padding: '2px 6px',
+                                                  borderRadius: 4,
+                                                  background: isCurrent ? '#dcfce7' : '#f1f5f9',
+                                                  color: isCurrent ? '#166534' : '#475569'
+                                                }}>
+                                                  V{n.version_no}
+                                                </span>
+                                                {isCurrent && (
+                                                  <span style={{ fontSize: 9.5, color: '#16a34a', fontWeight: 700 }}>
+                                                    (Active)
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <span style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>
+                                                {n.name}
+                                              </span>
+                                            </div>
+                                          </td>
+                                          <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{n.negotiation_date ? n.negotiation_date.split(' ')[0] : '—'}</td>
+                                          <td style={{ padding: '8px 10px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 100 }} title={n.negotiation_by}>
+                                            {n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}
+                                          </td>
+                                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#eab308' }}>${(n.current_discount || 0).toLocaleString()}</td>
+                                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
+                                          <td style={{ padding: '8px 10px' }}>
+                                            <span style={{
+                                              padding: '3px 8px',
+                                              borderRadius: 8,
+                                              fontSize: 9.5,
+                                              fontWeight: 700,
+                                              backgroundColor: n.negotiation_status === 'Approved' ? '#dcfce7' : n.negotiation_status === 'Cancelled' ? '#fee2e2' : n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#fef3c7' : '#e0f2fe',
+                                              color: n.negotiation_status === 'Approved' ? '#166534' : n.negotiation_status === 'Cancelled' ? '#991b1b' : n.negotiation_status === 'Pending Approval' || n.negotiation_status === 'Pending' || n.negotiation_status === 'Draft' ? '#d97706' : '#0369a1'
+                                            }}>
+                                              {n.negotiation_status || 'Submitted'}
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
                               </div>
@@ -6735,30 +8385,30 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                           {/* Negotiation Remarks */}
                           <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
+                            <div style={{ background: '#f9fafb', padding: '10px 14px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
                               Negotiation Remarks
                             </div>
                             {selectedQuotationDetail && selectedQuotationDetail.remarks && (
-                              <p style={{ margin: '8px 0', fontSize: 10, color: '#4b5563', lineHeight: 1.4, background: '#f9fafb', padding: '8px', borderRadius: 4 }}>
+                              <p style={{ margin: '8px 12px', fontSize: 11, color: '#4b5563', lineHeight: 1.4, background: '#f9fafb', padding: '8px 12px', borderRadius: 4 }}>
                                 {selectedQuotationDetail.remarks}
                               </p>
                             )}
-                            <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, flex: 1, maxHeight: 180, overflowY: 'auto' }}>
+                            <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10, flex: 1, maxHeight: 180, overflowY: 'auto' }}>
                               {activeComments.map((c, idx) => {
                                 const isSales = c.comment_by?.includes('devteam') || c.comment_by?.includes('sales') || c.comment_email?.includes('devteam') || c.comment_email?.includes('sales') || c.owner?.includes('devteam');
                                 return (
-                                  <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                                    <div style={{ width: 24, height: 24, borderRadius: '50%', background: isSales ? '#e0f2fe' : '#f3e8ff', color: isSales ? '#0369a1' : '#6b21a8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 9 }}>
+                                  <div key={idx} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                                    <div style={{ width: 26, height: 26, borderRadius: '50%', background: isSales ? '#e0f2fe' : '#f3e8ff', color: isSales ? '#0369a1' : '#6b21a8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 10.5 }}>
                                       {isSales ? 'S' : 'C'}
                                     </div>
-                                    <div style={{ flex: 1, background: isSales ? '#f0f9ff' : '#faf5ff', padding: 8, borderRadius: '0 8px 8px 8px', border: `1px solid ${isSales ? '#bae6fd' : '#e9d5ff'}` }}>
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                                        <span style={{ fontSize: 9, fontWeight: 700, color: isSales ? '#0369a1' : '#6b21a8' }}>
+                                    <div style={{ flex: 1, background: isSales ? '#f0f9ff' : '#faf5ff', padding: '8px 12px', borderRadius: '0 8px 8px 8px', border: `1px solid ${isSales ? '#bae6fd' : '#e9d5ff'}` }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                                        <span style={{ fontSize: 10.5, fontWeight: 700, color: isSales ? '#0369a1' : '#6b21a8' }}>
                                           {isSales ? 'Sales Team' : 'Customer'}
                                         </span>
-                                        <span style={{ fontSize: 8, color: '#9ca3af' }}>{c.creation ? c.creation.split(' ')[0] : '—'}</span>
+                                        <span style={{ fontSize: 9.5, color: '#9ca3af' }}>{c.creation ? c.creation.split(' ')[0] : '—'}</span>
                                       </div>
-                                      <div style={{ fontSize: 9, color: '#374151', lineHeight: 1.3 }}>{stripHtml(c.content)}</div>
+                                      <div style={{ fontSize: 11, color: '#374151', lineHeight: 1.4 }}>{stripHtml(c.content)}</div>
                                     </div>
                                   </div>
                                 );
@@ -6773,26 +8423,57 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                   if (activeTab === 'NEGOTIATION HISTORY') {
                     return (
-                      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, overflowY: 'auto', minHeight: 0 }}>
-                        <span style={{ fontWeight: 700, fontSize: 10, color: '#4b5563', textTransform: 'uppercase' }}>Revision Version History</span>
+                      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontWeight: 700, fontSize: 11.5, color: '#4b5563', textTransform: 'uppercase' }}>Revision Version History</span>
+                          <span style={{ fontSize: 10.5, color: '#6b7280' }}>Family: <strong style={{ color: 'var(--brand-color)' }}>{getRootQuotationName(selectedQuotationDetail.name, selectedQuotationDetail)}</strong> ({activeNegotiations.length} Version{activeNegotiations.length > 1 ? 's' : ''})</span>
+                        </div>
                         {activeNegotiations.length === 0 ? (
-                          <div style={{ textAlign: 'center', padding: '40px 0', color: '#6b7280', fontSize: 11 }}>
+                          <div style={{ textAlign: 'center', padding: '40px 0', color: '#6b7280', fontSize: 12 }}>
                             No negotiation version history found for this quotation.
                           </div>
                         ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                            {activeNegotiations.map((n, idx) => (
-                              <div key={`${n.name || 'neg'}-${idx}`} style={{ borderLeft: '2px solid var(--brand-color)', paddingLeft: 12, position: 'relative' }}>
-                                <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--brand-color)', position: 'absolute', left: -5, top: 4 }} />
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <strong style={{ fontSize: 11 }}>Version {n.version_no} ({n.negotiation_status})</strong>
-                                  <span style={{ fontSize: 9, color: '#6b7280' }}>{n.negotiation_date}</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                            {activeNegotiations.map((n, idx) => {
+                              const isCurrent = n.name === selectedQuotationDetail.name;
+                              return (
+                                <div key={`${n.name || 'neg'}-${idx}`} style={{ borderLeft: `3px solid ${isCurrent ? 'var(--brand-color)' : '#9ca3af'}`, background: isCurrent ? '#f0fdf4' : '#fafafa', padding: '12px 14px', borderRadius: '0 8px 8px 0', border: `1px solid ${isCurrent ? '#bbf7d0' : '#e5e7eb'}`, borderLeftWidth: 3 }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                      <strong style={{ fontSize: 12.5, color: '#111827' }}>Version {n.version_no}: {n.name}</strong>
+                                      {isCurrent && (
+                                        <span style={{ fontSize: 9.5, padding: '2px 7px', borderRadius: 4, background: '#16a34a', color: '#ffffff', fontWeight: 700 }}>
+                                          Current Active
+                                        </span>
+                                      )}
+                                      <span style={{
+                                        fontSize: 9.5,
+                                        padding: '2px 7px',
+                                        borderRadius: 8,
+                                        fontWeight: 700,
+                                        backgroundColor: n.negotiation_status === 'Approved' ? '#dcfce7' : n.negotiation_status === 'Cancelled' ? '#fee2e2' : '#fef3c7',
+                                        color: n.negotiation_status === 'Approved' ? '#166534' : n.negotiation_status === 'Cancelled' ? '#991b1b' : '#92400e'
+                                      }}>
+                                        {n.negotiation_status}
+                                      </span>
+                                    </div>
+                                    <span style={{ fontSize: 10.5, color: '#6b7280' }}>{n.negotiation_date}</span>
+                                  </div>
+                                  <p style={{ margin: '8px 0 6px 0', fontSize: 11.5, color: '#4b5563', lineHeight: 1.5 }}>
+                                    Managed by <strong>{n.negotiation_by}</strong>. Grand Total: <strong>${(n.current_grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</strong> | Negotiated Discount: <strong>${(n.current_discount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</strong>.
+                                  </p>
+                                  {!isCurrent && (
+                                    <button
+                                      type="button"
+                                      onClick={() => fetchQuotationDetail(n.name, selectedQuotationDetail.party_name || selectedQuotationDetail.customer)}
+                                      style={{ marginTop: 4, padding: '4px 12px', fontSize: 10.5, fontWeight: 700, borderRadius: 4, border: '1px solid #cbd5e1', background: '#ffffff', color: 'var(--brand-color)', cursor: 'pointer' }}
+                                    >
+                                      Switch to View Version {n.version_no} ({n.name})
+                                    </button>
+                                  )}
                                 </div>
-                                <p style={{ margin: '4px 0 0 0', fontSize: 10, color: '#4b5563', lineHeight: 1.4 }}>
-                                  Negotiated by <strong>{n.negotiation_by}</strong>. Changed grand total from <strong>${(n.previous_grand_total || 0).toLocaleString()}</strong> to <strong>${(n.current_grand_total || 0).toLocaleString()}</strong> (Discount: <strong>${(n.current_discount || 0).toLocaleString()}</strong>).
-                                </p>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -6800,50 +8481,107 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   }
 
                   if (activeTab === 'COMPARISON') {
+                    const sortedComp = activeNegotiations.slice().sort((a, b) => a.version_no - b.version_no);
                     return (
                       <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', minHeight: 0 }}>
-                        <div style={{ background: '#f9fafb', padding: '8px 12px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 9, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
-                          Version-by-Version Comparison
+                        <div style={{ background: '#f9fafb', padding: '10px 14px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', color: '#4b5563', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+                          <span>Version-by-Version Comparison</span>
+                          <span style={{ textTransform: 'none', fontWeight: 600, color: '#6b7280', fontSize: 10.5 }}>Family: {getRootQuotationName(selectedQuotationDetail.name, selectedQuotationDetail)}</span>
                         </div>
-                        {activeNegotiations.length === 0 ? (
-                          <div style={{ textAlign: 'center', padding: '40px 0', color: '#6b7280', fontSize: 11 }}>
+                        {sortedComp.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '40px 0', color: '#6b7280', fontSize: 12 }}>
                             No negotiation versions available to compare.
                           </div>
                         ) : (
                           <div style={{ overflowX: 'auto', flex: 1 }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left', minWidth: 350 }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, textAlign: 'left', minWidth: 460 }}>
                               <thead>
                                 <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb' }}>
-                                  <th style={{ padding: '8px 12px' }}>Parameter</th>
-                                  {activeNegotiations.map((n, idx) => (
-                                    <th key={`${n.name || 'th'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right' }}>V{n.version_no}</th>
+                                  <th style={{ padding: '10px 14px' }}>Parameter</th>
+                                  {sortedComp.map((n) => (
+                                    <th key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: n.name === selectedQuotationDetail.name ? 'var(--brand-color)' : '#374151' }}>
+                                      V{n.version_no} {n.name === selectedQuotationDetail.name ? '(Active)' : ''}
+                                    </th>
                                   ))}
                                 </tr>
                               </thead>
                               <tbody>
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                  <td style={{ padding: '8px 12px', fontWeight: 600 }}>Discount Amount</td>
-                                  {activeNegotiations.map((n, idx) => (
-                                    <td key={`${n.name || 'disc'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right', color: '#eab308', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString()}</td>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Quotation Code</td>
+                                  {sortedComp.map((n) => (
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600, color: n.name === selectedQuotationDetail.name ? 'var(--brand-color)' : '#111827' }}>
+                                      {n.name}
+                                    </td>
                                   ))}
                                 </tr>
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                  <td style={{ padding: '8px 12px', fontWeight: 600 }}>Grand Total</td>
-                                  {activeNegotiations.map((n, idx) => (
-                                    <td key={`${n.name || 'gt'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--brand-color)', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Status</td>
+                                  {sortedComp.map((n) => (
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right' }}>
+                                      <span style={{
+                                        padding: '3px 8px',
+                                        borderRadius: 8,
+                                        fontSize: 9.5,
+                                        fontWeight: 700,
+                                        backgroundColor: n.negotiation_status === 'Approved' ? '#dcfce7' : n.negotiation_status === 'Cancelled' ? '#fee2e2' : '#fef3c7',
+                                        color: n.negotiation_status === 'Approved' ? '#166534' : n.negotiation_status === 'Cancelled' ? '#991b1b' : '#92400e'
+                                      }}>
+                                        {n.negotiation_status}
+                                      </span>
+                                    </td>
                                   ))}
                                 </tr>
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                                  <td style={{ padding: '8px 12px', fontWeight: 600 }}>Negotiated By</td>
-                                  {activeNegotiations.map((n, idx) => (
-                                    <td key={`${n.name || 'by'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right', color: '#4b5563' }}>{n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}</td>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Date</td>
+                                  {sortedComp.map((n) => (
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: '#6b7280' }}>{n.negotiation_date}</td>
+                                  ))}
+                                </tr>
+                                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Price List Rate</td>
+                                  {sortedComp.map((n) => (
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600 }}>${(n.price_list_rate || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                  ))}
+                                </tr>
+                                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Discount Amount</td>
+                                  {sortedComp.map((n) => (
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: '#eab308', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                  ))}
+                                </tr>
+                                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Net Total</td>
+                                  {sortedComp.map((n) => (
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600 }}>${(n.current_net_total || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                  ))}
+                                </tr>
+                                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Grand Total</td>
+                                  {sortedComp.map((n) => (
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: 'var(--brand-color)', fontWeight: 700 }}>${(n.current_grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                  ))}
+                                </tr>
+                                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Negotiated By</td>
+                                  {sortedComp.map((n) => (
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: '#4b5563' }}>{n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}</td>
                                   ))}
                                 </tr>
                                 <tr>
-                                  <td style={{ padding: '8px 12px', fontWeight: 600 }}>Status</td>
-                                  {activeNegotiations.map((n, idx) => (
-                                    <td key={`${n.name || 'st'}-${idx}`} style={{ padding: '8px 12px', textAlign: 'right' }}>
-                                      <span style={{ fontSize: 8, fontWeight: 700, color: 'var(--brand-color)' }}>{n.negotiation_status}</span>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Action</td>
+                                  {sortedComp.map((n) => (
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right' }}>
+                                      {n.name === selectedQuotationDetail.name ? (
+                                        <span style={{ fontSize: 10, color: '#16a34a', fontWeight: 700 }}>Active</span>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => fetchQuotationDetail(n.name, selectedQuotationDetail.party_name || selectedQuotationDetail.customer)}
+                                          style={{ padding: '3px 8px', fontSize: 10, fontWeight: 700, borderRadius: 4, border: '1px solid #cbd5e1', background: '#f8fafc', color: 'var(--brand-color)', cursor: 'pointer' }}
+                                        >
+                                          View
+                                        </button>
+                                      )}
                                     </td>
                                   ))}
                                 </tr>
@@ -6857,21 +8595,22 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                   if (activeTab === 'DOCUMENTS') {
                     return (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto', minHeight: 0 }}>
                         {[
                           { title: 'PMS Offer Letter', desc: 'Official proposal offer letter with printable layouts.', type: 'Offer Letter' },
                           { title: 'Sales Contract Draft', desc: 'Standard leasing terms and conditions for commercial units.', type: 'Leasing Agreement' },
                           { title: 'Property Unit Booking Receipt', desc: 'Holding deposit transaction record.', type: 'Receipt' }
                         ].map((doc, idx) => (
-                          <div key={idx} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f9fafb', flexShrink: 0 }}>
+                          <div key={idx} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f9fafb', flexShrink: 0 }}>
                             <div>
-                              <h5 style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#1f2937' }}>{doc.title}</h5>
-                              <p style={{ margin: '2px 0 0 0', fontSize: 9, color: '#6b7280' }}>{doc.desc}</p>
+                              <h5 style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: '#1f2937' }}>{doc.title}</h5>
+                              <p style={{ margin: '3px 0 0 0', fontSize: 11, color: '#6b7280' }}>{doc.desc}</p>
                             </div>
-                            <button
+                            {/* Hidden: Print button preserved per request */}
+                            {/* <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              style={{ fontSize: 10, padding: '4px 10px' }}
+                              style={{ fontSize: 11, padding: '5px 12px' }}
                               onClick={() => {
                                 if (doc.type === 'Offer Letter') {
                                   const printBtn = document.getElementById('qtn-print-action-btn');
@@ -6882,7 +8621,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               }}
                             >
                               View / Print
-                            </button>
+                            </button> */}
                           </div>
                         ))}
                       </div>
@@ -6894,10 +8633,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               {/* BOTTOM SUMMARY & DECISION SECTION */}
               {(() => {
                 const originalPrice = (selectedQuotationDetail.items || []).reduce((acc, item) => acc + ((item.price_list_rate || item.rate || 0) * (item.qty || 1)), 0);
-                const originalDiscount = selectedQuotationDetail.discount_amount !== undefined && selectedQuotationDetail.discount_amount !== null
-                  ? String(selectedQuotationDetail.discount_amount)
-                  : '';
-                const isChanged = discountAmount !== originalDiscount || messageText.trim() !== '';
+                const commercialItem = (selectedQuotationDetail.items || []).find(isCommercialItem);
+                const originalDiscount = commercialItem && commercialItem.discount_amount !== undefined && commercialItem.discount_amount !== null
+                  ? String(commercialItem.discount_amount)
+                  : (selectedQuotationDetail.discount_amount !== undefined && selectedQuotationDetail.discount_amount !== null ? String(selectedQuotationDetail.discount_amount) : '0');
+                const isChanged = (discountAmount !== '' && parseFloat(discountAmount || 0) !== parseFloat(originalDiscount || 0)) || messageText.trim() !== '';
                 const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
                 const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
                 const isDiscountDisabled = isTerminal;
@@ -6910,10 +8650,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     <style dangerouslySetInnerHTML={{
                       __html: `
                     .qtn-btn-base {
-                      padding: 6px 12px;
-                      font-size: 10px;
+                      padding: 7px 14px;
+                      font-size: 11px;
                       font-weight: 700;
-                      min-height: 30px;
+                      min-height: 34px;
                       white-space: nowrap;
                       border-radius: 8px;
                       cursor: pointer;
@@ -6924,7 +8664,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       display: flex;
                       align-items: center;
                       justify-content: center;
-                      gap: 4px;
+                      gap: 6px;
                     }
                     .qtn-btn-approve {
                       background-color: #10b981 !important;
@@ -6966,20 +8706,20 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     }
                   ` }} />
                     {/* Left Column: Quotation Summary */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 10 }}>
-                      <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 9, textTransform: 'uppercase' }}>Quotation Summary</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11.5 }}>
+                      <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 10.5, textTransform: 'uppercase' }}>Quotation Summary</span>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
                           <span style={{ color: '#6b7280' }}>Versions Created</span>
-                          <strong style={{ color: activeNegotiations.length > 0 ? '#111827' : 'var(--brand-color)' }}>
-                            {activeNegotiations.length > 0
-                              ? (activeNegotiations[0].version_no || selectedQuotationDetail.custom_total_versions || activeNegotiations.length)
-                              : 'Quotation Created'}
+                          <strong style={{ color: activeNegotiations.length > 1 ? 'var(--brand-color)' : '#111827' }}>
+                            {activeNegotiations.length > 1
+                              ? `${activeNegotiations.length} Versions (Active: V${(activeNegotiations.find(v => v.name === selectedQuotationDetail.name)?.version_no) || getQuotationVersionInfo(selectedQuotationDetail.name).version_no || 1})`
+                              : (activeNegotiations.length === 1 ? `1 Version (V${activeNegotiations[0].version_no})` : 'Quotation Created')}
                           </strong>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
                           <span style={{ color: '#6b7280' }}>Total Discount</span>
-                          <strong style={{ color: '#111827' }}>${(selectedQuotationDetail.discount_amount || 0).toLocaleString()}</strong>
+                          <strong style={{ color: '#111827' }}>${(parseFloat(discountAmount !== '' ? discountAmount : (originalDiscount || 0)) || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</strong>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
                           <span style={{ color: '#6b7280' }}>Last Negotiation</span>
@@ -7004,23 +8744,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                     {/* Right Column: Final Decision */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 9, textTransform: 'uppercase' }}>Final Decision</span>
-
-                      <div style={{ display: 'flex', gap: 10 }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
-                          <label style={{ fontSize: 8, color: '#6b7280', fontWeight: 700 }}>Discount Amount ({companyDetails.currency || 'FJD'})</label>
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder="0.00"
-                            value={discountAmount}
-                            onChange={(e) => setDiscountAmount(e.target.value)}
-                            disabled={isDiscountDisabled}
-                            className="form-input"
-                            style={{ fontSize: 10, padding: '4px 8px', boxSizing: 'border-box', background: isDiscountDisabled ? '#f3f4f6' : '#ffffff', minHeight: 28 }}
-                          />
-                        </div>
-                      </div>
+                      <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 10.5, textTransform: 'uppercase' }}>Final Decision</span>
 
                       {/* BUTTONS ROW (Dynamic workflow buttons + Booking + Print) */}
                       {(() => {
@@ -7079,19 +8803,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         });
 
                         return (
-                          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center', width: '100%' }}>
-                            {isChanged && (
-                              <button
-                                type="button"
-                                className="qtn-btn-base qtn-btn-approve"
-                                style={{ background: '#3b82f6', borderColor: '#3b82f6', color: '#ffffff' }}
-                                onClick={handleSaveDiscountAndMessage}
-                                disabled={savingDiscount}
-                              >
-                                <span>{savingDiscount ? 'Saving...' : 'Apply Discount'}</span>
-                              </button>
-                            )}
-
+                          <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap', alignItems: 'center', width: '100%' }}>
                             {sortedActions.map((act) => {
                               const actionKey = (act.action || "").toLowerCase();
                               const nextStateKey = (act.label || "").toLowerCase();
@@ -7124,20 +8836,56 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               );
                             })}
 
-                            {/* Go to Booking - Only in Approved status */}
-                            {isApproved && (
+                            {/* Booking Action: For submitted/approved or any active quotation */}
+                            {(selectedQuotationDetail.booking_id || (selectedQuotationDetail.status !== 'Cancelled' && selectedQuotationDetail.docstatus !== 2)) && (
+                              selectedQuotationDetail.booking_id ? (
+                                <button
+                                  type="button"
+                                  className="qtn-btn-base qtn-btn-approve"
+                                  onClick={() => onGoToBooking && onGoToBooking({ ...selectedQuotationDetail, booking_id: selectedQuotationDetail.booking_id })}
+                                >
+                                  <Check size={11} />
+                                  <span>Go to Booking</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="qtn-btn-base"
+                                  style={{ background: '#2563eb', borderColor: '#2563eb', color: '#ffffff' }}
+                                  onClick={() => handleCreateBooking(selectedQuotationDetail)}
+                                  disabled={creatingBooking}
+                                >
+                                  <Bookmark size={11} />
+                                  <span>{creatingBooking ? 'Creating Booking...' : 'Create Booking'}</span>
+                                </button>
+                              )
+                            )}
+
+                            {/* New Version Button - Only show when Go to Booking is NOT shown */}
+                            {!selectedQuotationDetail.booking_id && (
                               <button
+                                id="qtn-new-version-action-btn"
                                 type="button"
-                                className="qtn-btn-base qtn-btn-approve"
-                                onClick={() => onGoToBooking && onGoToBooking(selectedQuotationDetail)}
+                                className="qtn-btn-base"
+                                style={{
+                                  background: '#eff6ff',
+                                  borderColor: '#93c5fd',
+                                  color: '#1d4ed8',
+                                  fontWeight: 700,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6
+                                }}
+                                onClick={() => handleOpenNewVersion(selectedQuotationDetail)}
+                                title={`Create Revised Quotation from ${selectedQuotationDetail.name}`}
                               >
-                                <Check size={11} />
-                                <span>Go to Booking</span>
+                                <GitBranch size={11} color="#1d4ed8" />
+                                <span>Revised Quotation</span>
                               </button>
                             )}
 
-                            {/* Print Button */}
-                            <button
+                            {/* Hidden: Print button preserved per request */}
+                            {/* <button
                               id="qtn-print-action-btn"
                               type="button"
                               className="qtn-btn-base qtn-btn-print"
@@ -7199,7 +8947,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             >
                               <Printer size={11} />
                               <span>Print</span>
-                            </button>
+                            </button> */}
                           </div>
                         );
                       })()}
@@ -7305,101 +9053,105 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     borderRadius: '12px',
                     padding: '12px 18px',
                     boxShadow: '0 1px 3px rgba(0, 0, 0, 0.02)',
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: '10px 20px'
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
                   }}>
-                    <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <User size={14} style={{ color: '#137333' }} />
-                        <span>Tenant Name</span>
-                      </label>
-                      <select
-                        value={quoteCustomer}
-                        onChange={(e) => setQuoteCustomer(e.target.value)}
-                        className="form-select"
-                        required
-                        disabled={submitting}
-                        style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
-                      >
-                        <option value="">-- Choose Tenant --</option>
-                        {customers.map(c => (
-                          <option key={c.name} value={c.name}>{c.customer_name || c.name}</option>
-                        ))}
-                      </select>
+                    {/* Row 1: Tenant & Template */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 20px' }}>
+                      <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <User size={14} style={{ color: '#137333' }} />
+                          <span>Tenant Name</span>
+                        </label>
+                        <select
+                          value={quoteCustomer}
+                          onChange={(e) => setQuoteCustomer(e.target.value)}
+                          className="form-select"
+                          required
+                          disabled={submitting}
+                          style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
+                        >
+                          <option value="">-- Choose Tenant --</option>
+                          {customers.map(c => (
+                            <option key={c.name} value={c.name}>{c.customer_name || c.name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Layers size={14} style={{ color: '#137333' }} />
+                          <span>Template</span>
+                        </label>
+                        <select
+                          value={quotetamplate}
+                          onChange={(e) => setQuotetamplate(e.target.value)}
+                          className="form-select"
+                          required
+                          disabled={submitting}
+                          style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
+                        >
+                          <option value="">-- Choose Template --</option>
+                          {tamplates.map(c => (
+                            <option key={c.name} value={c.name}>{c.customer_name || c.name}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
 
-                    <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <Layers size={14} style={{ color: '#137333' }} />
-                        <span>Template</span>
-                      </label>
-                      <select
-                        value={quotetamplate}
-                        onChange={(e) => setQuotetamplate(e.target.value)}
-                        className="form-select"
-                        required
-                        disabled={submitting}
-                        style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
-                      >
-                        <option value="">-- Choose Template --</option>
-                        {tamplates.map(c => (
-                          <option key={c.name} value={c.name}>{c.customer_name || c.name}</option>
-                        ))}
-                      </select>
-                    </div>
+                    {/* Row 2: Valid Till, Start Date, End Date */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px 20px' }}>
+                      <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Calendar size={14} style={{ color: '#137333' }} />
+                          <span>Valid Till</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={quoteValidTill}
+                          onChange={(e) => handleValidTillChange(e.target.value)}
+                          className="form-input"
+                          required
+                          disabled={submitting}
+                          style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
+                          min={formatDateToYMD(new Date())}
+                        />
+                      </div>
 
-                    <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <Calendar size={14} style={{ color: '#137333' }} />
-                        <span>Start Date</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={quoteEstBookingStart}
-                        onChange={(e) => {
-                          const newStart = e.target.value;
-                          setQuoteEstBookingStart(newStart);
-                          if (newStart) {
-                            const d = new Date(newStart);
-                            d.setFullYear(d.getFullYear() + 1);
-                            const minEndStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                            if (!quoteEstBookingEnd || new Date(quoteEstBookingEnd) < d) {
-                              setQuoteEstBookingEnd(minEndStr);
-                            }
-                          }
-                        }}
-                        className="form-input"
-                        required
-                        disabled={submitting}
-                        style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
-                        min={(() => {
-                          const d = new Date();
-                          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                        })()}
-                      />
-                    </div>
+                      <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Calendar size={14} style={{ color: '#137333' }} />
+                          <span>Start Date</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={quoteEstBookingStart}
+                          onChange={(e) => handleStartDateChange(e.target.value)}
+                          className="form-input"
+                          required
+                          disabled={submitting}
+                          style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
+                          min={calcNextDay(quoteValidTill)}
+                        />
+                      </div>
 
-                    <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <Calendar size={14} style={{ color: '#137333' }} />
-                        <span>End Date</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={quoteEstBookingEnd}
-                        onChange={(e) => setQuoteEstBookingEnd(e.target.value)}
-                        className="form-input"
-                        required
-                        disabled={submitting}
-                        style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
-                        min={(() => {
-                          if (!quoteEstBookingStart) return '';
-                          const d = new Date(quoteEstBookingStart);
-                          d.setFullYear(d.getFullYear() + 1);
-                          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                        })()}
-                      />
+                      <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Calendar size={14} style={{ color: '#137333' }} />
+                          <span>End Date</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={quoteEstBookingEnd}
+                          onChange={(e) => setQuoteEstBookingEnd(e.target.value)}
+                          className="form-input"
+                          required
+                          disabled={submitting}
+                          style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)' }}
+                          min={quoteEstBookingStart ? calcNextDay(quoteEstBookingStart) : ''}
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -7584,7 +9336,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         </div>
                         <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>Selected Units</span>
                       </div>
-                      {/* <button
+                      <button
                         type="button"
                         onClick={addQuoteItem}
                         style={{
@@ -7606,7 +9358,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       >
                         <span style={{ fontSize: 13, fontWeight: 700 }}>+</span>
                         <span>Add More Units</span>
-                      </button> */}
+                      </button>
                     </div>
 
                     <div style={{ border: '1px solid var(--border-color, #e2e8f0)', borderRadius: 12, overflow: 'hidden', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)' }}>
@@ -7645,50 +9397,90 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                           </thead>
                           <tbody>
                             {quoteItems.map((item, idx) => (
-                              <tr key={idx} style={{ borderBottom: '1px solid var(--border-color, #e2e8f0)', background: 'var(--bg-primary, #ffffff)' }}>
+                              <tr key={idx} style={{ borderBottom: '1px solid var(--border-color, #e2e8f0)', background: item.isDefaultService ? '#faf5ff' : 'var(--bg-primary, #ffffff)' }}>
 
                                 {/* # */}
                                 <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #94a3b8)', fontWeight: 500 }}>{idx + 1}</td>
 
                                 {/* Unit Code */}
                                 <td style={{ padding: '6px 8px' }}>
-                                  <select
-                                    value={item.unitId}
-                                    onChange={(e) => handleItemChange(idx, e.target.value)}
-                                    className="form-select"
-                                    style={{ width: '100%', fontSize: 11, minHeight: 32, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border-color, #cbd5e1)', boxSizing: 'border-box' }}
-                                    required
-                                  >
-                                    <option value="">-- Choose Unit --</option>
-                                    {(selProperty ? filteredUnits : spaceUnits).map(unit => (
-                                      <option key={unit.name} value={unit.name}>{unit.item_name || unit.name}</option>
-                                    ))}
-                                  </select>
+                                  {item.isDefaultService ? (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span style={{ fontWeight: 700, color: '#1e293b', fontSize: 11 }}>{item.itemName || item.unitId}</span>
+                                        <span style={{ fontSize: 9, background: '#ede9fe', color: '#6d28d9', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>Default Service</span>
+                                      </div>
+                                      <span style={{ fontSize: 9.5, color: '#64748b' }}>
+                                        Rate: ${(parseFloat(item.charges) || 0).toLocaleString()}/sqft × {(parseFloat(item.totalArea) || 0).toLocaleString()} sqft
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <select
+                                      value={item.unitId}
+                                      onChange={(e) => handleItemChange(idx, e.target.value)}
+                                      className="form-select"
+                                      style={{ width: '100%', fontSize: 11, minHeight: 32, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border-color, #cbd5e1)', boxSizing: 'border-box' }}
+                                      required
+                                    >
+                                      <option value="">-- Choose Unit --</option>
+                                      {(selProperty ? filteredUnits : spaceUnits).map(unit => {
+                                        const isAlreadySelected = quoteItems.some((otherItem, oIdx) => oIdx !== idx && otherItem.unitId === unit.name);
+                                        return (
+                                          <option key={unit.name} value={unit.name} disabled={isAlreadySelected}>
+                                            {unit.item_name || unit.name} {isAlreadySelected ? '(Already Added)' : ''}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                  )}
                                 </td>
 
                                 {/* Val. Rate */}
                                 <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>
-                                  {item.loadingDetail ? '…' : (item.standardRate ? `$${item.standardRate}` : '—')}
+                                  {item.loadingDetail ? '…' : (item.standardRate ? `$${(parseFloat(item.standardRate) || 0).toLocaleString()}` : '—')}
                                 </td>
 
                                 {/* Offered Rate */}
                                 <td style={{ padding: '6px 8px' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                     <span style={{ color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>$</span>
-                                    <input
-                                      type="number"
-                                      value={item.offeredRate}
-                                      onChange={(e) => handleQtyOrRateChange(idx, 'offeredRate', e.target.value)}
-                                      className="form-input"
-                                      style={{ width: '100%', fontSize: 11, minHeight: 32, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border-color, #cbd5e1)', boxSizing: 'border-box' }}
-                                      required
-                                    />
+                                    {item.isDefaultService ? (
+                                      <input
+                                        type="text"
+                                        value={typeof item.offeredRate === 'number' ? item.offeredRate.toLocaleString() : (item.offeredRate || '')}
+                                        readOnly
+                                        className="form-input"
+                                        style={{
+                                          width: '100%',
+                                          fontSize: 11,
+                                          minHeight: 32,
+                                          padding: '4px 8px',
+                                          borderRadius: 6,
+                                          border: '1px solid var(--border-color, #cbd5e1)',
+                                          background: '#f8fafc',
+                                          color: '#334155',
+                                          cursor: 'not-allowed',
+                                          fontWeight: 600,
+                                          boxSizing: 'border-box'
+                                        }}
+                                        title="Default service rates are calculated automatically based on total commercial carpet area and cannot be changed manually."
+                                      />
+                                    ) : (
+                                      <input
+                                        type="number"
+                                        value={item.offeredRate}
+                                        onChange={(e) => handleQtyOrRateChange(idx, 'offeredRate', e.target.value)}
+                                        className="form-input"
+                                        style={{ width: '100%', fontSize: 11, minHeight: 32, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border-color, #cbd5e1)', boxSizing: 'border-box' }}
+                                        required
+                                      />
+                                    )}
                                   </div>
                                 </td>
 
                                 {/* Property Type */}
                                 <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #475569)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {item.loadingDetail ? '…' : (item.propertyGroup || '—')}
+                                  {item.loadingDetail ? '…' : (item.propertyGroup || (item.isDefaultService ? 'Default Service' : '—'))}
                                 </td>
 
                                 {/* District */}
@@ -7708,7 +9500,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                                 {/* Delete */}
                                 <td style={{ padding: '6px 4px', textAlign: 'center' }}>
-                                  {quoteItems.length > 1 && (
+                                  {quoteItems.length > 1 && !item.isDefaultService && (
                                     <button
                                       type="button"
                                       onClick={() => removeQuoteItem(idx)}
@@ -7828,6 +9620,535 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           </div>
         )
       }
+
+      {/* NEW VERSION MODAL */}
+      {showNewVersionModal && versionTargetQuotation && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(5px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '16px'
+        }}>
+          <div style={{
+            background: 'var(--bg-primary, #ffffff)',
+            borderRadius: 16,
+            width: '100%',
+            maxWidth: 1100,
+            maxHeight: '92vh',
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+            border: '1px solid var(--border-color, #e2e8f0)',
+            overflow: 'hidden',
+            animation: 'fadeIn 0.2s ease-out'
+          }}>
+            {/* MODAL HEADER */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '16px 24px',
+              borderBottom: '1px solid var(--border-color, #e2e8f0)',
+              background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 10,
+                  background: '#eff6ff',
+                  border: '1px solid #bfdbfe',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#2563eb'
+                }}>
+                  <GitBranch size={20} />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--text-primary, #0f172a)' }}>
+                      Create Revised Quotation
+                    </h2>
+                    {(() => {
+                      const root = getRootQuotationName(versionTargetQuotation.name, versionTargetQuotation);
+                      const vInfo = getQuotationVersionInfo(versionTargetQuotation.name, root);
+                      return (
+                        <span style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: 9999,
+                          background: '#dbeafe',
+                          color: '#1e40af',
+                          border: '1px solid #bfdbfe'
+                        }}>
+                          Version {vInfo.version_no} → Version {vInfo.version_no + 1}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontSize: 11.5, color: '#64748b' }}>
+                    <span>Source: <strong style={{ color: '#0f172a' }}>{versionTargetQuotation.name}</strong></span>
+                    <span>•</span>
+                    <span>Customer: <strong style={{ color: '#0f172a' }}>{versionTargetQuotation.customer_name || versionTargetQuotation.party_name}</strong></span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowNewVersionModal(false)}
+                disabled={versionSubmitting}
+                style={{
+                  background: '#f1f5f9',
+                  border: 'none',
+                  borderRadius: '50%',
+                  width: 32,
+                  height: 32,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: '#64748b',
+                  fontSize: 18,
+                  fontWeight: 600,
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#e2e8f0'; e.currentTarget.style.color = '#0f172a'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = '#64748b'; }}
+                title="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* MODAL BODY */}
+            <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+              {/* INFO CALLOUT BANNER */}
+              <div style={{
+                background: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: 10,
+                padding: '10px 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                fontSize: 12
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#166534' }}>
+                  <span style={{ fontWeight: 700 }}>Notice:</span>
+                  <span>Adjust the offered rate for each unit below to create a revised version. Service charges recalculate automatically.</span>
+                </div>
+                <div style={{ fontSize: 11, color: '#15803d', fontWeight: 600 }}>
+                  Current Total: ${(versionTargetQuotation.grand_total || versionTargetQuotation.base_grand_total || 0).toLocaleString()}
+                </div>
+              </div>
+
+              {/* DATES: START DATE & END DATE (MATCHING CREATE QUOTATION LOGIC) */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: 16,
+                background: 'var(--bg-secondary, #f8fafc)',
+                padding: '12px 16px',
+                borderRadius: 10,
+                border: '1px solid var(--border-color, #e2e8f0)'
+              }}>
+                <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Calendar size={14} style={{ color: '#137333' }} />
+                    <span>Start Date</span>
+                    <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={versionStartDate}
+                    onChange={(e) => handleVersionStartDateChange(e.target.value)}
+                    className="form-input"
+                    required
+                    disabled={versionSubmitting}
+                    style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)', background: 'var(--bg-primary, #ffffff)', padding: '4px 10px' }}
+                    min={(() => {
+                      const d = new Date();
+                      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                    })()}
+                  />
+                </div>
+
+                <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label className="form-label" style={{ fontSize: 11, fontWeight: 600, color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Calendar size={14} style={{ color: '#137333' }} />
+                    <span>End Date</span>
+                    <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={versionEndDate}
+                    onChange={(e) => setVersionEndDate(e.target.value)}
+                    className="form-input"
+                    required
+                    disabled={versionSubmitting}
+                    style={{ fontSize: 13, minHeight: 34, borderRadius: 8, border: '1px solid var(--border-color, #cbd5e1)', background: 'var(--bg-primary, #ffffff)', padding: '4px 10px' }}
+                    min={(() => {
+                      if (!versionStartDate) return '';
+                      const d = new Date(versionStartDate);
+                      d.setFullYear(d.getFullYear() + 1);
+                      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                    })()}
+                  />
+                </div>
+              </div>
+
+              {/* ITEMS TABLE SECTION (MATCHING SCREENSHOT) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary, #0f172a)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Quotation Items & Offered Rates
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleAddUnitToVersion}
+                    style={{
+                      background: '#f8fafc',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: 6,
+                      padding: '4px 10px',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: '#2563eb',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4
+                    }}
+                  >
+                    <Plus size={12} />
+                    <span>Add Unit</span>
+                  </button>
+                </div>
+
+                <div style={{
+                  border: '1px solid var(--border-color, #e2e8f0)',
+                  borderRadius: 10,
+                  overflow: 'hidden',
+                  background: 'var(--bg-primary, #ffffff)'
+                }}>
+                  <div style={{ maxHeight: '360px', overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, textAlign: 'left', tableLayout: 'fixed' }}>
+                      <colgroup>
+                        <col style={{ width: 36 }} />
+                        <col style={{ width: 230 }} />
+                        <col style={{ width: 95 }} />
+                        <col style={{ width: 125 }} />
+                        <col style={{ width: 135 }} />
+                        <col style={{ width: 95 }} />
+                        <col style={{ width: 120 }} />
+                        <col style={{ width: 95 }} />
+                        <col style={{ width: 36 }} />
+                      </colgroup>
+                      <thead>
+                        <tr style={{ background: 'var(--bg-secondary, #f8fafc)', position: 'sticky', top: 0, zIndex: 1 }}>
+                          {['#', 'Unit Code', 'Val. Rate', 'Offered Rate', 'Property Group', 'District', 'Total Area (Sqft)', 'Amount', ''].map((h, i) => (
+                            <th
+                              key={i}
+                              style={{
+                                padding: '10px 12px',
+                                textAlign: h === 'Amount' ? 'right' : 'left',
+                                fontWeight: 700,
+                                fontSize: 11,
+                                color: 'var(--text-secondary, #475569)',
+                                borderBottom: '2px solid var(--border-color, #e2e8f0)',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}
+                            >
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {versionItems.map((item, idx) => (
+                          <tr
+                            key={idx}
+                            style={{
+                              borderBottom: '1px solid var(--border-color, #e2e8f0)',
+                              background: item.isDefaultService ? '#faf5ff' : 'var(--bg-primary, #ffffff)'
+                            }}
+                          >
+                            {/* # */}
+                            <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #94a3b8)', fontWeight: 500 }}>
+                              {idx + 1}
+                            </td>
+
+                            {/* Unit Code */}
+                            <td style={{ padding: '6px 8px' }}>
+                              {item.isDefaultService ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ fontWeight: 700, color: '#1e293b', fontSize: 11 }}>
+                                      {item.itemName || item.unitId}
+                                    </span>
+                                    <span style={{ fontSize: 9, background: '#ede9fe', color: '#6d28d9', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>
+                                      Default Service
+                                    </span>
+                                  </div>
+                                  <span style={{ fontSize: 9.5, color: '#64748b' }}>
+                                    Rate: ${(parseFloat(item.charges) || 0).toLocaleString()}/sqft × {(parseFloat(item.totalArea) || 0).toLocaleString()} sqft
+                                  </span>
+                                </div>
+                              ) : (
+                                <select
+                                  value={item.unitId}
+                                  onChange={(e) => handleVersionUnitChange(idx, e.target.value)}
+                                  className="form-select"
+                                  style={{
+                                    width: '100%',
+                                    fontSize: 11,
+                                    minHeight: 32,
+                                    padding: '4px 8px',
+                                    borderRadius: 6,
+                                    border: '1px solid var(--border-color, #cbd5e1)',
+                                    boxSizing: 'border-box'
+                                  }}
+                                  required
+                                >
+                                  <option value="">-- Choose Unit --</option>
+                                  {spaceUnits.map(unit => {
+                                    const isAlreadySelected = versionItems.some((otherItem, oIdx) => oIdx !== idx && otherItem.unitId === unit.name);
+                                    return (
+                                      <option key={unit.name} value={unit.name} disabled={isAlreadySelected}>
+                                        {unit.item_name || unit.name} {isAlreadySelected ? '(Already Added)' : ''}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              )}
+                            </td>
+
+                            {/* Val. Rate */}
+                            <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>
+                              {item.loadingDetail ? '…' : (item.standardRate ? `$${(parseFloat(item.standardRate) || 0).toLocaleString()}` : '—')}
+                            </td>
+
+                            {/* Offered Rate (Editable input) */}
+                            <td style={{ padding: '6px 8px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>$</span>
+                                {item.isDefaultService ? (
+                                  <input
+                                    type="text"
+                                    value={typeof item.offeredRate === 'number' ? item.offeredRate.toLocaleString() : (item.offeredRate || '')}
+                                    readOnly
+                                    className="form-input"
+                                    style={{
+                                      width: '100%',
+                                      fontSize: 11,
+                                      minHeight: 32,
+                                      padding: '4px 8px',
+                                      borderRadius: 6,
+                                      border: '1px solid var(--border-color, #cbd5e1)',
+                                      background: '#f8fafc',
+                                      color: '#334155',
+                                      cursor: 'not-allowed',
+                                      fontWeight: 600,
+                                      boxSizing: 'border-box'
+                                    }}
+                                    title="Default service rates are calculated automatically based on total commercial carpet area."
+                                  />
+                                ) : (
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={item.offeredRate}
+                                    onChange={(e) => handleVersionRateChange(idx, e.target.value)}
+                                    className="form-input"
+                                    style={{
+                                      width: '100%',
+                                      fontSize: 11,
+                                      minHeight: 32,
+                                      padding: '4px 8px',
+                                      borderRadius: 6,
+                                      border: '1px solid var(--border-color, #cbd5e1)',
+                                      boxSizing: 'border-box'
+                                    }}
+                                    placeholder="0"
+                                    required
+                                  />
+                                )}
+                              </div>
+                            </td>
+
+                            {/* Property Group */}
+                            <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #475569)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {item.loadingDetail ? '…' : (item.propertyGroup || (item.isDefaultService ? 'Default Service' : '—'))}
+                            </td>
+
+                            {/* District */}
+                            <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #475569)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {item.loadingDetail ? '…' : (item.district || '—')}
+                            </td>
+
+                            {/* Total Area */}
+                            <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #475569)', textAlign: 'left', fontWeight: 500 }}>
+                              {item.loadingDetail ? '…' : (item.totalArea || '—')}
+                            </td>
+
+                            {/* Amount */}
+                            <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
+                              ${((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)).toLocaleString()}
+                            </td>
+
+                            {/* Delete Button */}
+                            <td style={{ padding: '6px 4px', textAlign: 'center' }}>
+                              {versionItems.filter(it => !it.isDefaultService).length > 1 && !item.isDefaultService && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveVersionItem(idx)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#ef4444',
+                                    cursor: 'pointer',
+                                    padding: '4px',
+                                    borderRadius: '4px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    transition: 'all 0.15s ease'
+                                  }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+                                  title="Remove unit"
+                                >
+                                  <Trash size={14} />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* GRAND TOTAL ROW (MATCHES SCREENSHOT) */}
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '12px 18px',
+                    borderTop: '1px solid var(--border-color, #e2e8f0)',
+                    background: 'var(--bg-secondary, #f8fafc)'
+                  }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary, #475569)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      GRAND TOTAL
+                    </span>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: '#059669' }}>
+                      ${versionItems.reduce((sum, item) => sum + ((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)), 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* REVISION NOTES / REASON */}
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-secondary, #475569)', marginBottom: 6 }}>
+                  Revision / Negotiation Notes (Optional)
+                </label>
+                <textarea
+                  value={versionNote}
+                  onChange={(e) => setVersionNote(e.target.value)}
+                  placeholder="Enter reason for this new version (e.g., revised rental rate agreed after client negotiation)..."
+                  rows={2}
+                  style={{
+                    width: '100%',
+                    fontSize: 12,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: '1px solid var(--border-color, #cbd5e1)',
+                    background: 'var(--bg-primary, #ffffff)',
+                    color: 'var(--text-primary, #0f172a)',
+                    resize: 'vertical',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+            </div>
+
+            {/* MODAL FOOTER */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              alignItems: 'center',
+              gap: 12,
+              padding: '14px 24px',
+              borderTop: '1px solid var(--border-color, #e2e8f0)',
+              background: 'var(--bg-secondary, #f8fafc)'
+            }}>
+              <button
+                type="button"
+                onClick={() => setShowNewVersionModal(false)}
+                disabled={versionSubmitting}
+                style={{
+                  padding: '8px 18px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  borderRadius: 8,
+                  border: '1px solid var(--border-color, #cbd5e1)',
+                  background: 'var(--bg-primary, #ffffff)',
+                  color: 'var(--text-secondary, #475569)',
+                  cursor: versionSubmitting ? 'not-allowed' : 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateNewVersion}
+                disabled={versionSubmitting}
+                style={{
+                  padding: '8px 22px',
+                  borderRadius: 8,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: '#ffffff',
+                  background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                  border: 'none',
+                  cursor: versionSubmitting ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 4px 10px rgba(37, 99, 235, 0.25)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}
+              >
+                {versionSubmitting ? (
+                  <span>Creating Revised Quotation...</span>
+                ) : (
+                  <>
+                    <GitBranch size={14} />
+                    <span>Create Revised Quotation</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {confirmModal.show && (
         <div style={{
           position: 'fixed',

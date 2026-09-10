@@ -2823,7 +2823,7 @@
 
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Hammer, User, Clock, CheckCircle, AlertTriangle, Plus, X, Calendar as CalendarIcon, List, BarChart3, ClipboardList, Building, Search, Activity, Settings, DollarSign, PenTool, Archive, Check, ArrowRight, UserCheck, ShieldCheck, Mail, Phone, MapPin, Award, Trash, Save, RefreshCw, Users, Briefcase } from 'lucide-react';
+import { Hammer, User, Clock, CheckCircle, CheckCircle2, AlertTriangle, Plus, X, Calendar as CalendarIcon, List, BarChart3, ClipboardList, Building, Search, Activity, Settings, DollarSign, PenTool, Archive, Check, ArrowRight, UserCheck, ShieldCheck, Mail, Phone, MapPin, Award, Trash, Save, RefreshCw, Users, Briefcase } from 'lucide-react';
 import TaskItemsPanel from './TaskItemsPanel';
 
 // ── Toast ────────────────────────────────────────────────────────────────────
@@ -3378,7 +3378,8 @@ export default function Maintenance({
         const data = json.data || {};
         const itemName = data.item_name || itemCode;
         const propertyGroup = data.property_group || data.item_group || data.custom_property_group || '';
-        const result = { itemName, propertyGroup };
+        const item_group = data.item_group || '';
+        const result = { itemName, propertyGroup, item_group };
         setItemDetailCache(prev => ({ ...prev, [itemCode]: result }));
         setItemNameCache(prev => ({ ...prev, [itemCode]: itemName }));
         return result;
@@ -3386,7 +3387,7 @@ export default function Maintenance({
     } catch (e) {
       // ignore
     }
-    return { itemName: itemCode, propertyGroup: '' };
+    return { itemName: itemCode, propertyGroup: '', item_group: '' };
   };
 
   const handleSchedBookingChange = (value) => {
@@ -3404,20 +3405,38 @@ export default function Maintenance({
   const availableSchedUnits = useMemo(() => {
     if (!bookingDetails || !schedUnits.length) return [];
 
-    // Extract item codes from booking_item array
+    // Extract item codes from booking_item array that belong to item_group = "Commercial"
     let bookingItemCodes = [];
     if (bookingDetails.booking_item && Array.isArray(bookingDetails.booking_item)) {
-      bookingItemCodes = bookingDetails.booking_item.map(item => (item.item_code || '').toString().trim().toLowerCase()).filter(Boolean);
+      bookingItemCodes = bookingDetails.booking_item
+        .filter(item => {
+          const code = (item.item_code || '').toString().trim().toLowerCase();
+          if (code === 'promotional fee' || code === 'service charge') return false;
+          const grp = (item.item_group || item.unit_group || '').toString().trim().toLowerCase();
+          const schedMatch = schedUnits.find(u => (u.name || '').toLowerCase() === code);
+          const schedGrp = (schedMatch?.item_group || '').toString().trim().toLowerCase();
+          const isCommercial = grp === 'commercial' || schedGrp === 'commercial' || (!grp && !schedGrp);
+          return isCommercial;
+        })
+        .map(item => (item.item_code || '').toString().trim().toLowerCase())
+        .filter(Boolean);
     }
 
-    // If no booking items, return empty
-    if (bookingItemCodes.length === 0) return [];
+    if (bookingItemCodes.length === 0) {
+      const fallbackUnit = (bookingDetails.property_unit || bookingDetails.unit || bookingDetails.unit_name || bookingDetails.unit_code || '').toString().trim().toLowerCase();
+      if (fallbackUnit) bookingItemCodes = [fallbackUnit];
+    }
 
-    // Filter schedUnits to show only matching booking item codes, excluding Promotional Fee and Service Charge
+    // Filter schedUnits: MUST have item_group === 'Commercial' AND match booking items if any
     const filtered = schedUnits.filter(u => {
       const unitName = (u.name || '').toString().trim().toLowerCase();
       const unitItemName = (u.item_name || '').toString().trim().toLowerCase();
-      const isMatch = bookingItemCodes.includes(unitName);
+      const itemGroup = (u.item_group || '').toString().trim().toLowerCase();
+
+      // Only Commercial items
+      const isCommercial = itemGroup === 'commercial' || (!itemGroup && schedUnits.length > 0);
+
+      const isMatch = bookingItemCodes.length === 0 ? isCommercial : bookingItemCodes.includes(unitName);
 
       const isExcluded =
         unitName === 'promotional fee' ||
@@ -3425,7 +3444,7 @@ export default function Maintenance({
         unitItemName === 'promotional fee' ||
         unitItemName === 'service charge';
 
-      return isMatch && !isExcluded;
+      return isMatch && isCommercial && !isExcluded;
     });
 
     return filtered.length > 0 ? filtered : [];
@@ -3469,28 +3488,34 @@ export default function Maintenance({
     const unitCode = bookingDetails.property_unit || bookingDetails.unit || bookingDetails.unit_name || bookingDetails.unit_code || '';
     setSchedUnitSpec(unitCode);
 
-    // Extract booking items from booking_item array
+    // Extract booking items from booking_item array where item_group is Commercial
     if (bookingDetails.booking_item && Array.isArray(bookingDetails.booking_item) && bookingDetails.booking_item.length > 0) {
       const filteredBookingItems = bookingDetails.booking_item.filter(item => {
         const code = (item.item_code || '').toString().trim().toLowerCase();
-        return code !== 'promotional fee' && code !== 'service charge';
+        if (code === 'promotional fee' || code === 'service charge') return false;
+        const grp = (item.item_group || item.unit_group || '').toString().trim().toLowerCase();
+        const schedMatch = schedUnits.find(u => (u.name || '').toLowerCase() === code);
+        const schedGrp = (schedMatch?.item_group || '').toString().trim().toLowerCase();
+        const isCommercial = grp === 'commercial' || schedGrp === 'commercial' || (!grp && !schedGrp);
+        return isCommercial;
       });
 
       const bookingItems = filteredBookingItems.map((item, idx) => ({
         itemCode: item.item_code || '',
-        itemName: '',
-        startDate: new Date().toISOString().split('T')[0],
+        itemName: item.item_name || '',
+        startDate: bookingDetails.start_date || new Date().toISOString().split('T')[0],
         periodicity: 'Weekly',
         noOfVisits: 1,
-        endDate: ''
+        endDate: bookingDetails.end_date || ''
       }));
+
       setSchedItems(bookingItems.length > 0 ? bookingItems : [{
         itemCode: '',
         itemName: '',
-        startDate: new Date().toISOString().split('T')[0],
+        startDate: bookingDetails.start_date || new Date().toISOString().split('T')[0],
         periodicity: 'Weekly',
         noOfVisits: 1,
-        endDate: ''
+        endDate: bookingDetails.end_date || ''
       }]);
 
       // Fetch item details for each item code
@@ -3505,21 +3530,31 @@ export default function Maintenance({
         }
       });
     } else if (unitCode) {
-      // Fallback: use unit code as item if no booking_item exists
-      setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: '' } : row));
-      fetchItemDetails(unitCode).then(details => {
-        setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: details.itemName } : row));
-        if (!bookingPropertyGroup && details.propertyGroup) {
-          setSchedPropertyGroup(details.propertyGroup);
-        }
-      });
-    }
-  }, [bookingDetails]);
+      // Fallback: check if unitCode is commercial
+      const schedMatch = schedUnits.find(u => (u.name || '').toLowerCase() === unitCode.toLowerCase());
+      const schedGrp = (schedMatch?.item_group || '').toString().trim().toLowerCase();
+      const isCommercial = schedGrp === 'commercial' || !schedGrp;
 
-  // ── Fetch helpers ───────────────────────────────────────────────────────────
+      if (isCommercial) {
+        setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: '' } : row));
+        fetchItemDetails(unitCode).then(details => {
+          setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: details.itemName } : row));
+          if (!bookingPropertyGroup && details.propertyGroup) {
+            setSchedPropertyGroup(details.propertyGroup);
+          }
+        });
+      }
+    }
+  }, [bookingDetails, schedUnits]);
+
+  // ── Fetch Bookings & Filter Approved Tenants ──────────────────────────────
+  const [loadingBookings, setLoadingBookings] = useState(false);
+
   useEffect(() => {
-    if (!showScheduleModal || !erpnextConfig?.url) return;
-    fetch(`${erpnextConfig.url}/api/resource/Booking?fields=["name"]&limit_page_length=500`, {
+    if (!erpnextConfig?.url) return;
+    setLoadingBookings(true);
+    const bookingFields = encodeURIComponent(JSON.stringify(["name", "customer", "customer_name", "workflow_state", "docstatus"]));
+    fetch(`${erpnextConfig.url}/api/resource/Booking?fields=${bookingFields}&limit_page_length=500&order_by=creation%20desc`, {
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' }
     })
@@ -3530,8 +3565,71 @@ export default function Maintenance({
       .catch((err) => {
         console.error('Failed to fetch bookings:', err);
         setBookings([]);
+      })
+      .finally(() => {
+        setLoadingBookings(false);
       });
   }, [showScheduleModal, erpnextConfig?.url]);
+
+  // Only show tenants whose Booking workflow_state is "Approved" / "Approve"
+  const filteredTenants = useMemo(() => {
+    if (!bookings || bookings.length === 0) return [];
+
+    const approvedCustomerMap = new Map();
+
+    bookings.forEach(b => {
+      const ws = (b.workflow_state || '').toString().trim().toLowerCase();
+      // Match approved workflow state
+      if (ws === 'approved' || ws === 'approve' || ws.includes('approv')) {
+        const custId = b.customer || b.customer_name;
+        const custName = b.customer_name || b.customer;
+        if (custId) {
+          approvedCustomerMap.set(custId.toString().trim().toLowerCase(), {
+            id: custId,
+            name: custId,
+            customer_name: custName || custId
+          });
+        }
+        if (custName) {
+          approvedCustomerMap.set(custName.toString().trim().toLowerCase(), {
+            id: custId || custName,
+            name: custId || custName,
+            customer_name: custName
+          });
+        }
+      }
+    });
+
+    if (approvedCustomerMap.size === 0) return [];
+
+    const seen = new Set();
+    const result = [];
+
+    // Prioritize matching tenant objects from props
+    (tenants || []).forEach(t => {
+      const idKey = (t.id || t.name || '').toString().trim().toLowerCase();
+      const nameKey = (t.customer_name || '').toString().trim().toLowerCase();
+      if ((idKey && approvedCustomerMap.has(idKey)) || (nameKey && approvedCustomerMap.has(nameKey))) {
+        const uniqueKey = (t.name || t.id || nameKey);
+        if (!seen.has(uniqueKey)) {
+          seen.add(uniqueKey);
+          result.push(t);
+        }
+      }
+    });
+
+    // Also include any approved customers directly from bookings if not found in tenants prop
+    approvedCustomerMap.forEach(val => {
+      const uniqueKey = val.name || val.id || val.customer_name;
+      const lowerCustName = (val.customer_name || '').toString().trim().toLowerCase();
+      if (!seen.has(uniqueKey) && !seen.has(lowerCustName)) {
+        seen.add(uniqueKey);
+        result.push(val);
+      }
+    });
+
+    return result;
+  }, [tenants, bookings]);
 
   const fetchItemName = async (itemCode) => {
     if (!itemCode || !erpnextConfig?.url) return '';
@@ -3558,8 +3656,27 @@ export default function Maintenance({
 
   useEffect(() => {
     if (!erpnextConfig?.url) return;
-    fetch(`${erpnextConfig.url}/api/resource/Item?fields=%5B%22name%22%2C%22item_name%22%5D&limit_page_length=500`, { credentials: 'include', headers: { 'Content-Type': 'application/json' } })
-      .then(r => r.ok ? r.json() : null).then(json => { if (json) setSchedUnits(json.data || []); }).catch(() => { });
+    const fields = encodeURIComponent(JSON.stringify(["name", "item_name", "item_group"]));
+    const filters = encodeURIComponent(JSON.stringify([["item_group", "=", "Commercial"]]));
+    fetch(`${erpnextConfig.url}/api/resource/Item?fields=${fields}&filters=${filters}&limit_page_length=1000`, { credentials: 'include', headers: { 'Content-Type': 'application/json' } })
+      .then(r => r.ok ? r.json() : null)
+      .then(json => {
+        if (json && Array.isArray(json.data) && json.data.length > 0) {
+          setSchedUnits(json.data);
+        } else {
+          // Fallback: fetch without filter and filter client-side
+          fetch(`${erpnextConfig.url}/api/resource/Item?fields=${fields}&limit_page_length=1000`, { credentials: 'include', headers: { 'Content-Type': 'application/json' } })
+            .then(r2 => r2.ok ? r2.json() : null)
+            .then(json2 => {
+              if (json2 && Array.isArray(json2.data)) {
+                const comm = json2.data.filter(it => (it.item_group || '').toString().trim().toLowerCase() === 'commercial');
+                setSchedUnits(comm.length > 0 ? comm : json2.data);
+              }
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => { });
   }, [erpnextConfig]);
 
   useEffect(() => {
@@ -3603,13 +3720,14 @@ export default function Maintenance({
       if (res.ok) {
         const json = await res.json();
         setWorkOrders((json.data || []).map(t => ({
+          ...t,
           id: t.name, property: getPropertyNameById(t.custom_property) || 'Stratford Court Apartments',
           unit: t.custom_asset || 'Flat 1A', category: t.subject ? t.subject.split(' ')[0] : 'General',
           technician: t.custom_technician || 'None', vendor: t.custom_vendor || 'None',
           estHours: 4, estCost: Number(t.custom_estimated_cost) || 150, actualCost: 0,
           status: t.status || 'Open', description: t.description || t.subject || '',
           consumedItems: [], expStartDate: t.exp_start_date, expEndDate: t.exp_end_date,
-          priority: t.priority, scheduleId: t.custom_maintenance_schedule
+          priority: t.priority, scheduleId: t.custom_maintenance_schedule || t.custom_mantainence_sechedule
         })));
       }
     } catch (e) { }
@@ -3865,53 +3983,61 @@ export default function Maintenance({
     }
 
     try {
-
-      const filters = encodeURIComponent(
-        JSON.stringify([
-          ["customer", "=", customerName],
-          ["docstatus", "=", 1]
-        ])
-      );
-
-      const url =
-        `${erpnextConfig.url}/api/resource/Booking` +
-        `?filters=${filters}` +
-        `&limit_page_length=200` +
-        `&order_by=creation desc`;
-
-      console.log("Customer:", customerName);
-      console.log("URL:", url);
-
-      const res = await fetch(url, {
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json"
-        }
+      // Find matching approved booking from loaded bookings first
+      const cachedApprovedBooking = bookings.find(b => {
+        const ws = (b.workflow_state || '').toString().trim().toLowerCase();
+        const isApprove = ws === 'approved' || ws === 'approve' || ws.includes('approv');
+        const bCust = (b.customer || '').toString().trim().toLowerCase();
+        const bCustName = (b.customer_name || '').toString().trim().toLowerCase();
+        const target = customerName.toString().trim().toLowerCase();
+        return isApprove && (bCust === target || bCustName === target);
       });
 
-      const json = await res.json();
+      let booking = cachedApprovedBooking || null;
 
-      console.log("Response:", json);
-
-      if (!res.ok) {
-        throw new Error(
-          json.exception ||
-          json.exc_type ||
-          "Booking API failed"
+      if (!booking) {
+        const filters = encodeURIComponent(
+          JSON.stringify([
+            ["customer", "=", customerName]
+          ])
         );
+
+        const url =
+          `${erpnextConfig.url}/api/resource/Booking` +
+          `?filters=${filters}` +
+          `&limit_page_length=200` +
+          `&order_by=creation desc`;
+
+        console.log("Customer:", customerName);
+        console.log("URL:", url);
+
+        const res = await fetch(url, {
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json"
+          }
+        });
+
+        const json = await res.json();
+        console.log("Response:", json);
+
+        if (res.ok) {
+          const fetchedList = json.data || [];
+          booking = fetchedList.find(b => {
+            const ws = (b.workflow_state || '').toString().trim().toLowerCase();
+            return ws === 'approved' || ws === 'approve' || ws.includes('approv');
+          }) || fetchedList.find(b => b.docstatus === 1) || fetchedList[0];
+        }
       }
 
-      const bookings = json.data || [];
-
-      if (!bookings.length) {
-        frappe.msgprint(
-          `No submitted booking found for ${customerName}`
-        );
+      if (!booking) {
+        if (typeof frappe !== 'undefined' && frappe.msgprint) {
+          frappe.msgprint(
+            `No approved booking found for ${customerName}`
+          );
+        }
         return;
       }
-
-      // Latest booking
-      const booking = bookings[0];
 
       setSchedBookingId(booking.name);
       setBookingDetails(booking);
@@ -3940,18 +4066,23 @@ export default function Maintenance({
 
       setBookingDetails(fullBooking);
 
-      // Commercial units only, excluding Promotional Fee and Service Charge
+      // Commercial units only (item_group === 'Commercial'), excluding Promotional Fee and Service Charge
       const commercialItems = (fullBooking.booking_item || [])
         .filter(item => {
           const code = (item.item_code || '').toString().trim().toLowerCase();
-          return item.unit_group === "Commercial" && code !== 'promotional fee' && code !== 'service charge';
+          if (code === 'promotional fee' || code === 'service charge') return false;
+          const grp = (item.item_group || item.unit_group || '').toString().trim().toLowerCase();
+          const schedMatch = schedUnits.find(u => (u.name || '').toLowerCase() === code);
+          const schedGrp = (schedMatch?.item_group || '').toString().trim().toLowerCase();
+          const isCommercial = grp === 'commercial' || schedGrp === 'commercial' || (!grp && !schedGrp);
+          return isCommercial;
         });
 
       const scheduleItems = commercialItems.map(item => ({
         itemCode: item.item_code,
-        itemName: item.item_code,
-        startDate: fullBooking.start_date || "",
-        periodicity: "",
+        itemName: item.item_name || item.item_code,
+        startDate: fullBooking.start_date || new Date().toISOString().split('T')[0],
+        periodicity: "Weekly",
         noOfVisits: 1,
         endDate: fullBooking.end_date || ""
       }));
@@ -3962,8 +4093,8 @@ export default function Maintenance({
           : [{
             itemCode: "",
             itemName: "",
-            startDate: fullBooking.start_date || "",
-            periodicity: "",
+            startDate: fullBooking.start_date || new Date().toISOString().split('T')[0],
+            periodicity: "Weekly",
             noOfVisits: 1,
             endDate: fullBooking.end_date || ""
           }]
@@ -4326,37 +4457,56 @@ export default function Maintenance({
                 </div>
 
                 {/* Status badges */}
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <span className="badge badge-info" style={{ fontSize: 10, padding: "2px 8px" }}>{selectedWorkOrder.status}</span>
-                  <span className="badge badge-warning" style={{ fontSize: 10, padding: "2px 8px" }}>{selectedWorkOrder.priority}</span>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  {selectedWorkOrder.status === 'Completed' ? (
+                    <span className="badge" style={{ fontSize: 10, padding: "2px 8px", backgroundColor: "#10b981", color: "#fff", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <Check size={11} /> Submitted (Locked)
+                    </span>
+                  ) : selectedWorkOrder.status === 'Cancelled' || selectedWorkOrder.docstatus === 2 ? (
+                    <span className="badge badge-danger" style={{ fontSize: 10, padding: "2px 8px" }}>Cancelled</span>
+                  ) : (
+                    <span className="badge badge-secondary" style={{ fontSize: 10, padding: "2px 8px" }}>Draft</span>
+                  )}
+                  <span className="badge badge-info" style={{ fontSize: 10, padding: "2px 8px" }}>{selectedWorkOrder.status || 'Open'}</span>
+                  <span className="badge badge-warning" style={{ fontSize: 10, padding: "2px 8px" }}>{selectedWorkOrder.priority || 'Low'}</span>
                   <span className="badge badge-success" style={{ fontSize: 10, padding: "2px 8px" }}>{selectedWorkOrder.progress || 0}% Complete</span>
                 </div>
+
+                {/* Submitted status banner */}
+                {selectedWorkOrder.status === 'Completed' && (
+                  <div style={{ padding: "8px 12px", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.25)", borderRadius: 6, color: "#10b981", fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+                    <CheckCircle2 size={13} style={{ flexShrink: 0 }} />
+                    <span><strong>Submitted State:</strong> Task is finalized and locked for modifications.</span>
+                  </div>
+                )}
 
                 {/* Reference info */}
                 <Section title="Reference">
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <Info title="Schedule" value={selectedWorkOrder.custom_mantainence_sechedule} />
-                    <Info title="Booking" value={selectedWorkOrder.custom_booking_number} />
+                    <Info title="Schedule" value={selectedWorkOrder.custom_mantainence_sechedule || selectedWorkOrder.custom_maintenance_schedule || selectedWorkOrder.scheduleId} />
+                    <Info title="Booking" value={selectedWorkOrder.custom_booking_number || selectedWorkOrder.custom_booking_id} />
                     <Info title="Tenant" value={selectedWorkOrder.custom_customer_name} />
+                    <Info title="Contact" value={selectedWorkOrder.custom_customer_contact} />
                     <Info title="Company" value={selectedWorkOrder.company} />
+                    <Info title="Assigned Type" value={selectedWorkOrder.custom_assign || (selectedWorkOrder.custom_assign_to_?.length ? "Employee" : selectedWorkOrder.custom_assign_to_vendor?.length ? "Vendor" : "—")} />
                     <Info title="Created" value={selectedWorkOrder.creation?.split(".")[0]} />
                     <Info title="Owner" value={selectedWorkOrder.owner} />
                   </div>
                 </Section>
 
-                {/* Cost */}
-                <Section title="Cost">
+                {/* Cost - Hidden as requested, code retained */}
+                {/* <Section title="Cost">
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                     <Info title="Costing" value={`$${Number(selectedWorkOrder.total_costing_amount || 0).toLocaleString()}`} />
                     <Info title="Billing" value={`$${Number(selectedWorkOrder.total_billing_amount || 0).toLocaleString()}`} />
                   </div>
-                </Section>
+                </Section> */}
 
                 {/* ── Assignment Panel ── */}
                 <Section title="Assignments">
                   <TaskItemsPanel
                     taskDoc={selectedWorkOrder}
-                    employeeDir={employeeDir}
+                    employeeDir={techProfiles.length > 0 ? techProfiles : employees}
                     vendorDir={vendorDir}
                     erpnextConfig={erpnextConfig}
                     getCsrfToken={getCsrfToken}
@@ -4366,15 +4516,17 @@ export default function Maintenance({
                     //   setWorkOrders(prev => prev.map(wo => wo.id === updatedData.name ? { ...wo, technician: (updatedData.custom_assign_to_ || [])[0]?.employee || wo.technician, vendor: (updatedData.custom_assign_to_vendor || [])[0]?.vendor || wo.vendor } : wo));
                     // }}
                     onSaved={(updatedData) => {
-                      setSelectedWorkOrder(updatedData);
+                      if (!updatedData) return;
+                      setSelectedWorkOrder(prev => ({ ...prev, ...updatedData, status: updatedData.status || prev?.status }));
                       setWorkOrders(prev => prev.map(wo =>
-                        wo.id === updatedData.name
+                        (wo.id === updatedData.name || wo.name === updatedData.name || (selectedWorkOrder && (wo.id === selectedWorkOrder.name || wo.id === selectedWorkOrder.id)))
                           ? {
                             ...wo,
+                            ...updatedData,
                             technician: (updatedData.custom_assign_to_ || [])[0]?.emp_id || wo.technician,
                             vendor: (updatedData.custom_assign_to_vendor || [])[0]?.vendor_name || wo.vendor,
                             status: updatedData.status || wo.status,
-                            docstatus: updatedData.docstatus,
+                            docstatus: updatedData.docstatus ?? wo.docstatus,
                             itemsUsed: updatedData.custom_items_used_for_maintenance || wo.itemsUsed,
                           }
                           : wo
@@ -4471,107 +4623,163 @@ export default function Maintenance({
       {/* ── CREATE MAINTENANCE SCHEDULE MODAL ── */}
       {showScheduleModal && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: 740, width: '96vw', display: 'flex', flexDirection: 'column', maxHeight: '90vh' }}>
-            <div className="modal-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
-              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 500 }}>Create Maintenance Schedule</h3>
-              <button onClick={() => setShowScheduleModal(false)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: 0 }}>×</button>
+          <div className="modal-content" style={{ maxWidth: 880, width: '96vw', display: 'flex', flexDirection: 'column', maxHeight: '90vh', borderRadius: 12, boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', overflow: 'hidden' }}>
+            <div className="modal-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)', flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 38, height: 38, borderRadius: 8, background: 'var(--bg-accent-alpha, rgba(6, 95, 70, 0.1))', color: 'var(--brand-color, #065f46)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <CalendarIcon size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>Create Maintenance Schedule</h3>
+                  <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>Configure preventative maintenance visits and recurring service schedules.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowScheduleModal(false)}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: '50%', background: 'var(--bg-tertiary, #f1f5f9)', border: 'none', color: 'var(--text-secondary, #64748b)', cursor: 'pointer', transition: 'all 0.15s ease' }}
+                title="Close modal"
+              >
+                <X size={16} />
+              </button>
             </div>
             <form onSubmit={handleCreateScheduleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 18, padding: '20px', overflowY: 'auto', flex: 1 }}>
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 20, padding: '24px', overflowY: 'auto', flex: 1 }}>
                 {scheduleStatusMessage && (
-                  <div style={{ background: scheduleStatusMessage.type === 'success' ? 'rgba(6,95,70,0.1)' : 'rgba(239,68,68,0.1)', color: scheduleStatusMessage.type === 'success' ? '#10b981' : '#ef4444', padding: '10px 12px', borderRadius: 6, fontSize: 12 }}>
-                    {scheduleStatusMessage.text}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    background: scheduleStatusMessage.type === 'success' ? 'rgba(6,95,70,0.08)' : 'rgba(239,68,68,0.08)',
+                    border: `1px solid ${scheduleStatusMessage.type === 'success' ? 'rgba(6,95,70,0.2)' : 'rgba(239,68,68,0.2)'}`,
+                    color: scheduleStatusMessage.type === 'success' ? '#065f46' : '#ef4444',
+                    padding: '12px 16px',
+                    borderRadius: 8,
+                    fontSize: 13,
+                    fontWeight: 500
+                  }}>
+                    {scheduleStatusMessage.type === 'success' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+                    <span>{scheduleStatusMessage.text}</span>
                   </div>
                 )}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Tenant Name</label>
-                    {/* <select value={schedBookingId} onChange={(e) => handleSchedBookingChange(e.target.value)} className="form-select" required disabled={submittingSchedule} style={{ fontSize: 13, boxSizing: 'border-box' }}>
-                      <option value="">-- Choose Booking --</option>
-                      {bookings.length === 0 ? (
-                        <option value="" disabled>{erpnextConfig?.url ? 'Loading bookings...' : 'ERPNext URL not configured'}</option>
-                      ) : bookings.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
-                    </select> */}
-                    <select className="form-select" required
+
+                {/* Single-Row Balanced Header Fields */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 1fr', gap: '16px 20px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <User size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
+                      Tenant Name <span style={{ color: '#ef4444' }}>*</span>
+                    </label>
+                    <select
+                      className="form-select"
+                      required
                       value={schedCustomer}
                       onChange={(e) => handleSchedCustomerChange(e.target.value)}
+                      disabled={submittingSchedule || loadingBookings}
+                      style={{ height: 38, fontSize: 13, borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', padding: '0 12px' }}
                     >
                       <option value="">-- Choose Tenant --</option>
-
-                      {tenants.map(customer => (
-                        <option
-                          key={customer.name}
-                          value={customer.name}
-                        >
+                      {loadingBookings && <option value="" disabled>Loading approved tenants...</option>}
+                      {!loadingBookings && filteredTenants.length === 0 && (
+                        <option value="" disabled>No tenants with approved bookings found</option>
+                      )}
+                      {filteredTenants.map(customer => (
+                        <option key={customer.name || customer.id} value={customer.name || customer.id}>
                           {customer.customer_name || customer.name}
                         </option>
                       ))}
                     </select>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Tenant Name</label>
-                    {/* <input type="text" value={bookingDetails?.customer_name || bookingDetails?.customer || tenants.find(t => t.id === schedCustomer)?.name || ''} readOnly className="form-input" disabled style={{ fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-secondary)' }} /> */}
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Maintainance Type</label>
-                    <select className="form-select" required
-                      value={custom_maintenance_schedule}
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <ClipboardList size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
+                      Maintenance Type <span style={{ color: '#ef4444' }}>*</span>
+                    </label>
+                    <select
+                      className="form-select"
+                      required
+                      value={custom_maintenance_schedule || ''}
                       onChange={(e) => handlemaintenanceChange(e.target.value)}
+                      disabled={submittingSchedule}
+                      style={{ height: 38, fontSize: 13, borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', padding: '0 12px' }}
                     >
                       <option value="">-- Select Type --</option>
-
                       <option value="Scheduled Maintenance">Scheduled Maintenance</option>
                       <option value="Adhoc Maintenance">Adhoc Maintenance</option>
                     </select>
                   </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Clock size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
+                      Linked Booking
+                    </label>
+                    <input
+                      type="text"
+                      value={schedBookingId || ''}
+                      placeholder={schedCustomer ? 'No submitted booking' : 'Auto-linked upon selection'}
+                      readOnly
+                      className="form-input"
+                      disabled
+                      style={{ height: 38, fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-tertiary, #f8fafc)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0 12px', color: schedBookingId ? 'var(--text-primary)' : 'var(--text-muted)' }}
+                    />
+                  </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px 16px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Property Group</label>
-                    <input type="text" value={schedPropertyGroup} readOnly className="form-input" disabled style={{ fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-secondary)' }} />
+                {/* Items Child Table */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <label style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>Scheduled Items & Units</label>
+                      <span style={{ fontSize: 11, background: 'var(--bg-accent-alpha, rgba(6, 95, 70, 0.1))', color: 'var(--brand-color, #065f46)', padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
+                        {schedItems.length} {schedItems.length === 1 ? 'item' : 'items'}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <div style={{ marginBottom: 8 }}>
-                    <label style={{ margin: 0, fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>Items</label>
-                  </div>
-                  <div style={{ border: '1px solid var(--border-color)', borderRadius: 6, overflow: 'hidden' }}>
+
+                  <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-secondary)' }}>
                     <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto' }}>
-                      <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 12 }}>
+                      <table style={{ width: '100%', minWidth: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 12 }}>
                         <colgroup>
-                          <col style={{ width: 180 }} />
-                          <col style={{ width: 200 }} />
-                          <col style={{ width: 120 }} />
-                          <col style={{ width: 120 }} />
-                          <col style={{ width: 90 }} />
-                          <col style={{ width: 110 }} />
-                          <col style={{ width: 40 }} />
+                          <col style={{ width: '21%' }} />
+                          <col style={{ width: '20%' }} />
+                          <col style={{ width: '16%' }} />
+                          <col style={{ width: '15%' }} />
+                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '14%' }} />
+                          <col style={{ width: '3%' }} />
                         </colgroup>
                         <thead>
-                          <tr style={{ background: 'var(--bg-secondary, rgba(0,0,0,0.03))', position: 'sticky', top: 0, zIndex: 1 }}>
-                            {['Item Code', 'Item Name', 'Start Date', 'Periodicity', 'No. of Visits', 'End Date', ''].map((h, i) => <th key={i} style={thStyle}>{h}</th>)}
+                          <tr style={{ background: 'var(--bg-tertiary, #f8fafc)', position: 'sticky', top: 0, zIndex: 1, borderBottom: '1px solid var(--border-color)' }}>
+                            {['Item Code', 'Item Name', 'Start Date', 'Periodicity', 'No. of Visits', 'End Date', ''].map((h, i) => (
+                              <th key={i} style={{ ...thStyle, textTransform: 'uppercase', letterSpacing: '0.03em', fontSize: 11, fontWeight: 600, padding: i === 4 ? '10px 4px' : '10px 8px', textAlign: i === 4 || i === 6 ? 'center' : 'left', whiteSpace: 'nowrap' }}>
+                                {h}
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody>
                           {schedItems.map((row, idx) => (
-                            <tr key={idx} style={{ borderBottom: idx < schedItems.length - 1 ? '1px solid var(--border-color)' : 'none', background: idx % 2 === 0 ? 'transparent' : 'var(--bg-secondary, rgba(0,0,0,0.015))' }}>
-                              <td style={{ padding: '7px 10px' }}>
+                            <tr key={idx} style={{ borderBottom: idx < schedItems.length - 1 ? '1px solid var(--border-color)' : 'none', background: idx % 2 === 0 ? 'transparent' : 'var(--bg-tertiary, rgba(0,0,0,0.015))' }}>
+                              <td style={{ padding: '8px 10px' }}>
                                 {availableSchedUnits.length === 0 ? (
-                                  <input type="text" value="" placeholder="No units for booking" readOnly className="form-input" disabled style={{ ...inputStyle, color: 'var(--text-secondary)' }} />
+                                  <input type="text" value={row.itemCode} onChange={(e) => handleSchedItemCodeChange(idx, e.target.value)} placeholder="Enter or select unit" className="form-input" style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }} />
                                 ) : (
-                                  <select value={row.itemCode} onChange={(e) => handleSchedItemCodeChange(idx, e.target.value)} className="form-select" required style={inputStyle}>
+                                  <select value={row.itemCode} onChange={(e) => handleSchedItemCodeChange(idx, e.target.value)} className="form-select" required style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }}>
                                     <option value="">-- Select Unit --</option>
                                     {availableSchedUnits.map(u => <option key={u.name} value={u.name}>{u.name}</option>)}
                                   </select>
                                 )}
                               </td>
-                              <td style={{ padding: '7px 10px', color: 'var(--text-secondary, #6b7280)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.itemName || (row.itemCode ? '…' : '—')}</td>
-                              <td style={{ padding: '7px 10px' }}><input type="date" value={row.startDate} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, startDate: e.target.value } : r))} className="form-input" required style={inputStyle} /></td>
-                              <td style={{ padding: '7px 10px' }}>
-                                <select value={row.periodicity} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, periodicity: e.target.value } : r))} className="form-select" required style={inputStyle}>
+                              <td style={{ padding: '8px 10px', color: 'var(--text-secondary, #6b7280)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {row.itemName || (row.itemCode ? '…' : '—')}
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                <input type="date" value={row.startDate} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, startDate: e.target.value } : r))} className="form-input" required style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }} />
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                <select value={row.periodicity} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, periodicity: e.target.value } : r))} className="form-select" required style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }}>
                                   <option value="Weekly">Weekly</option>
                                   <option value="Monthly">Monthly</option>
                                   <option value="Quarterly">Quarterly</option>
@@ -4580,10 +4788,22 @@ export default function Maintenance({
                                   <option value="Random">Random</option>
                                 </select>
                               </td>
-                              <td style={{ padding: '7px 10px' }}><input type="number" min="1" value={row.noOfVisits} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, noOfVisits: Number(e.target.value) || 1 } : r))} className="form-input" required style={{ ...inputStyle, textAlign: 'center' }} /></td>
-                              <td style={{ padding: '7px 10px' }}><input type="date" value={row.endDate} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, endDate: e.target.value } : r))} className="form-input" required style={inputStyle} /></td>
-                              <td style={{ padding: '7px 10px', textAlign: 'center' }}>
-                                <button type="button" onClick={() => setSchedItems(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', color: 'var(--text-danger, #ef4444)', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}>&times;</button>
+                              <td style={{ padding: '8px 10px' }}>
+                                <input type="number" min="1" value={row.noOfVisits} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, noOfVisits: Number(e.target.value) || 1 } : r))} className="form-input" required style={{ ...inputStyle, height: 32, textAlign: 'center', borderRadius: 6, border: '1px solid var(--border-color)' }} />
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                <input type="date" value={row.endDate} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, endDate: e.target.value } : r))} className="form-input" required style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }} />
+                              </td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setSchedItems(prev => prev.filter((_, i) => i !== idx))}
+                                  disabled={schedItems.length <= 1}
+                                  title="Remove item"
+                                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 6, border: 'none', background: 'transparent', color: schedItems.length <= 1 ? 'var(--text-muted)' : '#ef4444', cursor: schedItems.length <= 1 ? 'not-allowed' : 'pointer', opacity: schedItems.length <= 1 ? 0.35 : 1, transition: 'all 0.15s ease' }}
+                                >
+                                  <Trash size={14} />
+                                </button>
                               </td>
                             </tr>
                           ))}
@@ -4593,9 +4813,23 @@ export default function Maintenance({
                   </div>
                 </div>
               </div>
-              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '14px 20px', borderTop: '1px solid var(--border-color)', flexShrink: 0 }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowScheduleModal(false)} disabled={submittingSchedule}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={submittingSchedule}>{submittingSchedule ? 'Creating...' : 'Create Maintenance Schedule'}</button>
+              <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, padding: '16px 24px', borderTop: '1px solid var(--border-color)', background: 'var(--bg-secondary)', flexShrink: 0 }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowScheduleModal(false)} disabled={submittingSchedule} style={{ padding: '8px 18px', borderRadius: 6, fontSize: 13 }}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={submittingSchedule} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 20px', borderRadius: 6, fontSize: 13, fontWeight: 600 }}>
+                  {submittingSchedule ? (
+                    <>
+                      <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                      Creating...
+                    </>
+                  ) : (
+                    <>
+                      <Check size={14} />
+                      Create Maintenance Schedule
+                    </>
+                  )}
+                </button>
               </div>
             </form>
           </div>

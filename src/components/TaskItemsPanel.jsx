@@ -2094,10 +2094,14 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
 // ---------- Main component ----------
 function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextConfig, getCsrfToken, showToast, onSaved, aftersucess }) {
 
-    // A task is "locked" (read-only) once it's actually submitted (docstatus 1)
-    // OR its status has been set to Completed — either condition disables
-    // all editing/assignment/item features and reveals the Quotation actions.
-    const [isLocked, setisLocked] = useState(taskDoc?.docstatus === 1 || taskDoc?.status === "Completed");
+    // A task is "locked" (read-only) once its status is "Completed" (or "Cancelled")
+    // or when the user has just successfully submitted the task locally.
+    const [isLockedLocal, setIsLockedLocal] = useState(false);
+    const isLocked = Boolean(taskDoc?.status === "Completed" || taskDoc?.status === "Cancelled" || isLockedLocal);
+
+    useEffect(() => {
+        setIsLockedLocal(taskDoc?.status === "Completed");
+    }, [taskDoc?.status, taskDoc?.name]);
 
     // ── ASSIGN ──
     const [assignType, setAssignType] = useState("");
@@ -2105,10 +2109,25 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     const [selectedEmpIds, setSelectedEmpIds] = useState([]);
     const [selectedVendorIds, setSelectedVendorIds] = useState([]);
 
-    useEffect(() => { setAssignType((taskDoc?.custom_assign || "").toLowerCase()); }, [taskDoc?.custom_assign]);
+    const effectiveAssignType = useMemo(() => {
+        const raw = (taskDoc?.custom_assign || "").toLowerCase().trim();
+        if (raw === "employee" || raw.includes("employee")) return "employee";
+        if (raw === "vendor" || raw.includes("vendor")) return "vendor";
+        if ((taskDoc?.custom_assign_to_ || []).length > 0) return "employee";
+        if ((taskDoc?.custom_assign_to_vendor || []).length > 0) return "vendor";
+        return assignType || "employee";
+    }, [taskDoc?.custom_assign, taskDoc?.custom_assign_to_, taskDoc?.custom_assign_to_vendor, assignType]);
+
     useEffect(() => {
-        setSelectedEmpIds((taskDoc?.custom_assign_to_ || []).map((r) => r?.emp_id).filter(Boolean));
-        setSelectedVendorIds((taskDoc?.custom_assign_to_vendor || []).map((r) => r?.vendor_name || r?.vendor).filter(Boolean));
+        const raw = (taskDoc?.custom_assign || "").toLowerCase().trim();
+        if (raw) setAssignType(raw);
+        else if ((taskDoc?.custom_assign_to_ || []).length > 0) setAssignType("employee");
+        else if ((taskDoc?.custom_assign_to_vendor || []).length > 0) setAssignType("vendor");
+    }, [taskDoc?.custom_assign, taskDoc?.custom_assign_to_, taskDoc?.custom_assign_to_vendor]);
+
+    useEffect(() => {
+        setSelectedEmpIds((taskDoc?.custom_assign_to_ || []).map((r) => r?.emp_id || r?.employee || r?.id || r?.name).filter(Boolean));
+        setSelectedVendorIds((taskDoc?.custom_assign_to_vendor || []).map((r) => r?.vendor_name || r?.vendor || r?.supplier || r?.name).filter(Boolean));
     }, [taskDoc]);
 
     const toggleEmp = (id) => setSelectedEmpIds((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
@@ -2232,13 +2251,13 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
         if (!erpnextConfig?.url || !taskDoc?.name) { showToast?.("No ERPNext connection.", "error"); return; }
         setSavingAssign(true);
         try {
-            const body = assignType === "employee"
+            const body = effectiveAssignType === "employee"
                 ? { custom_assign_to_: selectedEmpIds.map((id) => { const e = employeeDir.find((x) => x?.id === id); return { emp_id: id, emp_name: e?.name || "", designation: e?.certs || e?.designation || "", contact_number: e?.phone || "" }; }) }
                 : { custom_assign_to_vendor: selectedVendorIds.map((id) => { const v = vendorDir.find((x) => x?.id === id); return { vendor_name: id, supplier_type: v?.type || "" }; }) };
             const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json", "X-Frappe-CSRF-Token": getCsrfToken?.() }, body: JSON.stringify(body) });
             const json = await res.json();
             if (!res.ok) { showToast?.(json?.exception || "Failed to update assignment.", "error"); return; }
-            showToast?.(`${assignType === "employee" ? "Employees" : "Vendors"} updated successfully.`, "success");
+            showToast?.(`${effectiveAssignType === "employee" ? "Employees" : "Vendors"} updated successfully.`, "success");
             onSaved?.(json.data);
         } catch (err) { console.error(err); showToast?.("Error saving assignment.", "error"); }
         finally { setSavingAssign(false); }
@@ -2253,8 +2272,14 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     const [showConfirm, setShowConfirm] = useState(false);
 
     useEffect(() => {
-        setItemRows((taskDoc?.custom_items_used_for_maintenance || []).map((r) => ({ name: r?.name, item_code: r?.item_code, item_name: r?.item_name, qty: r?.qty || 1 })));
-    }, [taskDoc]);
+        const rawList = taskDoc?.custom_items_used_for_maintenance || [];
+        setItemRows(rawList.map((r) => ({
+            name: r?.name,
+            item_code: r?.item_code || r?.item || r?.service || r?.service_name || r?.name || "",
+            item_name: r?.item_name || r?.item_description || r?.description || r?.service_name || r?.item_code || "—",
+            qty: Number(r?.qty || r?.quantity || 1)
+        })));
+    }, [taskDoc?.custom_items_used_for_maintenance, taskDoc?.name]);
 
     const [supplierServices, setSupplierServices] = useState([]);
 
@@ -2379,6 +2404,31 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
         setSubmitting(true);
 
         try {
+            // 1. Ensure any item changes in the UI are saved to the Task doc in ERPNext first
+            if (itemRows.length > 0) {
+                try {
+                    const saveItemsBody = {
+                        custom_items_used_for_maintenance: itemRows.map((r) => ({
+                            item_code: r.item_code,
+                            item_name: r.item_name,
+                            qty: r.qty
+                        }))
+                    };
+                    await fetch(`${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`, {
+                        method: "PUT",
+                        credentials: "include",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-Frappe-CSRF-Token": getCsrfToken?.()
+                        },
+                        body: JSON.stringify(saveItemsBody)
+                    });
+                } catch (saveItemsErr) {
+                    console.warn("Could not pre-save items before stockout:", saveItemsErr);
+                }
+            }
+
+            // 2. Call stock-out API
             const response = await fetch(
                 `${erpnextConfig.url}/api/method/property_management.api.submit_task_stockout_api`,
                 {
@@ -2401,6 +2451,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                 showToast?.(
                     result?.exception ||
                     result?.message ||
+                    result?._server_messages ||
                     "Request failed.",
                     "error"
                 );
@@ -2430,17 +2481,49 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
 
             // Success
             if (data.stock_entry) {
-                aftersucess()
-                setisLocked(true); // Mark the task as locked after successful submission
                 showToast?.(
                     `Stock Entry ${data.stock_entry} created.`,
                     "success"
                 );
             }
 
+            // 3. Mark Task as Completed in ERPNext
+            const today = new Date().toISOString().slice(0, 10);
+            let updatedTaskDoc = null;
+            try {
+                const updateRes = await fetch(`${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`, {
+                    method: "PUT",
+                    credentials: "include",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-Frappe-CSRF-Token": getCsrfToken?.(),
+                    },
+                    body: JSON.stringify({
+                        status: "Completed",
+                        completed_on: today,
+                        progress: 100,
+                    }),
+                });
+                if (updateRes.ok) {
+                    const updateJson = await updateRes.json();
+                    updatedTaskDoc = updateJson?.data;
+                }
+            } catch (updateErr) {
+                console.warn("Could not update Task status via REST:", updateErr);
+            }
+
+            setIsLockedLocal(true); // Mark the task as locked after successful submission
             showToast?.("Task submitted successfully.", "success");
 
-            onSaved?.(data);
+            const finalDoc = updatedTaskDoc || {
+                ...taskDoc,
+                status: "Completed",
+                progress: 100,
+                custom_items_used_for_maintenance: itemRows,
+            };
+
+            onSaved?.(finalDoc);
+            aftersucess?.();
         } catch (err) {
             console.error(err);
             showToast?.(
@@ -2456,7 +2539,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
 
     if (!taskDoc) return <div style={emptyMsgStyle}>Loading task…</div>;
 
-    const reassignDisabled = isLocked || savingAssign || (assignType === "employee" ? selectedEmpIds.length === 0 : selectedVendorIds.length === 0);
+    const reassignDisabled = isLocked || savingAssign || (effectiveAssignType === "employee" ? selectedEmpIds.length === 0 : selectedVendorIds.length === 0);
 
     return (
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -2538,7 +2621,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
             </div>
 
             {/* ── ASSIGN SECTION ── */}
-            {assignType === "employee" ? (
+            {effectiveAssignType === "employee" ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     <div style={sectionLabelStyle}>Current Employees</div>
                     {empRows.length === 0 ? <div style={emptyMsgStyle}>No employees assigned yet.</div> : (
@@ -2548,13 +2631,17 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                                     <th style={thStyle}>Emp ID</th><th style={thStyle}>Name</th><th style={thStyle}>Designation</th><th style={thStyle}>Contact</th>
                                 </tr></thead>
                                 <tbody>{empRows.map((r, i) => {
-                                    const m = employeeDir.find((e) => e?.id === r?.emp_id);
+                                    const empId = r?.emp_id || r?.employee || r?.id || r?.name;
+                                    const m = employeeDir.find((e) => e?.id === empId || e?.name === (r?.emp_name || r?.employee_name) || (r?.owner && e?.email === r?.owner));
+                                    const empName = r?.emp_name || r?.employee_name || m?.name || r?.owner || "—";
+                                    const designation = r?.designation || r?.department || m?.certs || m?.designation || "—";
+                                    const contact = r?.contact_number || r?.cell_number || r?.phone || m?.phone || "—";
                                     return (
-                                        <tr key={r?.name || i} style={trStyle(i, empRows.length)}>
-                                            <td style={tdStyle}><span style={{ color: "var(--brand-color)", fontWeight: 600 }}>{r?.emp_id || r?.name}</span></td>
-                                            <td style={tdStyle}>{r?.emp_name || m?.name || "—"}</td>
-                                            <td style={{ ...tdStyle, color: "var(--text-secondary)" }}>{r?.designation || m?.certs || "—"}</td>
-                                            <td style={{ ...tdStyle, color: "var(--text-secondary)" }}>{r?.contact_number || m?.phone || "—"}</td>
+                                        <tr key={r?.name || empId || i} style={trStyle(i, empRows.length)}>
+                                            <td style={tdStyle}><span style={{ color: "var(--brand-color)", fontWeight: 600 }}>{empId || "—"}</span></td>
+                                            <td style={tdStyle}>{empName}</td>
+                                            <td style={{ ...tdStyle, color: "var(--text-secondary)" }}>{designation}</td>
+                                            <td style={{ ...tdStyle, color: "var(--text-secondary)" }}>{contact}</td>
                                         </tr>
                                     );
                                 })}</tbody>
@@ -2715,23 +2802,32 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                 <button type="button" onClick={handleReassign} disabled={reassignDisabled}
                     style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "9px 0", borderRadius: 7, border: "none", cursor: reassignDisabled ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, background: savingAssign ? "var(--bg-tertiary)" : "var(--brand-color, #2563eb)", color: savingAssign ? "var(--text-secondary)" : "#fff", opacity: reassignDisabled ? 0.45 : 1 }}
                 >
-                    {savingAssign ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Saving…</> : <><Save size={13} /> Reassign {assignType === "employee" ? "Employees" : "Vendors"}</>}
+                    {savingAssign ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Saving…</> : <><Save size={13} /> Reassign {effectiveAssignType === "employee" ? "Employees" : "Vendors"}</>}
                 </button>
             )}
 
-            {/* Submit / Quotation — Submit only possible while not locked.
-            Once locked (submitted OR Completed), Create/View Quotation become the active actions. */}
-            <div style={{ display: "flex", gap: 8 }}>
-                {!isLocked &&
-                    <>
+            {/* Submit / Quotation Actions */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {isLocked ? (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "var(--bg-tertiary)", borderRadius: 7, border: "1px solid var(--border-color)" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#10b981", fontSize: 12, fontWeight: 600 }}>
+                            <CheckCircle2 size={15} />
+                            <span>Task Submitted & Locked</span>
+                        </div>
+                        <button type="button" onClick={handleViewQuotation} style={{ ...secondaryActionBtnStyle, flex: "none", padding: "6px 14px" }}>
+                            <FileText size={13} /> View Quotation
+                        </button>
+                    </div>
+                ) : (
+                    <div style={{ display: "flex", gap: 8 }}>
                         <button type="button" onClick={handleSubmitClick} disabled={submitting}
                             style={primaryActionBtnStyle}
                         >
                             {submitting ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Submitting…</> : <><CheckCircle2 size={13} /> Submit Task</>}
                         </button>
                         <button type="button" onClick={handleViewQuotation} style={secondaryActionBtnStyle}><FileText size={13} /> View Quotation</button>
-                    </>
-                }
+                    </div>
+                )}
             </div>
 
             <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>

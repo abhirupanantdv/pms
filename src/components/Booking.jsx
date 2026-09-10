@@ -2241,6 +2241,82 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
   const [approving, setApproving] = useState(false);
   const [approveError, setApproveError] = useState('');
   const previewRef = useRef(null);
+  const fetchedDetailsRef = useRef(new Set());
+  // Alert / Validation Error Modal state
+  const [alertModal, setAlertModal] = useState({
+    show: false,
+    title: '',
+    message: ''
+  });
+
+  // Extract clean backend validation error messages from Frappe/ERPNext
+  const extractBackendErrorMessage = (errData, rawText = '') => {
+    let msg = '';
+
+    // 1. Check _server_messages (standard frappe.throw output)
+    if (errData && errData._server_messages) {
+      try {
+        const msgs = JSON.parse(errData._server_messages);
+        if (Array.isArray(msgs) && msgs.length > 0) {
+          try {
+            const firstParsed = JSON.parse(msgs[0]);
+            msg = firstParsed.message || firstParsed.error || msgs[0];
+          } catch {
+            msg = msgs[0];
+          }
+        }
+      } catch {
+        msg = errData._server_messages;
+      }
+    }
+
+    // 2. Check exception or exc or message
+    if (!msg && errData) {
+      if (errData.exception) msg = errData.exception;
+      else if (errData.exc) {
+        try {
+          const excArr = JSON.parse(errData.exc);
+          msg = Array.isArray(excArr) ? excArr[0] : errData.exc;
+        } catch {
+          msg = errData.exc;
+        }
+      } else if (errData.message && typeof errData.message === 'string') {
+        msg = errData.message;
+      }
+    }
+
+    // 3. Fallback to rawText
+    if (!msg && rawText) {
+      try {
+        const parsed = JSON.parse(rawText);
+        return extractBackendErrorMessage(parsed, '');
+      } catch {
+        msg = rawText;
+      }
+    }
+
+    if (!msg) return 'Failed to update booking dates on ERPNext.';
+
+    // Clean traceback & exceptions
+    let clean = String(msg);
+    if (clean.includes('Traceback (most recent call last):') || clean.includes('Traceback')) {
+      const lines = clean.split('\n').map(l => l.trim()).filter(Boolean);
+      const errorLine = lines.reverse().find(l =>
+        l.includes('Error:') || l.includes('Exception:') || (!l.startsWith('File') && !l.startsWith('^') && !l.includes('in application'))
+      );
+      if (errorLine) clean = errorLine;
+    }
+
+    clean = clean.replace(/^[a-zA-Z0-9._]+Error:\s*/i, '');
+    clean = clean.replace(/^[a-zA-Z0-9._]+Exception:\s*/i, '');
+    clean = clean.replace(/^ValidationError:\s*/i, '');
+
+    // Convert HTML line breaks to real breaks, remove HTML tags
+    clean = clean.replace(/<br\s*[\/]?>/gi, '\n');
+    clean = clean.replace(/<[^>]*>/g, '').trim();
+
+    return clean;
+  };
 
   // Toast notifications
   const [toasts, setToasts] = useState([]);
@@ -2281,7 +2357,10 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
       ending_date: '2027-06-30',
       total_days: '365',
       advance_amount: 500.00,
-      payment_method: 'Bank Transfer'
+      payment_method: 'Bank Transfer',
+      booking_item: [
+        { item_code: 'UNIT-102', item_name: 'Suva Retail Complex - Suite 102', uom: 'Month', qty: 1, rate: 1500.00, amount: 1500.00, discount_amount: 150.00 }
+      ]
     },
     {
       name: 'BOOK-0002',
@@ -2301,7 +2380,10 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
       ending_date: '2028-07-31',
       total_days: '730',
       advance_amount: 1000.00,
-      payment_method: 'Credit Card'
+      payment_method: 'Credit Card',
+      booking_item: [
+        { item_code: 'UNIT-A', item_name: 'Nadi Residential Villa - Unit A', uom: 'Month', qty: 1, rate: 2500.00, amount: 2500.00, discount_amount: 200.00 }
+      ]
     }
   ];
 
@@ -2326,15 +2408,34 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     if (!erpnextConfig || !erpnextConfig.url) return;
     setLoadingFields(true);
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/DocType/Booking`, {
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
+      let rawFields = [];
+      try {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/DocType/Booking`, {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        if (res.ok) {
+          const json = await res.json();
+          rawFields = json.data?.fields || [];
         }
-      });
-      if (res.ok) {
-        const json = await res.json();
-        const rawFields = json.data?.fields || [];
+      } catch (e) { }
+
+      if (rawFields.length === 0) {
+        try {
+          const res2 = await fetch(`${erpnextConfig.url}/api/method/frappe.desk.form.load.getdoctype?doctype=Booking`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (res2.ok) {
+            const json2 = await res2.json();
+            rawFields = json2.docs?.[0]?.fields || json2.message?.docs?.[0]?.fields || [];
+          }
+        } catch (e2) { }
+      }
+
+      if (rawFields.length > 0) {
         // Filter relevant writable fields
         const filtered = rawFields.filter(f =>
           f.fieldname &&
@@ -2363,61 +2464,88 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     }
   };
 
-  // Fetch bookings list using custom API, falling back to resource endpoint or mock data
+  // Fetch bookings list, falling back to resource endpoint or mock data
   const fetchBookings = async (cust = '') => {
     setLoadingList(true);
     setErrorMsg('');
+    if (fetchedDetailsRef.current) {
+      fetchedDetailsRef.current.clear();
+    }
     try {
-      let dataList = [];
+      let dataList = null;
       if (erpnextConfig && erpnextConfig.url) {
-        try {
-          // Attempt standard resource API first
-          setSyncStatus('Syncing via ERPNext REST Resource API...');
-          let resourceUrl = `${erpnextConfig.url}/api/resource/Booking?fields=["name","custom_contract","booking_date","customer","customer_name","customer_email","booking_type","status","workflow_state","payment_status","booking_amount","paid_amount","pending_amount","starting_date","ending_date","country","property","quotation","booking_item"]&limit_page_length=200&order_by=creation%20desc`;
-          if (cust) {
-            resourceUrl += `&filters=[["Booking","customer","=","${cust}"]]`;
-          }
-          const res = await fetch(resourceUrl, {
-            credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          });
-          if (res.ok) {
-            const json = await res.json();
-            dataList = json.data || [];
-          } else {
-            throw new Error('Standard resource API request failed');
-          }
-        } catch (resourceErr) {
-          // Fallback to custom method
-          setSyncStatus('Fetching from ERPNext custom API...');
-          try {
-            const apiPath = cust
-              ? `/api/method/erpnext.api.booking.get_bookings?customer=${encodeURIComponent(cust)}`
-              : `/api/method/erpnext.api.booking.get_bookings`;
+        setSyncStatus('Syncing via ERPNext REST Resource API...');
 
-            const res = await fetch(`${erpnextConfig.url}${apiPath}`, {
+        let filtersQuery = '';
+        if (cust) {
+          filtersQuery = `&filters=${encodeURIComponent(JSON.stringify([["customer", "=", cust]]))}`;
+        }
+
+        // Strategy 1: Query with fields=["*"] to dynamically retrieve all columns without failing on nonexistent ones
+        try {
+          const url1 = `${erpnextConfig.url}/api/resource/Booking?fields=["*"]&limit_page_length=500&order_by=creation%20desc${filtersQuery}`;
+          const res1 = await fetch(url1, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (res1.ok) {
+            const json1 = await res1.json();
+            dataList = json1.data || [];
+          } else {
+            console.warn('Booking fetch fields=["*"] returned status:', res1.status);
+          }
+        } catch (e1) {
+          console.warn('Booking fetch fields=["*"] failed:', e1);
+        }
+
+        // Strategy 2: If Strategy 1 returned not OK, try exact verified columns from ERPNext Booking DocType
+        if (dataList === null) {
+          try {
+            const safeFields = encodeURIComponent(JSON.stringify([
+              "name", "customer", "customer_name", "customer_email", "customer_phone_no", "booking_date",
+              "starting_date", "ending_date", "total_days", "booking_type", "country", "booking_amount",
+              "amount_to_pay", "advance_amount", "paid_amount", "pending_amount", "net_total",
+              "discount_amount", "per_month_billing_amount", "payment_method", "payment_status", "quotation",
+              "custom_contract", "docstatus", "workflow_state"
+            ]));
+            const url2 = `${erpnextConfig.url}/api/resource/Booking?fields=${safeFields}&limit_page_length=500&order_by=creation%20desc${filtersQuery}`;
+            const res2 = await fetch(url2, {
               credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json'
-              }
+              headers: { 'Content-Type': 'application/json' }
             });
-            if (res.ok) {
-              const json = await res.json();
-              dataList = json.message || json.data || [];
+            if (res2.ok) {
+              const json2 = await res2.json();
+              dataList = json2.data || [];
             } else {
-              throw new Error('Custom API method failed');
+              console.warn('Booking fetch safe fields returned status:', res2.status);
             }
-          } catch (customErr) {
-            console.warn('Both standard resource API and custom API failed:', resourceErr, customErr);
+          } catch (e2) {
+            console.warn('Booking fetch safe fields failed:', e2);
+          }
+        }
+
+        // Strategy 3: Minimal fallback (no fields query param)
+        if (dataList === null) {
+          try {
+            const url3 = `${erpnextConfig.url}/api/resource/Booking?limit_page_length=500&order_by=creation%20desc${filtersQuery}`;
+            const res3 = await fetch(url3, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (res3.ok) {
+              const json3 = await res3.json();
+              dataList = json3.data || [];
+            } else {
+              console.warn('Booking fetch minimal fields returned status:', res3.status);
+            }
+          } catch (e3) {
+            console.warn('Booking fetch minimal fields failed:', e3);
           }
         }
       }
 
-      console.log('Fetched bookings first item keys and data:', dataList[0] ? Object.keys(dataList[0]) : [], dataList[0]);
-      console.log('Fetched bookings:', dataList);
-      if (Array.isArray(dataList) && dataList.length > 0) {
+      console.log('Fetched bookings data:', dataList);
+      if (Array.isArray(dataList)) {
         setBookings(dataList);
         setSyncStatus('Synchronized');
       } else {
@@ -2435,14 +2563,14 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
 
   // Fetch detailed booking record
   const fetchBookingDetails = async (id) => {
+    if (!id) return;
     setLoadingDetails(true);
     setSelectedBookingDetails(null);
     try {
       let details = null;
       if (erpnextConfig && erpnextConfig.url) {
         try {
-          // Attempt standard resource detail first
-          const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${id}`, {
+          const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(id)}`, {
             credentials: 'include',
             headers: {
               'Content-Type': 'application/json'
@@ -2453,51 +2581,38 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
             details = json.data;
             console.log('Fetched booking details via resource API:', details);
           } else {
-            throw new Error('Standard resource API returned not OK');
+            console.warn('Booking detail resource fetch returned not OK:', res.status);
           }
         } catch (resourceErr) {
-          // Fallback to custom methods
-          try {
-            // Attempt custom method 1: get_booking_details
-            const res = await fetch(`${erpnextConfig.url}/api/method/erpnext.api.booking.get_booking_details?booking_id=${id}`, {
-              credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json'
-              }
-            });
-            if (res.ok) {
-              const json = await res.json();
-              details = json.message || json.data;
-            } else {
-              // Attempt custom method 2: get_booking
-              const res2 = await fetch(`${erpnextConfig.url}/api/method/erpnext.api.booking.get_booking?booking_id=${id}`, {
-                credentials: 'include',
-                headers: {
-                  'Content-Type': 'application/json'
-                }
-              });
-              if (res2.ok) {
-                const json2 = await res2.json();
-                details = json2.message || json2.data;
-              } else {
-                throw new Error('All detail retrieval methods failed');
-              }
-            }
-          } catch (customErr) {
-            console.warn('Both standard resource detail and custom APIs failed:', resourceErr, customErr);
-          }
+          console.warn('Booking detail resource fetch failed:', resourceErr);
         }
       }
 
       if (details) {
+        if (details.quotation && erpnextConfig && erpnextConfig.url) {
+          try {
+            const qRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(details.quotation)}?fields=["name","custom_start_date","custom_end_date","valid_till","discount_amount"]`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (qRes.ok) {
+              const qJson = await qRes.json();
+              const qData = qJson.data || qJson;
+              details.quotation_start_date = qData.custom_start_date;
+              details.quotation_end_date = qData.custom_end_date;
+              details.quotation_valid_till = qData.valid_till;
+              details.quotation_discount_amount = qData.discount_amount;
+            }
+          } catch (_) { }
+        }
+
         const normalizedItems = normalizeBookingItems(details);
         setSelectedBookingDetails({ ...details, booking_item: normalizedItems });
         setBookings(prev => prev.map(b => {
           const bookingId = b.name || b.id;
-          return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
+          return bookingId === id ? { ...b, ...details, booking_item: normalizedItems } : b;
         }));
       } else {
-        // Mock detail fallback
         const mockDetail = bookings.find(b => b.name === id || b.id === id);
         const normalizedItems = normalizeBookingItems(mockDetail || {});
         setSelectedBookingDetails(mockDetail ? { ...mockDetail, booking_item: normalizedItems } : null);
@@ -2522,34 +2637,63 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
 
   const handleUpdateBookingDates = async () => {
     if (!editStartDate || !editEndDate) {
-      showToast('error', 'Start Date and End Date are required.');
-      return;
-    }
-
-    const start = new Date(editStartDate);
-    const end = new Date(editEndDate);
-    const oneYearLater = new Date(start);
-    oneYearLater.setFullYear(start.getFullYear() + 1);
-
-    if (end < oneYearLater) {
-      showToast('error', 'Booking period must be at least 1 year.');
+      setAlertModal({
+        show: true,
+        title: 'Missing Date Information',
+        message: 'Start Date and End Date are required.'
+      });
       return;
     }
 
     setUpdatingDates(true);
     try {
       if (!erpnextConfig || !erpnextConfig.url) {
+        // Offline / mock mode validation matching backend validate_booking_dates
+        if (selectedBookingDetails?.quotation_start_date && editStartDate < selectedBookingDetails.quotation_start_date) {
+          setAlertModal({
+            show: true,
+            title: 'Booking Date Validation',
+            message: `Booking Start Date cannot be before Quotation Start Date ${selectedBookingDetails.quotation_start_date}`
+          });
+          setUpdatingDates(false);
+          return;
+        }
+        if (selectedBookingDetails?.quotation_end_date && editStartDate > selectedBookingDetails.quotation_end_date) {
+          setAlertModal({
+            show: true,
+            title: 'Booking Date Validation',
+            message: `Booking Start Date cannot be after Quotation End Date ${selectedBookingDetails.quotation_end_date}`
+          });
+          setUpdatingDates(false);
+          return;
+        }
+
+        const start = new Date(editStartDate);
+        const end = new Date(editEndDate);
+        const minEnd = new Date(start);
+        minEnd.setFullYear(start.getFullYear() + 1);
+        const effectiveEnd = end < minEnd ? minEnd.toISOString().split('T')[0] : editEndDate;
+        const totalDays = Math.round((new Date(effectiveEnd) - start) / (1000 * 60 * 60 * 24)) + 1;
+
+        setEditStartDate(editStartDate);
+        setEditEndDate(effectiveEnd);
+
         setSelectedBookingDetails(prev => prev ? {
           ...prev,
           starting_date: editStartDate,
-          ending_date: editEndDate
+          ending_date: effectiveEnd,
+          start_date: editStartDate,
+          end_date: effectiveEnd,
+          total_days: totalDays
         } : prev);
-        setBookings(prev => prev.map(b => (b.name === selectedBookingDetails.name || b.id === selectedBookingDetails.name) ? { ...b, starting_date: editStartDate, ending_date: editEndDate } : b));
-        showToast('success', 'Booking dates updated locally.');
+        setBookings(prev => prev.map(b => (b.name === selectedBookingDetails.name || b.id === selectedBookingDetails.name) ? { ...b, starting_date: editStartDate, ending_date: effectiveEnd, start_date: editStartDate, end_date: effectiveEnd, total_days: totalDays } : b));
+        showToast('success', 'Booking and Contract dates updated locally.');
+        setUpdatingDates(false);
         return;
       }
 
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${selectedBookingDetails.name}`, {
+      // 1. Update Booking DocType starting_date & ending_date (Calls backend validate() & validate_booking_dates())
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(selectedBookingDetails.name)}`, {
         method: 'PUT',
         credentials: 'include',
         headers: {
@@ -2563,14 +2707,189 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
       });
 
       if (res.ok) {
-        showToast('success', 'Booking dates updated successfully.');
+        const json = await res.json();
+        const savedBooking = json.data || json;
+
+        // Backend validate_booking_dates enforces minimum_end_date and calculates total_days
+        const actualStart = savedBooking.starting_date || editStartDate;
+        const actualEnd = savedBooking.ending_date || editEndDate;
+        const actualTotalDays = savedBooking.total_days;
+
+        setEditStartDate(actualStart);
+        setEditEndDate(actualEnd);
+
+        setSelectedBookingDetails(prev => prev ? {
+          ...prev,
+          ...savedBooking,
+          starting_date: actualStart,
+          ending_date: actualEnd,
+          start_date: actualStart,
+          end_date: actualEnd,
+          total_days: actualTotalDays !== undefined ? actualTotalDays : prev.total_days
+        } : prev);
+
+        setBookings(prev => prev.map(b => (b.name === selectedBookingDetails.name || b.id === selectedBookingDetails.name) ? {
+          ...b,
+          ...savedBooking,
+          starting_date: actualStart,
+          ending_date: actualEnd,
+          start_date: actualStart,
+          end_date: actualEnd,
+          total_days: actualTotalDays !== undefined ? actualTotalDays : b.total_days
+        } : b));
+
+        // 2. Identify linked Contract ID
+        let contractId = savedBooking?.custom_contract || savedBooking?.contract || selectedBookingDetails?.custom_contract || selectedBookingDetails?.contract;
+        if (!contractId) {
+          const matched = bookings.find(b => (b.name === selectedBookingDetails.name || b.id === selectedBookingDetails.name));
+          if (matched) {
+            contractId = matched.custom_contract || matched.contract;
+          }
+        }
+
+        // Check fresh Booking record from ERPNext if not found
+        if (!contractId && erpnextConfig?.url) {
+          try {
+            const freshRes = await fetch(`${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(selectedBookingDetails.name)}`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (freshRes.ok) {
+              const freshJson = await freshRes.json();
+              const freshData = freshJson.data || freshJson;
+              contractId = freshData.custom_contract || freshData.contract;
+            }
+          } catch (_) { }
+        }
+
+        // If still not found, search Contract DocType where document_name equals booking name
+        if (!contractId && erpnextConfig?.url) {
+          try {
+            const cSearchRes = await fetch(`${erpnextConfig.url}/api/resource/Contract?filters=[["document_name","=","${encodeURIComponent(selectedBookingDetails.name)}"]]&fields=["name"]&limit=1`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (cSearchRes.ok) {
+              const cSearchJson = await cSearchRes.json();
+              if (cSearchJson.data && cSearchJson.data[0]) {
+                contractId = cSearchJson.data[0].name;
+              }
+            }
+          } catch (_) { }
+        }
+
+        // 3. Update Contract DocType start_date & end_date by contract ID using actual validated dates
+        let contractUpdated = false;
+        if (contractId) {
+          try {
+            // Attempt standard REST PUT on Contract DocType
+            const cRes = await fetch(`${erpnextConfig.url}/api/resource/Contract/${encodeURIComponent(contractId)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Frappe-CSRF-Token': getCsrfToken()
+              },
+              body: JSON.stringify({
+                start_date: actualStart,
+                end_date: actualEnd
+              })
+            });
+
+            if (cRes.ok) {
+              contractUpdated = true;
+            } else {
+              // Fallback via frappe.client.set_value (RPC handles allow-on-submit or submitted contracts)
+              const rpcRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Frappe-CSRF-Token': getCsrfToken()
+                },
+                body: JSON.stringify({
+                  doctype: 'Contract',
+                  name: contractId,
+                  fieldname: {
+                    start_date: actualStart,
+                    end_date: actualEnd
+                  }
+                })
+              });
+              if (rpcRes.ok) {
+                contractUpdated = true;
+              } else {
+                // Try setting fields individually if dict fieldname is unsupported
+                await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'X-Frappe-CSRF-Token': getCsrfToken()
+                  },
+                  body: JSON.stringify({
+                    doctype: 'Contract',
+                    name: contractId,
+                    fieldname: 'start_date',
+                    value: actualStart
+                  })
+                });
+                await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'X-Frappe-CSRF-Token': getCsrfToken()
+                  },
+                  body: JSON.stringify({
+                    doctype: 'Contract',
+                    name: contractId,
+                    fieldname: 'end_date',
+                    value: actualEnd
+                  })
+                });
+                contractUpdated = true;
+              }
+            }
+          } catch (cErr) {
+            console.warn('Failed to update Contract doctype dates:', cErr);
+          }
+        }
+
+        const dateAdjusted = actualEnd !== editEndDate;
+        const msgSuffix = dateAdjusted ? ' (End Date adjusted to meet minimum 1-year duration)' : '';
+
+        if (contractId) {
+          showToast('success', contractUpdated ? `Booking and Contract (${contractId}) dates updated successfully.${msgSuffix}` : `Booking dates updated.${msgSuffix}`);
+        } else {
+          showToast('success', `Booking dates updated successfully.${msgSuffix}`);
+        }
+
         await fetchBookingDetails(selectedBookingDetails.name);
       } else {
-        const text = await res.text();
-        showToast('error', `Failed to update dates: ${text}`);
+        // Backend validation thrown error (e.g. from validate_booking_dates)
+        let errJson = null;
+        let rawText = '';
+        try {
+          rawText = await res.text();
+          errJson = JSON.parse(rawText);
+        } catch (_) { }
+
+        const cleanMsg = extractBackendErrorMessage(errJson, rawText);
+
+        // Show backend error message in Modal (not alert / raw message)
+        setAlertModal({
+          show: true,
+          title: 'Booking Date Validation',
+          message: cleanMsg
+        });
       }
     } catch (err) {
-      showToast('error', `Error updating dates: ${err.message}`);
+      setAlertModal({
+        show: true,
+        title: 'Booking Date Update Error',
+        message: err.message || 'An error occurred while updating booking dates.'
+      });
     } finally {
       setUpdatingDates(false);
     }
@@ -2869,21 +3188,13 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
             const json = await res.json();
             savedDoc = json.data;
           } else {
-            let errorDetail = 'Failed to create booking document on ERPNext';
+            let errJson = null;
+            let rawText = '';
             try {
-              const errJson = await res.json();
-              if (errJson._server_messages) {
-                const messages = JSON.parse(errJson._server_messages);
-                errorDetail = messages.map(m => {
-                  try {
-                    const parsed = JSON.parse(m);
-                    return parsed.message || parsed;
-                  } catch {
-                    return String(m);
-                  }
-                }).join(', ');
-              }
+              rawText = await res.text();
+              errJson = JSON.parse(rawText);
             } catch { }
+            const errorDetail = extractBackendErrorMessage(errJson, rawText);
             throw new Error(errorDetail);
           }
         }
@@ -2910,8 +3221,14 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
         setShowAddModal(false);
       }
     } catch (err) {
-      setErrorMsg(err.message || 'Error creating booking document.');
-      showToast('error', err.message || 'Error creating booking document.');
+      const msg = err.message || 'Error creating booking document.';
+      setErrorMsg(msg);
+      setAlertModal({
+        show: true,
+        title: 'Booking Validation Error',
+        message: msg
+      });
+      showToast('error', msg);
     } finally {
       setSubmitting(false);
     }
@@ -2926,18 +3243,35 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
   // Filtering on local state
   const filteredBookings = bookings.filter(b => {
     const term = searchTerm.toLowerCase();
+    const hasMatchingItem = Array.isArray(b.booking_item) && b.booking_item.some(item =>
+      (item.item_code && item.item_code.toLowerCase().includes(term)) ||
+      (item.item_name && item.item_name.toLowerCase().includes(term))
+    );
     const matchSearch =
       (b.name && b.name.toLowerCase().includes(term)) ||
       (b.customer && b.customer.toLowerCase().includes(term)) ||
       (b.customer_name && b.customer_name.toLowerCase().includes(term)) ||
       (b.customer_email && b.customer_email.toLowerCase().includes(term)) ||
+      (b.customer_phone_no && b.customer_phone_no.toLowerCase().includes(term)) ||
       (b.property && b.property.toLowerCase().includes(term)) ||
       (b.country && b.country.toLowerCase().includes(term)) ||
       (b.quotation && String(b.quotation).toLowerCase().includes(term)) ||
       (b.custom_quotation && String(b.custom_quotation).toLowerCase().includes(term)) ||
-      (b.quotation_id && String(b.quotation_id).toLowerCase().includes(term));
+      (b.custom_contract && String(b.custom_contract).toLowerCase().includes(term)) ||
+      (b.quotation_id && String(b.quotation_id).toLowerCase().includes(term)) ||
+      (b.workflow_state && b.workflow_state.toLowerCase().includes(term)) ||
+      hasMatchingItem;
 
-    const matchStatus = statusFilter === 'All' || b.status === statusFilter || b.payment_status === statusFilter;
+    const bStatus = b.workflow_state || b.status || (b.docstatus === 1 ? 'Approved' : 'Draft');
+    const matchStatus =
+      statusFilter === 'All' ||
+      bStatus === statusFilter ||
+      b.workflow_state === statusFilter ||
+      b.status === statusFilter ||
+      b.payment_status === statusFilter ||
+      (statusFilter === 'Confirmed' && (bStatus === 'Approved' || bStatus === 'Confirmed' || b.docstatus === 1)) ||
+      (statusFilter === 'Pending' && (bStatus === 'Request For Approval' || bStatus === 'Draft' || b.docstatus === 0));
+
     const matchType = typeFilter === 'All' || b.booking_type === typeFilter;
 
     return matchSearch && matchStatus && matchType;
@@ -2954,37 +3288,23 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
   const currentItems = filteredBookings.slice(indexOfFirstItem, indexOfLastItem);
 
   const fetchBookingDetailsSilently = async (id) => {
-    if (!erpnextConfig || !erpnextConfig.url) return;
+    if (!erpnextConfig || !erpnextConfig.url || !id || fetchedDetailsRef.current.has(id)) return;
+    fetchedDetailsRef.current.add(id);
     try {
-      let details = null;
-      try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${id}`, {
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        if (res.ok) {
-          const json = await res.json();
-          details = json.data;
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(id)}`, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const details = json.data;
+        if (details) {
+          const normalizedItems = normalizeBookingItems(details);
+          setBookings(prev => prev.map(b => {
+            const bookingId = b.name || b.id;
+            return bookingId === id ? { ...b, ...details, booking_item: normalizedItems } : b;
+          }));
         }
-      } catch (resourceErr) {
-        try {
-          const res = await fetch(`${erpnextConfig.url}/api/method/erpnext.api.booking.get_booking_details?booking_id=${id}`, {
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' }
-          });
-          if (res.ok) {
-            const json = await res.json();
-            details = json.message || json.data;
-          }
-        } catch (customErr) { }
-      }
-
-      if (details) {
-        const normalizedItems = normalizeBookingItems(details);
-        setBookings(prev => prev.map(b => {
-          const bookingId = b.name || b.id;
-          return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
-        }));
       }
     } catch (err) {
       console.warn('Silent fetch failed:', err);
@@ -2995,11 +3315,11 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     if (!currentItems || currentItems.length === 0) return;
     currentItems.forEach(b => {
       const id = b.name || b.id;
-      if (id && !b.booking_item) {
+      if (id && !b.booking_item && !fetchedDetailsRef.current.has(id)) {
         fetchBookingDetailsSilently(id);
       }
     });
-  }, [currentPage, bookings]);
+  }, [currentItems]);
 
   const isBookingApproved = selectedBookingDetails && (
     selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.workflow_state === 'Approved'
@@ -3202,11 +3522,13 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="form-select"
-            style={{ minWidth: 120, fontSize: 12 }}
+            style={{ minWidth: 140, fontSize: 12 }}
           >
             <option value="All">All Statuses</option>
-            <option value="Confirmed">Confirmed</option>
-            <option value="Pending">Pending</option>
+            <option value="Confirmed">Approved / Confirmed</option>
+            <option value="Request For Approval">Request For Approval</option>
+            <option value="Waiting For Contract Submit">Waiting For Contract</option>
+            <option value="Pending">Draft / Pending</option>
             <option value="Cancelled">Cancelled</option>
             <option value="Paid">Payment: Paid</option>
             <option value="Partially Paid">Payment: Partial</option>
@@ -3279,31 +3601,47 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     </td>
                     <td>
                       {Array.isArray(b.booking_item) && b.booking_item.length > 0 ? (
-                        <span
-                          className="badge badge-secondary"
-                          style={{
-                            whiteSpace: "normal",
-                            textTransform: "none",
-                            lineHeight: 1.3
-                          }}
-                        >
-                          {b.booking_item[0].item_code}
-                        </span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                          <span
+                            className="badge badge-secondary"
+                            style={{
+                              whiteSpace: "normal",
+                              textTransform: "none",
+                              lineHeight: 1.3
+                            }}
+                          >
+                            {b.booking_item[0].item_name || b.booking_item[0].item_code}
+                          </span>
+                          {b.booking_item.length > 1 && (
+                            <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>
+                              +{b.booking_item.length - 1} more
+                            </span>
+                          )}
+                        </div>
                       ) : b.property ? (
                         <span className="badge badge-secondary" style={{ textTransform: 'none' }}>
                           {b.property}
                         </span>
+                      ) : b.quotation ? (
+                        <span className="badge badge-secondary" style={{ textTransform: 'none', opacity: 0.8 }}>
+                          {b.quotation}
+                        </span>
                       ) : (
-                        <span style={{ color: "var(--text-muted)" }}>Not specified</span>
+                        <span style={{ color: "var(--text-muted)" }}>{loadingList ? 'Syncing...' : 'Not specified'}</span>
                       )}
-                    </td>           <td>
+                    </td>
+                    <td>
                       <span className="badge badge-secondary" style={{ textTransform: 'none' }}>
                         {b.custom_contract || b.contract || 'N/A'}
                       </span>
                     </td>
                     <td>
-                      <span className={`badge ${b.status === 'Confirmed' ? 'badge-success' : b.status === 'Cancelled' ? 'badge-danger' : b.status === 'Pending'}`}>
-                        {b.status || 'Pending'}
+                      <span className={`badge ${(b.workflow_state === 'Approved' || b.status === 'Confirmed' || (b.docstatus === 1 && !b.workflow_state)) ? 'badge-success' :
+                          (b.workflow_state === 'Cancelled' || b.status === 'Cancelled' || b.docstatus === 2) ? 'badge-danger' :
+                            (b.workflow_state === 'Request For Approval' || b.workflow_state === 'Waiting For Contract Submit') ? 'badge-warning' :
+                              'badge-info'
+                        }`}>
+                        {b.workflow_state || b.status || (b.docstatus === 1 ? 'Approved' : 'Draft')}
                       </span>
                     </td>
                     <td style={{ fontWeight: 600 }}>
@@ -3429,7 +3767,9 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                       <img src={homeImg} alt="Property" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <strong style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>{selectedBookingDetails.property || 'Booking Details'}</strong>
+                      <strong style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
+                        {selectedBookingDetails.property || (selectedBookingDetails.booking_item && selectedBookingDetails.booking_item[0] && (selectedBookingDetails.booking_item[0].item_name || selectedBookingDetails.booking_item[0].item_code)) || selectedBookingDetails.name || 'Booking Details'}
+                      </strong>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
                         <span style={{
                           fontSize: '10.5px',
@@ -3448,11 +3788,11 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                           fontWeight: 700,
                           padding: '2px 8px',
                           borderRadius: '12px',
-                          background: '#e0f2fe',
-                          color: '#0369a1',
-                          border: '1px solid rgba(3, 105, 161, 0.15)'
+                          background: (selectedBookingDetails.workflow_state === 'Approved' || selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.docstatus === 1) ? '#e6f4ea' : '#fffbeb',
+                          color: (selectedBookingDetails.workflow_state === 'Approved' || selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.docstatus === 1) ? '#137333' : '#b45309',
+                          border: (selectedBookingDetails.workflow_state === 'Approved' || selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.docstatus === 1) ? '1px solid rgba(19, 115, 51, 0.15)' : '1px solid rgba(180, 83, 9, 0.15)'
                         }}>
-                          Status: {selectedBookingDetails.workflow_state || selectedBookingDetails.status || 'Pending'}
+                          Status: {selectedBookingDetails.workflow_state || selectedBookingDetails.status || (selectedBookingDetails.docstatus === 1 ? 'Approved' : 'Draft')}
                         </span>
                       </div>
                     </div>
@@ -3532,18 +3872,55 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                         )}
 
                         {selectedBookingDetails.quotation && (
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <FileText size={14} style={{ color: '#10b981' }} />
-                              <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Quotation Id</span>
+                          <>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <FileText size={14} style={{ color: '#10b981' }} />
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Quotation Id</span>
+                              </div>
+                              <strong style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)' }}>{selectedBookingDetails.quotation}</strong>
                             </div>
-                            <strong style={{ fontSize: '12px', color: 'var(--text-primary, #0f172a)' }}>{selectedBookingDetails.quotation}</strong>
-                          </div>
+
+                            {(selectedBookingDetails.quotation_start_date || selectedBookingDetails.quotation_end_date) && (
+                              <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                borderBottom: '1px solid #f1f5f9',
+                                paddingBottom: '6px',
+                                background: '#f8fafc',
+                                padding: '6px 8px',
+                                borderRadius: '6px'
+                              }}>
+                                <span style={{ fontSize: '10.5px', color: 'var(--text-muted, #6b7280)', fontWeight: 600 }}>Quotation Period</span>
+                                <span style={{ fontSize: '11px', color: '#0f172a', fontWeight: 600 }}>
+                                  {selectedBookingDetails.quotation_start_date || '—'} to {selectedBookingDetails.quotation_end_date || '—'}
+                                </span>
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
 
                       {/* Right Column: Editable / Read-only Dates */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', justifyContent: 'center' }}>
+                        {isWaitingForContractSubmit && (selectedBookingDetails.quotation_start_date || selectedBookingDetails.quotation_end_date) && (
+                          <div style={{
+                            background: '#f0fdf4',
+                            border: '1px solid #bbf7d0',
+                            borderRadius: '8px',
+                            padding: '6px 10px',
+                            fontSize: '10.5px',
+                            color: '#166534',
+                            lineHeight: 1.4
+                          }}>
+                            <div style={{ fontWeight: 700 }}>
+                              Quotation Date Rules:
+                            </div>
+                            <div>Start date must be within <strong>{selectedBookingDetails.quotation_start_date || 'start'}</strong> &amp; <strong>{selectedBookingDetails.quotation_end_date || 'end'}</strong></div>
+                            <div style={{ fontSize: '9.5px', color: '#15803d', marginTop: 2 }}>Min booking length: 1 Year (End Date auto-adjusts)</div>
+                          </div>
+                        )}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                           <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted, #6b7280)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <Calendar size={13} style={{ color: '#10b981' }} />
@@ -3827,7 +4204,14 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                                   <div style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                                     {cellIcon}
                                   </div>
-                                  <span>{item.item_name || item.item_code}</span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                    <span>{item.item_name || item.item_code}</span>
+                                    {parseFloat(item.discount_amount || 0) > 0 && (
+                                      <span style={{ fontSize: '10px', color: '#d97706', background: '#fffbeb', border: '1px solid #fef3c7', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                                        Disc: -${parseFloat(item.discount_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               </td>
                               <td style={{ padding: '12px 14px', color: '#6b7280', fontWeight: 500 }}>{item.uom || 'Month'}</td>
@@ -3873,14 +4257,32 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                         ${parseFloat(selectedBookingDetails.net_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </strong>
                     </div>
-                    {selectedBookingDetails.discount_amount !== undefined && selectedBookingDetails.discount_amount !== null && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
-                        <span style={{ color: '#d97706', fontWeight: 500 }}>Discount Amount:</span>
-                        <strong style={{ color: '#d97706', fontSize: '12px', fontWeight: 600 }}>
-                          - ${parseFloat(selectedBookingDetails.discount_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </strong>
-                      </div>
-                    )}
+                    {(() => {
+                      // Calculate Discount Amount by summing discount_amount across all items in booking_item
+                      const itemsDiscount = Array.isArray(selectedBookingDetails.booking_item)
+                        ? selectedBookingDetails.booking_item.reduce((sum, item) => {
+                            const val = parseFloat(
+                              item?.discount_amount !== undefined && item?.discount_amount !== null && item?.discount_amount !== ''
+                                ? item.discount_amount
+                                : (item?.deposit_amount ?? item?.diposite_amount ?? item?.discount ?? 0)
+                            );
+                            return sum + (isNaN(val) ? 0 : val);
+                          }, 0)
+                        : 0;
+
+                      const calculatedDiscount = itemsDiscount > 0
+                        ? itemsDiscount
+                        : (parseFloat(selectedBookingDetails.discount_amount || selectedBookingDetails.quotation_discount_amount || 0) || 0);
+
+                      return (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                          <span style={{ color: '#d97706', fontWeight: 500 }}>Discount Amount:</span>
+                          <strong style={{ color: '#d97706', fontSize: '12px', fontWeight: 600 }}>
+                            - ${calculatedDiscount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </strong>
+                        </div>
+                      );
+                    })()}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
                       <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Taxes & Charges:</span>
                       <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '12px', fontWeight: 600 }}>
@@ -3895,7 +4297,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
-                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Deposit Received:</span>
+                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Deposit Amount:</span>
                       <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '13px', fontWeight: 700 }}>
                         ${parseFloat(selectedBookingDetails.advance_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </strong>
@@ -3965,7 +4367,8 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                 )}
 
                 <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                  <button
+                  {/* Hidden: Print button preserved per request */}
+                  {/* <button
                     className="btn btn-primary"
                     onClick={() => {
                       if (selectedBookingDetails?.status === 'Cancelled' || selectedBookingDetails?.workflow_state === 'Cancelled') {
@@ -4046,7 +4449,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                   >
                     <Printer size={14} />
                     <span>Print Lease Agreement</span>
-                  </button>
+                  </button> */}
 
                   {/* Approve Booking Action */}
                   {!isBookingApproved && (
@@ -4462,6 +4865,131 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                 disabled={approving}
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Backend Validation / Notice Modal */}
+      {alertModal.show && (
+        <div
+          className="modal-overlay"
+          style={{ zIndex: 10000 }}
+          onClick={() => setAlertModal({ show: false, title: '', message: '' })}
+        >
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: 520,
+              borderRadius: '14px',
+              overflow: 'hidden',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.25), 0 10px 10px -5px rgba(0, 0, 0, 0.1)',
+              border: '1px solid #fecdd3'
+            }}
+          >
+            {/* Modal Header */}
+            <div
+              className="modal-header"
+              style={{
+                background: '#fff1f2',
+                borderBottom: '1px solid #fecdd3',
+                padding: '16px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: '50%',
+                    background: '#ffe4e6',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0
+                  }}
+                >
+                  <AlertCircle size={22} style={{ color: '#e11d48' }} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#9f1239' }}>
+                    {alertModal.title || 'Validation Error'}
+                  </h3>
+                  <span style={{ fontSize: '11px', color: '#be123c', fontWeight: 500 }}>
+                    ERPNext Backend Validation Notice
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAlertModal({ show: false, title: '', message: '' })}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#9f1239',
+                  cursor: 'pointer',
+                  fontSize: 24,
+                  lineHeight: 1,
+                  padding: 4
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="modal-body" style={{ padding: '20px', background: '#ffffff' }}>
+              <div
+                style={{
+                  background: '#fff5f5',
+                  border: '1px solid #fed7d7',
+                  borderLeft: '4px solid #e11d48',
+                  borderRadius: '8px',
+                  padding: '14px 16px',
+                  color: '#1f2937',
+                  fontSize: '13px',
+                  lineHeight: '1.6',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  fontWeight: 500
+                }}
+              >
+                {alertModal.message}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div
+              className="modal-footer"
+              style={{
+                padding: '12px 20px',
+                background: '#f8fafc',
+                borderTop: '1px solid #f1f5f9',
+                display: 'flex',
+                justifyContent: 'flex-end'
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setAlertModal({ show: false, title: '', message: '' })}
+                className="btn btn-primary"
+                style={{
+                  background: '#e11d48',
+                  borderColor: '#e11d48',
+                  color: '#ffffff',
+                  padding: '8px 22px',
+                  borderRadius: '8px',
+                  fontWeight: 600,
+                  fontSize: '13px',
+                  cursor: 'pointer'
+                }}
+              >
+                Got It
               </button>
             </div>
           </div>

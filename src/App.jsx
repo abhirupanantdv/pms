@@ -3167,14 +3167,34 @@ export default function App() {
 
         // 1. Fetch Property Groups
         try {
-          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/method/erpnext.api.get_property_groups`, {
-            credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json'
+          const [res, pgRes] = await Promise.allSettled([
+            fetch(`${ERPNEXT_CONFIG.url}/api/method/erpnext.api.get_property_groups`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            }),
+            fetch(`${ERPNEXT_CONFIG.url}/api/resource/Property%20Group?fields=["name","legal_description"]&limit_page_length=0`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            })
+          ]);
+
+          const legalDescMap = {};
+          if (pgRes.status === 'fulfilled' && pgRes.value.ok) {
+            try {
+              const pgJson = await pgRes.value.json();
+              const pgList = pgJson.data || [];
+              pgList.forEach(item => {
+                if (item.name && item.legal_description) {
+                  legalDescMap[item.name] = item.legal_description;
+                }
+              });
+            } catch (e) {
+              console.warn('Error parsing Property Group legal_description list:', e);
             }
-          });
-          if (res.ok) {
-            const data = await res.json();
+          }
+
+          if (res.status === 'fulfilled' && res.value.ok) {
+            const data = await res.value.json();
             const list = data.message || data;
             if (Array.isArray(list) && list.length > 0) {
               finalProps = list.map(p => {
@@ -3224,8 +3244,10 @@ export default function App() {
                   area,
                   listedOnline: p.listed_online || false,
                   occupancy,
-                  land_description: p.land_description || 'Standard Land Plot',
+                  land_description: p.land_description || '',
+                  legal_description: p.legal_description || legalDescMap[p.name] || '',
                   lease_end_date: p.lease_end_date || '2026-12-31',
+                  years_remaining: p.years_remaining !== undefined ? p.years_remaining : '',
                   image: p.image || null
                 };
               });
@@ -3235,7 +3257,7 @@ export default function App() {
         } catch (err) {
           console.warn('ERPNext API get_property_groups fetch failed, trying standard resource:', err);
           try {
-            const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Property%20Group?fields=["name","land_and_building_type","locality","district","country","land_description","lease_start_date","lease_end_date","no_of_floors","image"]&limit_page_length=200`, {
+            const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Property%20Group?fields=["name","land_and_building_type","locality","district","country","land_description","legal_description","lease_start_date","lease_end_date","years_remaining","no_of_floors","image"]&limit_page_length=200`, {
               credentials: 'include',
               headers: {
                 'Content-Type': 'application/json'
@@ -3286,8 +3308,10 @@ export default function App() {
                     area,
                     listedOnline: p.listed_online || false,
                     occupancy: Math.floor(65 + Math.random() * 31),
-                    land_description: p.land_description || 'Standard Land Plot',
+                    land_description: p.land_description || '',
+                    legal_description: p.legal_description || '',
                     lease_end_date: p.lease_end_date || '2026-12-31',
+                    years_remaining: p.years_remaining !== undefined ? p.years_remaining : '',
                     image: p.image || null
                   };
                 });
@@ -5464,7 +5488,7 @@ export default function App() {
 
 
   const handleGoToBooking = (quotationDoc) => {
-    const quotationId = quotationDoc?.quotation || quotationDoc?.name || quotationDoc?.quotation_id || '';
+    const quotationId = quotationDoc?.booking_id || quotationDoc?.quotation || quotationDoc?.name || quotationDoc?.quotation_id || '';
     setBookingSearchFromQuotation(quotationId);
     setCurrentTab('bookings');
   };

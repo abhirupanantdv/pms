@@ -2228,7 +2228,7 @@ function LinkField({ label, doctype, value, onChange, required, erpnextConfig, p
           setOptions(list);
         }
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [doctype, erpnextConfig]);
@@ -2349,6 +2349,36 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     fetchDocTypeFields();
   }, [erpnextConfig]);
 
+  // Map of legal_description directly fetched from Property Group DocType
+  const [legalDescriptions, setLegalDescriptions] = useState({});
+
+  // Fetch legal_description for each Property Group directly from DocType
+  useEffect(() => {
+    if (!erpnextConfig || !erpnextConfig.url) return;
+    const fetchLegalDescriptions = async () => {
+      try {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Property%20Group?fields=["name","legal_description"]&limit_page_length=0`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (res.ok) {
+          const json = await res.json();
+          const items = json.data || [];
+          const map = {};
+          items.forEach(item => {
+            if (item.name && item.legal_description) {
+              map[item.name] = item.legal_description;
+            }
+          });
+          setLegalDescriptions(prev => ({ ...prev, ...map }));
+        }
+      } catch (err) {
+        console.warn('Failed to fetch legal_description from Property Group doctype:', err);
+      }
+    };
+    fetchLegalDescriptions();
+  }, [erpnextConfig, properties]);
+
   // Form states
   const [name, setName] = useState('');
   // const [type, setType] = useState('residential');
@@ -2408,14 +2438,50 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     { fieldname: 'internal_tenant', label: 'Internal Tenant', fieldtype: 'Text', placeholder: 'e.g. CFL & MH...' }
   ];
 
-  const calculateYearsRemaining = (endDateStr) => {
+  const calculateYearsRemaining = (endDateStr, startDateStr) => {
     if (!endDateStr) return '';
-    const endDate = new Date(endDateStr);
-    const today = new Date();
-    if (isNaN(endDate.getTime())) return '';
 
-    const diffYears = endDate.getFullYear() - today.getFullYear();
-    return String(diffYears < 0 ? 0 : diffYears);
+    const parseDate = (str) => {
+      if (!str) return null;
+      if (str instanceof Date) return isNaN(str.getTime()) ? null : str;
+      const s = String(str).trim();
+      if (!s) return null;
+
+      // Handle DD-MM-YYYY or DD/MM/YYYY
+      const dmyMatch = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+      if (dmyMatch) {
+        const day = parseInt(dmyMatch[1], 10);
+        const month = parseInt(dmyMatch[2], 10) - 1;
+        const year = parseInt(dmyMatch[3], 10);
+        return new Date(year, month, day);
+      }
+
+      // Handle YYYY-MM-DD or YYYY/MM/DD
+      const ymdMatch = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+      if (ymdMatch) {
+        const year = parseInt(ymdMatch[1], 10);
+        const month = parseInt(ymdMatch[2], 10) - 1;
+        const day = parseInt(ymdMatch[3], 10);
+        return new Date(year, month, day);
+      }
+
+      const parsed = new Date(s);
+      return isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    const endDate = parseDate(endDateStr);
+    if (!endDate) return '';
+
+    const today = new Date();
+    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const endMidnight = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+
+    const diffMs = endMidnight.getTime() - todayMidnight.getTime();
+    if (diffMs <= 0) return '0';
+
+    const diffDays = diffMs / (1000 * 60 * 60 * 24);
+    const remainingYears = Math.max(0, Math.round(diffDays / 365.25));
+    return String(remainingYears);
   };
 
   const getFieldValue = (fieldname) => {
@@ -2460,10 +2526,17 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       case 'locality': setLocality(value); break;
       case 'legal_description': setLegalDescription(value); break;
       case 'land_description': setLandDescription(value); break;
-      case 'lease_start_date': setLeaseStartDate(value); break;
+      case 'lease_start_date': {
+        setLeaseStartDate(value);
+        if (leaseEndDate) {
+          const calculated = calculateYearsRemaining(leaseEndDate, value);
+          if (calculated !== '') setYearsRemaining(String(calculated));
+        }
+        break;
+      }
       case 'lease_end_date': {
         setLeaseEndDate(value);
-        const calculated = calculateYearsRemaining(value);
+        const calculated = calculateYearsRemaining(value, leaseStartDate);
         setYearsRemaining(calculated !== '' ? String(calculated) : '');
         break;
       }
@@ -2476,6 +2549,16 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       default: break;
     }
   };
+
+  // Auto-calculate Years Remaining whenever the Property Group modal is open and lease end date is set
+  useEffect(() => {
+    if (showAddModal && leaseEndDate) {
+      const calculated = calculateYearsRemaining(leaseEndDate, leaseStartDate);
+      if (calculated !== '') {
+        setYearsRemaining(String(calculated));
+      }
+    }
+  }, [showAddModal, leaseEndDate, leaseStartDate]);
 
   const renderPropertyField = (field) => {
     const value = getFieldValue(field.fieldname);
@@ -2575,12 +2658,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
   };
 
   const unitFields = [
-    { fieldname: 'item_code', label: 'Unit Code / ID (becomes Document ID)', fieldtype: 'Data', required: true, placeholder: 'e.g. 23unit' },
+    { fieldname: 'item_code', label: 'Unit Code /Unit ID', fieldtype: 'Data', required: true, placeholder: 'e.g. 23unit' },
     { fieldname: 'item_name', label: 'Unit Name', fieldtype: 'Data', required: true, placeholder: 'e.g. 23unit' },
-    { fieldname: 'item_group', label: 'Item Group', fieldtype: 'Select', required: true, options: ['Commercial', 'Residential', 'Retail'] },
+    { fieldname: 'item_group', label: 'Unit Group', fieldtype: 'Select', required: true, options: ['Commercial', 'Residential', 'Retail'] },
     { fieldname: 'custom_floor', label: 'Floor', fieldtype: 'Select', required: true, options: ['Ground', '1st', '2nd', '3rd', '4th', 'Unspecified'] },
-    { fieldname: 'standard_rate', label: 'Standard Rate (Rent per Month)', fieldtype: 'Float', required: true, placeholder: 'e.g. 0' },
-    { fieldname: 'valuation_rate', label: 'Valuation Rate', fieldtype: 'Float', required: true, placeholder: 'e.g. 700' },
+    { fieldname: 'standard_rate', label: 'Standard Rate', fieldtype: 'Float', required: true, placeholder: 'e.g. 700' },
     { fieldname: 'custom_7average_carpet_area_of_units', label: 'Average Carpet Area of Units (Sq Ft)', fieldtype: 'Int', required: true, placeholder: 'e.g. 90' },
     { fieldname: 'custom_is_recomended_', label: 'Is Recommended', fieldtype: 'Select', required: true, options: ['No', 'Yes'] },
     { fieldname: 'stock_uom', label: 'Stock UOM', fieldtype: 'Link', doctype: 'UOM', required: true }
@@ -2592,8 +2674,8 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       case 'item_name': return unitName;
       case 'item_group': return unitItemGroup;
       case 'custom_floor': return unitFloor;
-      case 'standard_rate': return unitRent;
-      case 'valuation_rate': return unitValuationRate;
+      case 'standard_rate': return unitRent || unitValuationRate;
+      case 'valuation_rate': return unitValuationRate || unitRent;
       case 'custom_7average_carpet_area_of_units': return unitArea;
       case 'custom_is_recomended_': return unitIsRecommended;
       case 'stock_uom': return unitStockUom;
@@ -2607,8 +2689,14 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       case 'item_name': setUnitName(value); break;
       case 'item_group': setUnitItemGroup(value); break;
       case 'custom_floor': setUnitFloor(value); break;
-      case 'standard_rate': setUnitRent(value); break;
-      case 'valuation_rate': setUnitValuationRate(value); break;
+      case 'standard_rate':
+        setUnitRent(value);
+        setUnitValuationRate(value);
+        break;
+      case 'valuation_rate':
+        setUnitValuationRate(value);
+        setUnitRent(value);
+        break;
       case 'custom_7average_carpet_area_of_units': setUnitArea(value); break;
       case 'custom_is_recomended_': setUnitIsRecommended(value); break;
       case 'stock_uom': setUnitStockUom(value); break;
@@ -2891,9 +2979,20 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     setNoOfFloors(p.no_of_floors !== undefined ? p.no_of_floors : (p.noOfFloors || ''));
     setLocality(p.locality || p.address || '');
     setPropertyArea(p.property_area !== undefined ? p.property_area : (p.area || ''));
-    setLeaseStartDate(p.lease_start_date || p.leaseStartDate || '');
-    setLeaseEndDate(p.lease_end_date || p.leaseEndDate || '');
-    setYearsRemaining(p.years_remaining !== undefined ? p.years_remaining : (p.yearsRemaining || ''));
+    const startD = p.lease_start_date || p.leaseStartDate || '';
+    const endD = p.lease_end_date || p.leaseEndDate || '';
+    setLeaseStartDate(startD);
+    setLeaseEndDate(endD);
+    const calculatedYears = calculateYearsRemaining(endD, startD);
+    if (calculatedYears !== '') {
+      setYearsRemaining(calculatedYears);
+    } else if (p.years_remaining !== undefined && p.years_remaining !== null && p.years_remaining !== '') {
+      setYearsRemaining(String(p.years_remaining));
+    } else if (p.yearsRemaining) {
+      setYearsRemaining(String(p.yearsRemaining));
+    } else {
+      setYearsRemaining('');
+    }
     setLegalDescription(p.legal_description || p.legalDescription || '');
     setLandDescription(p.land_description || p.landDescription || '');
     setExternalTenant(p.external_tenant || p.externalTenant || '');
@@ -2926,6 +3025,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       const primaryAttachment = propertyImages.length > 0
         ? (typeof propertyImages[0] === 'string' ? propertyImages[0] : (propertyImages[0].image || propertyImages[0].file_url || ''))
         : '';
+      const effectiveYearsRemaining = yearsRemaining || calculateYearsRemaining(leaseEndDate, leaseStartDate) || undefined;
 
       const payload = {
         property_owner: propertyOwner,
@@ -2937,6 +3037,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         land_description: landDescription || undefined,
         lease_start_date: leaseStartDate || undefined,
         lease_end_date: leaseEndDate || undefined,
+        years_remaining: effectiveYearsRemaining,
         property_area: Number(propertyArea || area || 0),
         no_of_floors: isNaN(numNoOfFloors) ? undefined : numNoOfFloors,
         external_tenant: externalTenant || undefined,
@@ -2989,16 +3090,23 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
             name: pId,
             address: locality || address,
             area: Number(propertyArea || area || 0),
-            noOfFloors: isNaN(numNoOfFloors) ? undefined : numNoOfFloors,
-            landAndBuildingType,
+            no_of_floors: isNaN(numNoOfFloors) ? undefined : numNoOfFloors,
+            land_and_building_type: landAndBuildingType,
+            years_remaining: effectiveYearsRemaining,
+            yearsRemaining: effectiveYearsRemaining,
             attachments: primaryAttachment,
             custom_attachments: primaryAttachment,
             image: primaryAttachment,
             gallery: propertyImages.map(img => ({ image: typeof img === 'string' ? img : (img.image || img.file_url) }))
           };
+          delete updatedDoc.noOfFloors;
+          delete updatedDoc.landAndBuildingType;
 
           setSelectedProp(updatedDoc);
           setDetailedProp(updatedDoc);
+          if (legalDescription) {
+            setLegalDescriptions(prev => ({ ...prev, [pId]: legalDescription }));
+          }
           setShowAddModal(false);
           setIsEditingProperty(false);
           clearPropertyGroupForm();
@@ -3018,15 +3126,22 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           name: pId,
           address: locality || address,
           area: Number(propertyArea || area || 0),
-          noOfFloors: isNaN(numNoOfFloors) ? undefined : numNoOfFloors,
-          landAndBuildingType,
+          no_of_floors: isNaN(numNoOfFloors) ? undefined : numNoOfFloors,
+          land_and_building_type: landAndBuildingType,
+          years_remaining: effectiveYearsRemaining,
+          yearsRemaining: effectiveYearsRemaining,
           attachments: primaryAttachment,
           custom_attachments: primaryAttachment,
           image: primaryAttachment,
           gallery: propertyImages.map(img => ({ image: typeof img === 'string' ? img : (img.image || img.file_url) }))
         };
+        delete updatedDoc.noOfFloors;
+        delete updatedDoc.landAndBuildingType;
         setSelectedProp(updatedDoc);
         setDetailedProp(updatedDoc);
+        if (legalDescription) {
+          setLegalDescriptions(prev => ({ ...prev, [pId]: legalDescription }));
+        }
         setShowAddModal(false);
         setIsEditingProperty(false);
         clearPropertyGroupForm();
@@ -3052,6 +3167,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       const primaryAttachment = propertyImages.length > 0
         ? (typeof propertyImages[0] === 'string' ? propertyImages[0] : (propertyImages[0].image || propertyImages[0].file_url || ''))
         : '';
+      const effectiveYearsRemaining = yearsRemaining || calculateYearsRemaining(leaseEndDate, leaseStartDate) || undefined;
 
       onAddProperty({
         id: finalName,
@@ -3072,6 +3188,8 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         referenceNo,
         leaseStartDate,
         leaseEndDate,
+        yearsRemaining: effectiveYearsRemaining,
+        years_remaining: effectiveYearsRemaining,
         noOfFloors: Number(noOfFloors) || undefined,
         latitude,
         longitude,
@@ -3093,16 +3211,12 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     e.preventDefault();
     if (!selectedProp) return;
 
-    const rentNum = parseFloat(unitRent || 0);
-    const valRateNum = parseFloat(unitValuationRate || 0);
+    const rentNum = parseFloat(unitRent || unitValuationRate || 0) || 0;
+    const rateNum = parseFloat(unitRent || unitValuationRate || 0);
     const areaNum = parseInt(unitArea || 0, 10);
 
-    if (isNaN(rentNum) || rentNum < 0) {
-      setAlertState({ show: true, success: false, message: 'Standard Rate (Rent) should not be negative.' });
-      return;
-    }
-    if (isNaN(valRateNum) || valRateNum < 0) {
-      setAlertState({ show: true, success: false, message: 'Valuation Rate should not be negative.' });
+    if (isNaN(rateNum) || rateNum < 0) {
+      setAlertState({ show: true, success: false, message: 'Standard Rate should not be negative.' });
       return;
     }
     if (isNaN(areaNum) || areaNum <= 0) {
@@ -3124,8 +3238,8 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
             item_name: unitName,
             item_group: unitItemGroup,
             custom_floor: unitFloor,
-            standard_rate: rentNum,
-            valuation_rate: valRateNum,
+            standard_rate: rateNum,
+            valuation_rate: rateNum,
             custom_7average_carpet_area_of_units: areaNum,
             custom_is_recomended_: unitIsRecommended,
             stock_uom: unitStockUom,
@@ -3158,8 +3272,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
             ...u,
             unit_name: unitName,
             custom_floor: unitFloor,
-            rent: rentNum,
-            valuation_rate: valRateNum,
+            rent: rateNum,
+            standard_rate: rateNum,
+            valuation_rate: rateNum,
             area: areaNum,
             item_group: unitItemGroup,
             custom_is_recomended_: unitIsRecommended,
@@ -3174,8 +3289,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
               ...(prev[unitCode] || {}),
               item_name: unitName,
               custom_floor: unitFloor,
-              standard_rate: rentNum,
-              valuation_rate: valRateNum,
+              standard_rate: rateNum,
+              valuation_rate: rateNum,
+              rent: rateNum,
               custom_7average_carpet_area_of_units: areaNum,
               area: areaNum,
               custom_is_recomended_: unitIsRecommended,
@@ -3202,8 +3318,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           ...u,
           unit_name: unitName,
           custom_floor: unitFloor,
-          rent: rentNum,
-          valuation_rate: valRateNum,
+          rent: rateNum,
+          standard_rate: rateNum,
+          valuation_rate: rateNum,
           area: areaNum,
           item_group: unitItemGroup,
           custom_is_recomended_: unitIsRecommended,
@@ -3217,8 +3334,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
             ...(prev[unitCode] || {}),
             item_name: unitName,
             custom_floor: unitFloor,
-            standard_rate: rentNum,
-            valuation_rate: valRateNum,
+            standard_rate: rateNum,
+            valuation_rate: rateNum,
+            rent: rateNum,
             custom_7average_carpet_area_of_units: areaNum,
             area: areaNum,
             custom_is_recomended_: unitIsRecommended,
@@ -3248,8 +3366,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       unit_name: unitName,
       custom_floor: unitFloor,
       status: 'Available',
-      rent: rentNum,
-      valuation_rate: valRateNum,
+      rent: rateNum,
+      standard_rate: rateNum,
+      valuation_rate: rateNum,
       area: areaNum,
       item_group: unitItemGroup,
       custom_is_recomended_: unitIsRecommended,
@@ -3268,8 +3387,8 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           item_group: unitItemGroup,
           custom_property_group: selectedProp.id,
           custom_floor: newUnit.custom_floor,
-          standard_rate: rentNum,
-          valuation_rate: valRateNum,
+          standard_rate: rateNum,
+          valuation_rate: rateNum,
           custom_7average_carpet_area_of_units: areaNum,
           custom_is_recomended_: unitIsRecommended,
           stock_uom: unitStockUom,
@@ -3368,7 +3487,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           });
         if (res.ok) {
           const data = await res.json();
-          setDetailedProp(data.message || data);
+          const doc = data.message || data;
+          setDetailedProp(doc);
+          if (doc && (doc.name || doc.id) && doc.legal_description) {
+            setLegalDescriptions(prev => ({ ...prev, [doc.name || doc.id]: doc.legal_description }));
+          }
         } else {
           setDetailedProp(selectedProp); // fallback
         }
@@ -3391,8 +3514,13 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           const data = await res.json();
           const list = data.message || data;
           if (Array.isArray(list)) {
-            console.log("unitdata", list)
-            setPropertyUnits(list);
+            console.log("unitdata", list);
+            setPropertyUnits(list.map(u => ({
+              ...u,
+              area: (u.custom_7average_carpet_area_of_units !== undefined && u.custom_7average_carpet_area_of_units !== null && u.custom_7average_carpet_area_of_units !== '')
+                ? u.custom_7average_carpet_area_of_units
+                : u.area
+            })));
           } else {
             setPropertyUnits([]);
           }
@@ -3437,17 +3565,45 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     if (loadedUnitDetails[unitId]) return;
 
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/method/erpnext.api.get_unit?item_code=${unitId}`, {
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const [apiRes, itemRes] = await Promise.allSettled([
+        fetch(`${erpnextConfig.url}/api/method/erpnext.api.get_unit?item_code=${encodeURIComponent(unitId)}`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        }),
+        fetch(`${erpnextConfig.url}/api/resource/Item/${encodeURIComponent(unitId)}`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        })
+      ]);
+
+      let itemDoc = {};
+      if (itemRes.status === 'fulfilled' && itemRes.value.ok) {
+        try {
+          const itemJson = await itemRes.value.json();
+          itemDoc = itemJson.data || itemJson || {};
+        } catch (e) {}
+      }
+
+      let apiDoc = {};
+      if (apiRes.status === 'fulfilled' && apiRes.value.ok) {
+        try {
+          const apiJson = await apiRes.value.json();
+          apiDoc = apiJson.message || apiJson || {};
+        } catch (e) {}
+      }
+
+      const mergedDetails = {
+        ...itemDoc,
+        ...apiDoc,
+        custom_7average_carpet_area_of_units: itemDoc.custom_7average_carpet_area_of_units !== undefined
+          ? itemDoc.custom_7average_carpet_area_of_units
+          : (apiDoc.custom_7average_carpet_area_of_units !== undefined ? apiDoc.custom_7average_carpet_area_of_units : undefined),
+      };
+
+      if (Object.keys(mergedDetails).length > 0) {
         setLoadedUnitDetails(prev => ({
           ...prev,
-          [unitId]: data.message || data
+          [unitId]: mergedDetails
         }));
       } else {
         // Mock fallback details
@@ -3457,6 +3613,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           [unitId]: {
             rent: matchedUnit.rent || 800,
             area: matchedUnit.area || 1000,
+            custom_7average_carpet_area_of_units: matchedUnit.custom_7average_carpet_area_of_units || matchedUnit.area || 1000,
             power_reading: '4,120 kWh',
             water_reading: '890 m³',
             status: matchedUnit.status || 'Available'
@@ -3471,6 +3628,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         [unitId]: {
           rent: matchedUnit.rent || 800,
           area: matchedUnit.area || 1000,
+          custom_7average_carpet_area_of_units: matchedUnit.custom_7average_carpet_area_of_units || matchedUnit.area || 1000,
           power_reading: '4,120 kWh (Local Fallback)',
           water_reading: '890 m³ (Local Fallback)',
           status: matchedUnit.status || 'Available'
@@ -3535,20 +3693,24 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
 
   const getCleanUnitFields = (details, matchedUnit) => {
     const rentVal = details.rent || details.valuation_rate || matchedUnit?.rent || 0;
-    const areaVal = details.area || details.property_area || matchedUnit?.area || 0;
+    const areaVal = (details.custom_7average_carpet_area_of_units !== undefined && details.custom_7average_carpet_area_of_units !== null && details.custom_7average_carpet_area_of_units !== '')
+      ? details.custom_7average_carpet_area_of_units
+      : ((matchedUnit?.custom_7average_carpet_area_of_units !== undefined && matchedUnit?.custom_7average_carpet_area_of_units !== null && matchedUnit?.custom_7average_carpet_area_of_units !== '')
+        ? matchedUnit.custom_7average_carpet_area_of_units
+        : (details.area || details.property_area || matchedUnit?.area || 0));
     let areaUnit = details.property_area_unit || details.custom_property_area_unit || details.stock_uom || 'Sq Ft';
     if (typeof areaUnit === 'string' && areaUnit.toLowerCase() === 'sqm') {
       areaUnit = 'Sq Ft';
     }
 
     const fields = [
-      { label: 'Property Rent', value: `$${rentVal.toLocaleString()}/mo` },
-      { label: 'Property Area', value: `${areaVal} ${areaUnit}` }
+      { label: 'Unit Rent', value: `$${rentVal.toLocaleString()}/mo` },
+      { label: 'Unit Area', value: `${areaVal} ${areaUnit}` }
     ];
 
     if (details.power_reading) fields.push({ label: 'Power Grid reading', value: details.power_reading });
     if (details.water_reading) fields.push({ label: 'Water reading', value: details.water_reading });
-    if (details.unit_owner || details.owner) fields.push({ label: 'Unit Ownership', value: details.unit_owner || details.owner });
+    // Unit Ownership removed as requested
 
     // Filter out blacklisted fields dynamically
     const blacklist = [
@@ -3559,7 +3721,10 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       'valuation_rate', 'total_services_prices', 'item code', 'stock uom', 'average carpet area of units',
       'total floors', 'product bundle id', 'is recommended', 'property owner', 'property owned by',
       'bundle price', 'valuation rate', 'total services prices', 'property_area', 'property_area_unit',
-      'standard_rate', 'standard rate'
+      'standard_rate', 'standard rate',
+      'unit_owner', 'unit ownership', 'unit_ownership', 'owner', 'ownership',
+      'custom_property_owner', 'custom_property_owned_by', 'custom_property_owner_name',
+      'custom_7average_carpet_area_of_units', '7average_carpet_area_of_units', '7average carpet area of units'
     ];
 
     Object.keys(details).forEach(key => {
@@ -3576,8 +3741,24 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         if (typeof displayVal === 'string') {
           displayVal = displayVal.replace(/\bsqm\b/gi, 'Sq Ft');
         }
+
+        let label = key.replace(/^custom_/, '').replace(/_custom_/gi, '_').replace(/custom/gi, '').replace(/_/g, ' ').trim();
+
+        // Standardize labels to Unit format as requested
+        if (/^item\s*name$/i.test(label)) {
+          label = 'Unit Name';
+        } else if (/^item\s*group$/i.test(label)) {
+          label = 'Unit Group';
+        } else if (/^item\s*code$/i.test(label)) {
+          label = 'Unit Code';
+        } else if (/^property\s*rent$/i.test(label)) {
+          label = 'Unit Rent';
+        } else if (/^property\s*area$/i.test(label)) {
+          label = 'Unit Area';
+        }
+
         fields.push({
-          label: key.replace(/^custom_/, '').replace(/_custom_/gi, '_').replace(/custom/gi, '').replace(/_/g, ' ').trim(),
+          label,
           value: displayVal
         });
       }
@@ -3655,7 +3836,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                 <thead>
                   <tr>
                     <th>Name</th>
-                    <th>Land Description</th>
+                    <th>Legal Description</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -3682,7 +3863,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                         {prop.name}
                       </td>
                       <td style={{ color: 'var(--text-secondary)' }}>
-                        {prop.land_description || `Area: ${prop.area} sq ft`}
+                        {legalDescriptions[prop.name] || legalDescriptions[prop.id] || prop.legal_description || (prop.id === selectedProp?.id && detailedProp?.legal_description ? detailedProp.legal_description : '') || '—'}
                       </td>
                     </tr>
                   ))}
@@ -3846,8 +4027,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                     setUnitCode(matchedUnit.name || selectedUnitId || '');
                     setUnitName(matchedUnit.unit_name || details.item_name || '');
                     setUnitFloor(matchedUnit.custom_floor || details.custom_floor || 'Ground');
-                    setUnitRent(matchedUnit.rent !== undefined ? matchedUnit.rent : (details.standard_rate || details.valuation_rate || ''));
-                    setUnitValuationRate(matchedUnit.valuation_rate !== undefined ? matchedUnit.valuation_rate : (details.valuation_rate || ''));
+                    const rateVal = matchedUnit.standard_rate !== undefined ? matchedUnit.standard_rate : (matchedUnit.rent !== undefined ? matchedUnit.rent : (matchedUnit.valuation_rate !== undefined ? matchedUnit.valuation_rate : (details.standard_rate || details.valuation_rate || details.rent || '')));
+                    setUnitRent(rateVal);
+                    setUnitValuationRate(rateVal);
                     setUnitArea(matchedUnit.area !== undefined ? matchedUnit.area : (details.custom_7average_carpet_area_of_units || details.area || ''));
                     setUnitItemGroup(matchedUnit.item_group || details.item_group || 'Commercial');
                     setUnitIsRecommended(matchedUnit.custom_is_recomended_ || details.custom_is_recomended_ || 'No');
@@ -3978,8 +4160,8 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                   }}>
                     {[
                       { label: 'Floor', value: details.custom_floor },
-                      { label: 'Area', value: details.custom_property_area ? `${details.custom_property_area} ${(details.custom_property_area_unit || '').toLowerCase() === 'sqm' ? 'Sq Ft' : (details.custom_property_area_unit || 'Sq Ft')}` : null },
-                      { label: 'Rate', value: details.valuation_rate ? `$${Number(details.valuation_rate).toLocaleString()}` : null },
+                      { label: 'Area', value: (details.custom_7average_carpet_area_of_units || details.custom_property_area || details.area) ? `${details.custom_7average_carpet_area_of_units || details.custom_property_area || details.area} ${(details.custom_property_area_unit || '').toLowerCase() === 'sqm' ? 'Sq Ft' : (details.custom_property_area_unit || 'Sq Ft')}` : null },
+                      { label: 'Rate', value: (details.standard_rate || details.valuation_rate || details.rent) ? `$${Number(details.standard_rate || details.valuation_rate || details.rent).toLocaleString()}` : null },
                       { label: 'Group', value: details.custom_property_group },
                     ].filter(f => f.value).map(f => (
                       <div key={f.label}>
@@ -4091,7 +4273,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                     <th>ID</th>
                     <th>Name</th>
                     <th>Type</th>
-                    <th>Land Description</th>
+                    <th>Legal Description</th>
                     <th>Lease End</th>
                     <th style={{ textAlign: 'right' }}>Picture</th>
                   </tr>
@@ -4128,7 +4310,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                         </span>
                       </td>
                       <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                        {prop.land_description || `Plot size: ${prop.area.toLocaleString()} sq ft`}
+                        {legalDescriptions[prop.name] || legalDescriptions[prop.id] || prop.legal_description || (prop.id === selectedProp?.id && detailedProp?.legal_description ? detailedProp.legal_description : '') || '—'}
                       </td>
                       <td>
                         <span className="badge badge-warning" style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--brand-color)' }}>
@@ -4234,15 +4416,35 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                         {propertyUnits.filter(u => (u.status || '').toLowerCase() !== 'occupied').length}
                       </span>
                     </div>
-                    {Object.keys(p).filter(key => ![
-                      'id', 'name', 'type', 'land_and_building_type', 'address', 'land_description',
-                      'lease_end_date', 'rent', 'area', 'unitsCount', 'listedOnline', 'occupancy',
-                      'created_by', 'modified', 'docstatus', 'doctype', 'gallery', 'image', 'owner',
-                      'creation', 'modified_by', 'property_owner', 'internal', 'external', 'idx',
-                      'external_tenant', 'internal_tenant', 'external tenant', 'internal tenant'
-                    ].includes(key.toLowerCase())).map(key => (
+                    {Object.keys(p).filter(key => {
+                      if (key === 'noOfFloors') return false;
+                      const lower = key.toLowerCase().replace(/[\s_-]/g, '');
+                      const excluded = [
+                        'id', 'name', 'type', 'landandbuildingtype', 'address', 'landdescription',
+                        'leaseenddate', 'rent', 'area', 'unitscount', 'listedonline', 'occupancy',
+                        'createdby', 'modified', 'docstatus', 'doctype', 'gallery', 'image', 'owner',
+                        'creation', 'modifiedby', 'propertyowner', 'internal', 'external', 'idx',
+                        'externaltenant', 'internaltenant',
+                        'attachments', 'customattachments', 'attachment', 'customattachment',
+                        'customlatitude', 'customlongitude', 'latitude', 'longitude',
+                        'geolocation', 'geoloacation',
+                        'propertygroupname', 'isgroup', 'oldparent', 'lft', 'rgt', 'istable'
+                      ];
+                      if (excluded.includes(lower)) return false;
+
+                      const val = p[key];
+                      if (val === null || val === undefined) return false;
+                      if (typeof val === 'string') {
+                        const trimmed = val.trim().toLowerCase();
+                        if (trimmed === '' || trimmed === 'null' || trimmed === 'undefined' || trimmed === 'n/a') return false;
+                      }
+                      if (typeof val === 'object') return false;
+                      return true;
+                    }).map(key => (
                       <div key={key} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-muted)', textTransform: 'capitalize' }}>{key.replace(/_/g, ' ')}:</span>
+                        <span style={{ color: 'var(--text-muted)', textTransform: 'capitalize' }}>
+                          {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:
+                        </span>
                         <span style={{ fontWeight: 600 }}>{String(p[key])}</span>
                       </div>
                     ))}
@@ -4256,17 +4458,6 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                   </div>
                   <div style={{ width: '100%', height: 6, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' }}>
                     <div style={{ width: `${p.occupancy || 0}%`, height: '100%', backgroundColor: (p.occupancy || 0) > 50 ? 'var(--color-success)' : 'var(--brand-color)', borderRadius: 3 }} />
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, fontSize: 12 }}>
-                  <div style={{ background: 'rgba(255,255,255,0.01)', padding: 12, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                    <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 }}>Contract Rent</span>
-                    <span style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--brand-color)' }}>${(p.rent || 0).toLocaleString()}/mo</span>
-                  </div>
-                  <div style={{ background: 'rgba(255,255,255,0.01)', padding: 12, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                    <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 }}>Floor Area</span>
-                    <span style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)' }}>{(p.area || 0).toLocaleString()} sq ft</span>
                   </div>
                 </div>
 

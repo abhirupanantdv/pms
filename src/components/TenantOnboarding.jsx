@@ -787,6 +787,18 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
     case 'Float':
     case 'Currency':
     case 'Percent':
+      if (isReadOnly) {
+        return (
+          <div style={fieldContainerStyle}>
+            <label style={labelStyle}>
+              {label} {isRequired && <span style={{ color: '#ef4444' }}>*</span>}
+            </label>
+            <div style={{ ...inputStyle, background: 'transparent', border: 'none', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center' }}>
+              {(value === undefined || value === null || value === '' || value === 0 || value === '0') ? '-' : value}
+            </div>
+          </div>
+        );
+      }
       return (
         <div style={fieldContainerStyle}>
           <label style={labelStyle}>
@@ -795,16 +807,8 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
           <input
             type="number"
             step={fieldtype === 'Int' ? '1' : 'any'}
-            min={(
-              field.fieldname === 'required_space' ||
-              field.fieldname === 'budget' ||
-              field.fieldname === 'lease_period' ||
-              field.fieldname === 'rental_charges' ||
-              field.fieldname === 'service_promotional_charges' ||
-              field.fieldname === 'security_deposit_booking_fee' ||
-              field.fieldname === 'fitout_period'
-            ) ? (fieldtype === 'Int' ? "1" : "0.01") : undefined}
-            placeholder={getPlaceholder(label, field.fieldname).includes(label) ? '0' : getPlaceholder(label, field.fieldname)}
+            min="0"
+            placeholder={getPlaceholder(label, field.fieldname).includes(label) ? '-' : getPlaceholder(label, field.fieldname)}
             value={value === undefined || value === null ? '' : value}
             onChange={(e) => {
               if (e.target.value === '') {
@@ -1919,6 +1923,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   });
 
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [uploadingDocKey, setUploadingDocKey] = useState(null);
 
   // Fetch Onboardings and Document Child tables from ERPNext
   const fetchOnboardings = async () => {
@@ -2098,6 +2103,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         fields.forEach(field => {
           if (field.default !== undefined && field.default !== null) {
             if (field.fieldname === 'type') {
+              defaults[field.fieldname] = '';
+            } else if (['Int', 'Float', 'Currency', 'Percent'].includes(field.fieldtype) && (field.default === 0 || field.default === '0')) {
               defaults[field.fieldname] = '';
             } else {
               defaults[field.fieldname] = field.default;
@@ -2310,8 +2317,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         'fitout_period'
       ].includes(field.fieldname) && val !== undefined && val !== null && String(val).trim() !== '') {
         const num = parseFloat(val);
-        if (isNaN(num) || num <= 0) {
-          alert(`${field.label || field.fieldname} should not be 0 or negative value.`, 'error');
+        if (isNaN(num) || num < 0) {
+          alert(`${field.label || field.fieldname} should not be a negative value.`, 'error');
           return;
         }
         if ((field.fieldname === 'lease_period' || field.fieldtype === 'Int') && !Number.isInteger(num)) {
@@ -2395,6 +2402,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       cleanedValues.allowed_to_transact = null;
     }
 
+    doctypeFields.forEach(f => {
+      if (['Int', 'Float', 'Currency', 'Percent'].includes(f.fieldtype)) {
+        const v = cleanedValues[f.fieldname];
+        if (v === '' || v === undefined) {
+          cleanedValues[f.fieldname] = null;
+        }
+      }
+    });
+
     const payload = {
       ...cleanedValues
     };
@@ -2456,11 +2472,12 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   };
 
   // Handle file uploads to ERPNext
-  const handleFileUpload = async (e, setUrlCallback) => {
+  const handleFileUpload = async (e, setUrlCallback, docKey = null) => {
     const file = e.target.files[0];
     if (!file || !erpnextConfig?.url) return;
 
     setUploadingFile(true);
+    if (docKey) setUploadingDocKey(docKey);
     const formData = new FormData();
     formData.append('file', file);
     formData.append('is_private', '0');
@@ -2478,7 +2495,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         const json = await res.json();
         const fileUrl = json.message?.file_url || json.file_url;
         if (fileUrl) {
-          setUrlCallback(fileUrl);
+          await setUrlCallback(fileUrl);
         } else {
           alert("Upload succeeded but file URL not returned.");
         }
@@ -2490,6 +2507,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       alert("Error uploading file.");
     } finally {
       setUploadingFile(false);
+      setUploadingDocKey(null);
+      if (e?.target) e.target.value = '';
     }
   };
 
@@ -2512,7 +2531,11 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     const defaults = {};
     doctypeFields.forEach(field => {
       if (field.default !== undefined && field.default !== null) {
-        defaults[field.fieldname] = field.default;
+        if (['Int', 'Float', 'Currency', 'Percent'].includes(field.fieldtype) && (field.default === 0 || field.default === '0')) {
+          defaults[field.fieldname] = '';
+        } else {
+          defaults[field.fieldname] = field.default;
+        }
       }
     });
     defaults['is_internal_customer'] = 0;
@@ -2669,8 +2692,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
             'fitout_period'
           ].includes(field.fieldname) && val !== undefined && val !== null && String(val).trim() !== '') {
             const num = parseFloat(val);
-            if (isNaN(num) || num <= 0) {
-              alert(`${field.label || field.fieldname} should not be 0 or negative value.`, 'error');
+            if (isNaN(num) || num < 0) {
+              alert(`${field.label || field.fieldname} should not be a negative value.`, 'error');
               setSubmitting(false);
               return;
             }
@@ -2771,6 +2794,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
           delete cleanedValues.allowed_to_transact;
         }
 
+        doctypeFields.forEach(f => {
+          if (['Int', 'Float', 'Currency', 'Percent'].includes(f.fieldtype)) {
+            const v = cleanedValues[f.fieldname];
+            if (v === '' || v === undefined) {
+              cleanedValues[f.fieldname] = null;
+            }
+          }
+        });
+
         payload = {
           doctype: 'Tenant Onboarding',
           company_search_documents: childDocs,
@@ -2779,17 +2811,17 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       } else {
         payload = {
           proposed_business_type: proposedBusinessType,
-          required_space: requiredSpace ? parseFloat(requiredSpace) : 0,
-          budget: budget ? parseFloat(budget) : 0,
-          lease_period: leasePeriod ? parseInt(leasePeriod) : 0,
+          required_space: (requiredSpace !== '' && requiredSpace !== null && requiredSpace !== undefined) ? parseFloat(requiredSpace) : null,
+          budget: (budget !== '' && budget !== null && budget !== undefined) ? parseFloat(budget) : null,
+          lease_period: (leasePeriod !== '' && leasePeriod !== null && leasePeriod !== undefined) ? parseInt(leasePeriod) : null,
           shop_space_location: shopSpaceLocation,
           usage_of_demised_premises: usageOfDemisedPremises,
           business_status: businessStatus,
           menu_and_business_pictures: menuAndBusinessPictures,
-          fitout_period: fitoutPeriod ? parseInt(fitoutPeriod) : 0,
-          rental_charges: rentalCharges ? parseFloat(rentalCharges) : 0,
-          security_deposit_booking_fee: securityDepositFee ? parseFloat(securityDepositFee) : 0,
-          service_promotional_charges: servicePromoCharges ? parseFloat(servicePromoCharges) : 0,
+          fitout_period: (fitoutPeriod !== '' && fitoutPeriod !== null && fitoutPeriod !== undefined) ? parseInt(fitoutPeriod) : null,
+          rental_charges: (rentalCharges !== '' && rentalCharges !== null && rentalCharges !== undefined) ? parseFloat(rentalCharges) : null,
+          security_deposit_booking_fee: (securityDepositFee !== '' && securityDepositFee !== null && securityDepositFee !== undefined) ? parseFloat(securityDepositFee) : null,
+          service_promotional_charges: (servicePromoCharges !== '' && servicePromoCharges !== null && servicePromoCharges !== undefined) ? parseFloat(servicePromoCharges) : null,
           product_service_range: rangeLineItems,
           contact_name: contactName,
           email_id: emailId,
@@ -3234,15 +3266,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', fontSize: '12.5px' }}>
                         <div>
                           <span style={{ color: 'var(--text-muted)' }}>Business Type: </span>
-                          <strong style={{ color: 'var(--text-primary)' }}>{c.proposed_business_type || '—'}</strong>
+                          <strong style={{ color: 'var(--text-primary)' }}>{c.proposed_business_type || '-'}</strong>
                         </div>
                         <div>
                           <span style={{ color: 'var(--text-muted)' }}>Required Space(Sq Ft): </span>
-                          <strong style={{ color: 'var(--text-primary)' }}>{c.required_space ? `${c.required_space} Sq Ft` : '—'}</strong>
+                          <strong style={{ color: 'var(--text-primary)' }}>{(!c.required_space || Number(c.required_space) === 0) ? '-' : `${c.required_space} Sq Ft`}</strong>
                         </div>
                         <div>
                           <span style={{ color: 'var(--text-muted)' }}>Location: </span>
-                          <strong style={{ color: 'var(--text-primary)' }}>{c.shop_space_location || '—'}</strong>
+                          <strong style={{ color: 'var(--text-primary)' }}>{c.shop_space_location || '-'}</strong>
                         </div>
                       </div>
 
@@ -3464,7 +3496,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           if (isEditingDetails) {
                             setIsEditingDetails(false);
                           } else {
-                            setDynamicFormValues({ ...selectedCase });
+                            const initialDynamic = { ...selectedCase };
+                            doctypeFields.forEach(f => {
+                              if (['Int', 'Float', 'Currency', 'Percent'].includes(f.fieldtype)) {
+                                if (initialDynamic[f.fieldname] === 0 || initialDynamic[f.fieldname] === '0') {
+                                  initialDynamic[f.fieldname] = '';
+                                }
+                              }
+                            });
+                            setDynamicFormValues(initialDynamic);
                             setActiveDynamicTabIdx(0);
                             setIsEditingDetails(true);
                           }
@@ -3836,7 +3876,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                       statusBg = 'rgba(217, 119, 6, 0.1)';
                                     }
                                   }
-
+                                  const isUploadingThis = uploadingDocKey === docItem.key;
                                   return (
                                     <div
                                       key={docItem.key}
@@ -3846,8 +3886,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                         borderRadius: '10px',
                                         display: 'flex',
                                         flexDirection: 'column',
+                                        flexShrink: 0,
                                         transition: 'all 0.2s ease',
-                                        boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                                        boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
                                         overflow: 'hidden'
                                       }}
                                     >
@@ -3856,16 +3897,20 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                         onClick={() => toggleDocExpand(docItem.key)}
                                         style={{
                                           padding: '12px 16px',
+                                          minHeight: '48px',
+                                          boxSizing: 'border-box',
                                           display: 'flex',
                                           alignItems: 'center',
                                           justifyContent: 'space-between',
                                           cursor: 'pointer',
                                           background: isExpanded ? 'var(--bg-secondary)' : 'transparent',
-                                          transition: 'background 0.2s ease'
+                                          transition: 'background 0.2s ease',
+                                          flexShrink: 0,
+                                          userSelect: 'none'
                                         }}
                                       >
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                                          {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
+                                          {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />}
                                           <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                             {docItem.label}
                                           </span>
@@ -3876,15 +3921,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                             borderRadius: '4px',
                                             background: statusBg,
                                             color: statusColor,
-                                            marginLeft: '8px'
+                                            marginLeft: '8px',
+                                            flexShrink: 0
                                           }}>
                                             {statusText}
                                           </span>
                                         </div>
 
                                         {/* Verify toggle stays on header for quick access */}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                                           {fileUrlDraft && (
                                             <button
                                               type="button"
@@ -3900,7 +3945,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                               }}
                                               style={{
                                                 background: 'transparent',
-                                                border: 'none',
+                                                border: '1px solid var(--border-color)',
                                                 color: 'var(--brand-color)',
                                                 cursor: 'pointer',
                                                 fontSize: '11px',
@@ -3910,7 +3955,6 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                                 gap: '4px',
                                                 padding: '4px 8px',
                                                 borderRadius: '4px',
-                                                border: '1px solid var(--border-color)',
                                                 transition: 'all 0.2s'
                                               }}
                                               onMouseEnter={(e) => {
@@ -3929,88 +3973,151 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                                       {/* Expanded Content Panel */}
                                       {isExpanded && (
-                                        <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-secondary)' }}>
-                                          <div style={{ display: 'flex', alignItems: 'center', justifySelf: 'space-between', gap: '12px' }}>
-                                            {/* File details and attachments */}
-                                            {fileUrlDraft ? (
-                                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                                                <button
-                                                  onClick={() => {
-                                                    const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                                    setPreviewDocUrl(fullUrl);
-                                                    setPreviewDocTitle(docItem.label);
-                                                  }}
-                                                  style={{
-                                                    background: 'transparent',
-                                                    border: 'none',
-                                                    color: 'var(--brand-color)',
-                                                    fontSize: '12px',
-                                                    fontWeight: 600,
-                                                    cursor: 'pointer',
-                                                    display: 'inline-flex',
-                                                    alignItems: 'center',
-                                                    gap: '4px',
-                                                    padding: 0,
-                                                    overflow: 'hidden',
-                                                    textOverflow: 'ellipsis',
-                                                    whiteSpace: 'nowrap'
-                                                  }}
-                                                >
-                                                  <Eye size={13} style={{ flexShrink: 0 }} />
-                                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                    Preview: {fileUrlDraft.split('/').pop()}
-                                                  </span>
-                                                </button>
-
-                                                <button
-                                                  onClick={() => {
-                                                    setChecklistDrafts(prev => ({
-                                                      ...prev,
-                                                      [docItem.label]: {
-                                                        ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
-                                                        doc: '',
-                                                        verified: false
-                                                      }
-                                                    }));
-                                                  }}
-                                                  style={{
-                                                    background: 'rgba(239, 68, 68, 0.08)',
-                                                    border: 'none',
+                                        <div style={{
+                                          padding: '16px',
+                                          borderTop: '1px solid var(--border-color)',
+                                          display: 'flex',
+                                          flexDirection: 'column',
+                                          gap: '12px',
+                                          background: 'var(--bg-secondary)',
+                                          flexShrink: 0
+                                        }}>
+                                          {fileUrlDraft ? (
+                                            /* Attached File State */
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+                                              <div style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'space-between',
+                                                gap: '12px',
+                                                background: 'var(--bg-primary)',
+                                                padding: '10px 14px',
+                                                borderRadius: '8px',
+                                                border: '1px solid var(--border-color)',
+                                                flexWrap: 'wrap'
+                                              }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                                                  <div style={{
+                                                    width: '32px',
+                                                    height: '32px',
                                                     borderRadius: '6px',
-                                                    color: '#ef4444',
-                                                    padding: '6px 10px',
-                                                    cursor: 'pointer',
+                                                    background: 'rgba(37, 99, 235, 0.08)',
+                                                    color: 'var(--brand-color)',
                                                     display: 'flex',
                                                     alignItems: 'center',
                                                     justifyContent: 'center',
-                                                    marginLeft: 'auto'
-                                                  }}
-                                                  title="Remove File"
-                                                >
-                                                  <Trash2 size={13} />
-                                                  <span style={{ fontSize: '11px', fontWeight: 600, marginLeft: '4px' }}>Remove</span>
-                                                </button>
+                                                    flexShrink: 0
+                                                  }}>
+                                                    <FileText size={16} />
+                                                  </div>
+                                                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                                    <span
+                                                      style={{
+                                                        fontSize: '12.5px',
+                                                        fontWeight: 600,
+                                                        color: 'var(--text-primary)',
+                                                        overflow: 'hidden',
+                                                        textOverflow: 'ellipsis',
+                                                        whiteSpace: 'nowrap',
+                                                        maxWidth: '320px'
+                                                      }}
+                                                      title={fileUrlDraft.split('/').pop()}
+                                                    >
+                                                      {fileUrlDraft.split('/').pop()}
+                                                    </span>
+                                                    <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
+                                                      ✓ Document Attached
+                                                    </span>
+                                                  </div>
+                                                </div>
+
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                                      setPreviewDocUrl(fullUrl);
+                                                      setPreviewDocTitle(docItem.label);
+                                                    }}
+                                                    style={{
+                                                      background: 'rgba(37, 99, 235, 0.08)',
+                                                      border: 'none',
+                                                      borderRadius: '6px',
+                                                      color: 'var(--brand-color)',
+                                                      fontSize: '12px',
+                                                      fontWeight: 600,
+                                                      cursor: 'pointer',
+                                                      display: 'inline-flex',
+                                                      alignItems: 'center',
+                                                      gap: '4px',
+                                                      padding: '6px 10px',
+                                                      transition: 'all 0.15s ease'
+                                                    }}
+                                                    title="Preview Document"
+                                                  >
+                                                    <Eye size={13} />
+                                                    <span>Preview</span>
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={async () => {
+                                                      setChecklistDrafts(prev => ({
+                                                        ...prev,
+                                                        [docItem.label]: {
+                                                          ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
+                                                          doc: '',
+                                                          verified: false
+                                                        }
+                                                      }));
+                                                      await saveDocumentToERPNext(docItem.label, '', false);
+                                                    }}
+                                                    style={{
+                                                      background: 'rgba(239, 68, 68, 0.08)',
+                                                      border: 'none',
+                                                      borderRadius: '6px',
+                                                      color: '#ef4444',
+                                                      padding: '6px 10px',
+                                                      cursor: 'pointer',
+                                                      display: 'inline-flex',
+                                                      alignItems: 'center',
+                                                      gap: '4px',
+                                                      fontSize: '12px',
+                                                      fontWeight: 600,
+                                                      transition: 'all 0.15s ease'
+                                                    }}
+                                                    title="Remove File"
+                                                  >
+                                                    <Trash2 size={13} />
+                                                    <span>Remove</span>
+                                                  </button>
+                                                </div>
                                               </div>
-                                            ) : (
-                                              <label style={{
-                                                display: 'inline-flex',
-                                                alignItems: 'center',
-                                                gap: '6px',
-                                                padding: '8px 16px',
-                                                border: '1px solid var(--border-color)',
-                                                background: 'var(--bg-primary)',
-                                                borderRadius: '6px',
-                                                fontSize: '12px',
-                                                fontWeight: 600,
-                                                cursor: uploadingFile ? 'not-allowed' : 'pointer',
-                                                transition: 'all 0.15s ease'
-                                              }}>
-                                                <Paperclip size={14} />
-                                                <span>Attach Document</span>
+                                            </div>
+                                          ) : (
+                                            /* Unattached State - Small Attach Button on Left */
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                              <label
+                                                style={{
+                                                  display: 'inline-flex',
+                                                  alignItems: 'center',
+                                                  gap: '6px',
+                                                  padding: '6px 14px',
+                                                  borderRadius: '6px',
+                                                  background: 'var(--brand-color, #2563eb)',
+                                                  color: '#ffffff',
+                                                  fontSize: '12px',
+                                                  fontWeight: 600,
+                                                  cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                                                  transition: 'all 0.15s ease',
+                                                  boxShadow: '0 1px 3px rgba(37, 99, 235, 0.2)'
+                                                }}
+                                              >
+                                                {isUploadingThis ? <Loader2 size={13} className="spin" /> : <Paperclip size={13} />}
+                                                <span>{isUploadingThis ? 'Uploading...' : 'Attach Document'}</span>
                                                 <input
                                                   type="file"
                                                   disabled={uploadingFile}
-                                                  onChange={(e) => handleFileUpload(e, (url) => {
+                                                  onChange={(e) => handleFileUpload(e, async (url) => {
                                                     setChecklistDrafts(prev => ({
                                                       ...prev,
                                                       [docItem.label]: {
@@ -4018,29 +4125,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                                         doc: url
                                                       }
                                                     }));
-                                                  })}
+                                                    await saveDocumentToERPNext(docItem.label, url, isVerifiedDraft || false);
+                                                  }, docItem.key)}
                                                   style={{ display: 'none' }}
                                                 />
                                               </label>
-                                            )}
-                                          </div>
-
-                                          {/* Tiny Preview Box */}
-                                          {fileUrlDraft && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrlDraft) && (
-                                            <div
-                                              onClick={() => {
-                                                const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                                setPreviewDocUrl(fullUrl);
-                                                setPreviewDocTitle(docItem.label);
-                                              }}
-                                              style={{ width: '100%', height: '100px', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'pointer' }}
-                                            >
-                                              <img
-                                                src={fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`}
-                                                alt={docItem.label}
-                                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                                                crossOrigin="use-credentials"
-                                              />
+                                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                                Supports PDF, PNG, JPG, JPEG, WebP
+                                              </span>
                                             </div>
                                           )}
                                         </div>
@@ -4136,7 +4228,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                     style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                                   />
                                 ) : (
-                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_name || '—'}</div>
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_name || '-'}</div>
                                 )}
                               </div>
                             );
@@ -4153,7 +4245,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                     style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                                   />
                                 ) : (
-                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_vat_id || '—'}</div>
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.company_vat_id || '-'}</div>
                                 )}
                               </div>
                             );
@@ -4170,7 +4262,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                     style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                                   />
                                 ) : (
-                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.contact_name || '—'}</div>
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.contact_name || '-'}</div>
                                 )}
                               </div>
                             );
@@ -4187,7 +4279,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                     style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                                   />
                                 ) : (
-                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.email_id || '—'}</div>
+                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.email_id || '-'}</div>
                                 )}
                               </div>
                             );
@@ -4215,7 +4307,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                       <>
                                         <span style={{ fontSize: '15px', lineHeight: 1 }}>{matched?.flag || '🇫🇯'}</span>
                                         <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{parsed.prefix}</span>
-                                        <span>{parsed.local || '—'}</span>
+                                        <span>{parsed.local || '-'}</span>
                                       </>
                                     );
                                   })()}
@@ -4261,7 +4353,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           {selectedCase.type === 'Individual' && (
                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Date of Birth</span>
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.date_of_birth || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.date_of_birth || '-'}</div>
                             </div>
                           )}
                         </div>
@@ -4291,7 +4383,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line_1 || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line_1 || '-'}</div>
                             )}
                           </div>
 
@@ -4306,7 +4398,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line_2 || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.address_line_2 || '-'}</div>
                             )}
                           </div>
 
@@ -4321,7 +4413,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.city || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.city || '-'}</div>
                             )}
                           </div>
 
@@ -4336,7 +4428,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.state || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.state || '-'}</div>
                             )}
                           </div>
 
@@ -4354,7 +4446,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 ))}
                               </select>
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.country || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.country || '-'}</div>
                             )}
                           </div>
                         </div>
@@ -4414,7 +4506,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 <option value="Kiosk">Kiosk</option>
                               </select>
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.proposed_business_type || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.proposed_business_type || '-'}</div>
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -4422,12 +4514,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             {isEditingDetails ? (
                               <input
                                 type="number"
+                                min="0"
                                 value={editRequiredSpace}
                                 onChange={(e) => setEditRequiredSpace(e.target.value)}
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.required_space ? `${selectedCase.required_space} Sq Ft` : '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.required_space || Number(selectedCase.required_space) === 0) ? '-' : `${selectedCase.required_space} Sq Ft`}</div>
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -4442,7 +4535,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 <option value="Existing">Existing</option>
                               </select>
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.business_status || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.business_status || '-'}</div>
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -4450,12 +4543,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             {isEditingDetails ? (
                               <input
                                 type="number"
+                                min="0"
                                 value={editBudget}
                                 onChange={(e) => setEditBudget(e.target.value)}
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.budget ? `FJD ${selectedCase.budget.toLocaleString()}` : '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.budget || Number(selectedCase.budget) === 0) ? '-' : `FJD ${Number(selectedCase.budget).toLocaleString()}`}</div>
                             )}
                           </div>
                         </div>
@@ -4471,7 +4565,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                             />
                           ) : (
-                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.product_service_range || '—'}</div>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.product_service_range || '-'}</div>
                           )}
                         </div>
 
@@ -4486,7 +4580,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                             />
                           ) : (
-                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_approval_timeframe || '—'}</div>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_approval_timeframe || '-'}</div>
                           )}
                         </div>
 
@@ -4495,7 +4589,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
                             {editMenuAndBusinessPictures ? (
-                              <div style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)' }}>
+                              <div style={{ width: '100%', height: '180px', background: 'var(--bg-secondary, #f8fafc)', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)' }}>
                                 <img
                                   src={editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`}
                                   alt="Menu and Business Pictures"
@@ -4581,7 +4675,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                   setPreviewDocUrl(fullUrl);
                                   setPreviewDocTitle('Menu & Business Pictures');
                                 }}
-                                style={{ width: '100%', height: '180px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer' }}
+                                style={{ width: '100%', height: '180px', background: 'var(--bg-secondary, #f8fafc)', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer' }}
                               >
                                 <img
                                   src={selectedCase.menu_and_business_pictures.startsWith('http') ? selectedCase.menu_and_business_pictures : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`}
@@ -4645,7 +4739,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 ))}
                               </select>
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.shop_space_location || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.shop_space_location || '-'}</div>
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -4653,12 +4747,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             {isEditingDetails ? (
                               <input
                                 type="number"
+                                min="0"
+                                step="1"
                                 value={editLeasePeriod}
                                 onChange={(e) => setEditLeasePeriod(e.target.value)}
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_period ? `${selectedCase.lease_period} years` : '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.lease_period || Number(selectedCase.lease_period) === 0) ? '-' : `${selectedCase.lease_period} ${Number(selectedCase.lease_period) === 1 ? 'year' : 'years'}`}</div>
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -4666,12 +4762,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             {isEditingDetails ? (
                               <input
                                 type="number"
+                                min="0"
                                 value={editRentalCharges}
                                 onChange={(e) => setEditRentalCharges(e.target.value)}
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.rental_charges ? `$${selectedCase.rental_charges.toLocaleString()}` : '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.rental_charges || Number(selectedCase.rental_charges) === 0) ? '-' : `$${Number(selectedCase.rental_charges).toLocaleString()}`}</div>
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -4679,12 +4776,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             {isEditingDetails ? (
                               <input
                                 type="number"
+                                min="0"
                                 value={editServicePromoCharges}
                                 onChange={(e) => setEditServicePromoCharges(e.target.value)}
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.service_promotional_charges ? `$${selectedCase.service_promotional_charges.toLocaleString()}` : '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.service_promotional_charges || Number(selectedCase.service_promotional_charges) === 0) ? '-' : `$${Number(selectedCase.service_promotional_charges).toLocaleString()}`}</div>
                             )}
                           </div>
                         </div>
@@ -4695,12 +4793,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             {isEditingDetails ? (
                               <input
                                 type="number"
+                                min="0"
                                 value={editSecurityDepositFee}
                                 onChange={(e) => setEditSecurityDepositFee(e.target.value)}
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.security_deposit_booking_fee ? `$${selectedCase.security_deposit_booking_fee.toLocaleString()}` : '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.security_deposit_booking_fee || Number(selectedCase.security_deposit_booking_fee) === 0) ? '-' : `$${Number(selectedCase.security_deposit_booking_fee).toLocaleString()}`}</div>
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -4708,12 +4807,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             {isEditingDetails ? (
                               <input
                                 type="number"
+                                min="0"
+                                step="1"
                                 value={editFitoutPeriod}
                                 onChange={(e) => setEditFitoutPeriod(e.target.value)}
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.fitout_period ? `${selectedCase.fitout_period} days` : '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.fitout_period || Number(selectedCase.fitout_period) === 0) ? '-' : `${selectedCase.fitout_period} days`}</div>
                             )}
                           </div>
                         </div>
@@ -4728,7 +4829,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                             />
                           ) : (
-                            <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.usage_of_demised_premises || '—'}</div>
+                            <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.usage_of_demised_premises || '-'}</div>
                           )}
                         </div>
 
@@ -4765,7 +4866,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_commencement_date || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_commencement_date || '-'}</div>
                             )}
                           </div>
                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
@@ -4778,7 +4879,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
                               />
                             ) : (
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.vacant_possession_date || '—'}</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.vacant_possession_date || '-'}</div>
                             )}
                           </div>
                         </div>
@@ -4828,7 +4929,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                     setPreviewDocUrl(fullUrl);
                                     setPreviewDocTitle('Plans Submitted for Approval');
                                   }}
-                                  style={{ width: '100%', height: '140px', background: '#000', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer', marginTop: '6px' }}
+                                  style={{ width: '100%', height: '140px', background: 'var(--bg-secondary, #f8fafc)', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer', marginTop: '6px' }}
                                 >
                                   {/\.(jpg|jpeg|png|gif|webp)$/i.test(selectedCase.plans_for_approval) ? (
                                     <img
@@ -4897,8 +4998,45 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                     {/* Stage 3: Company Search Documents */}
                     {activeDetailTab === 'documents' && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, minHeight: 0 }}>
-                        <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 700 }}>Company Search Audit Checklist</h4>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+                          <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 700 }}>Company Search Audit Checklist</h4>
+                          {(() => {
+                            const docs = caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [];
+                            const standardDocs = currentDocumentTypes.map(doc => doc.key);
+                            const standardLabelsLower = new Set(currentDocumentTypes.map(d => d.label.toLowerCase().trim()));
+                            const customDocs = docs
+                              .filter(d => d.document_type && !standardLabelsLower.has(d.document_type.toLowerCase().trim()))
+                              .map((d, index) => `custom_${index}_${d.name || d.document_type}`);
+                            const allKeys = [...standardDocs, ...customDocs];
+                            const anyExpanded = allKeys.some(k => !!expandedDocs[k]);
+
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextState = {};
+                                  if (!anyExpanded) {
+                                    allKeys.forEach(k => { nextState[k] = true; });
+                                  }
+                                  setExpandedDocs(nextState);
+                                }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--brand-color)',
+                                  fontSize: '11.5px',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  padding: '2px 8px',
+                                  borderRadius: '4px'
+                                }}
+                              >
+                                {anyExpanded ? 'Collapse All' : 'Expand All'}
+                              </button>
+                            );
+                          })()}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, overflowY: 'auto', paddingRight: '6px', minHeight: 0 }}>
                           {(() => {
                             const docs = caseDocuments[selectedCase.name] || selectedCase.documents || selectedCase.company_search_documents || [];
 
@@ -4933,6 +5071,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               const fileUrl = erpDoc?.document || '';
                               const isVerified = !!erpDoc?.verified;
                               const isExpanded = !!expandedDocs[docItem.key];
+                              const isUploadingThis = uploadingDocKey === docItem.key;
 
                               const draftEntry = checklistDrafts[docItem.label];
                               const fileUrlDraft = draftEntry !== undefined ? draftEntry.doc : fileUrl;
@@ -4962,8 +5101,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                     borderRadius: '10px',
                                     display: 'flex',
                                     flexDirection: 'column',
+                                    flexShrink: 0,
                                     transition: 'all 0.2s ease',
-                                    boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                                    boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
                                     overflow: 'hidden'
                                   }}
                                 >
@@ -4972,16 +5112,20 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                     onClick={() => toggleDocExpand(docItem.key)}
                                     style={{
                                       padding: '12px 16px',
+                                      minHeight: '48px',
+                                      boxSizing: 'border-box',
                                       display: 'flex',
                                       alignItems: 'center',
                                       justifyContent: 'space-between',
                                       cursor: 'pointer',
                                       background: isExpanded ? 'var(--bg-secondary)' : 'transparent',
-                                      transition: 'background 0.2s ease'
+                                      transition: 'background 0.2s ease',
+                                      flexShrink: 0,
+                                      userSelect: 'none'
                                     }}
                                   >
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                                      {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
+                                      {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />}
                                       <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                         {docItem.label}
                                       </span>
@@ -4992,14 +5136,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                         borderRadius: '4px',
                                         background: statusBg,
                                         color: statusColor,
-                                        marginLeft: '8px'
+                                        marginLeft: '8px',
+                                        flexShrink: 0
                                       }}>
                                         {statusText}
                                       </span>
                                     </div>
 
                                     {/* Verify toggle stays on header for quick access */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                                       {fileUrlDraft && (
                                         <button
                                           type="button"
@@ -5015,7 +5160,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                           }}
                                           style={{
                                             background: 'transparent',
-                                            border: 'none',
+                                            border: '1px solid var(--border-color)',
                                             color: 'var(--brand-color)',
                                             cursor: 'pointer',
                                             fontSize: '11px',
@@ -5025,7 +5170,6 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                             gap: '4px',
                                             padding: '4px 8px',
                                             borderRadius: '4px',
-                                            border: '1px solid var(--border-color)',
                                             transition: 'all 0.2s'
                                           }}
                                           onMouseEnter={(e) => {
@@ -5044,88 +5188,152 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                                   {/* Expanded Content Panel */}
                                   {isExpanded && (
-                                    <div style={{ padding: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--bg-secondary)' }}>
-                                      <div style={{ display: 'flex', alignItems: 'center', justifySelf: 'space-between', gap: '12px' }}>
-                                        {/* File details and attachments */}
-                                        {fileUrlDraft ? (
-                                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                                            <button
-                                              onClick={() => {
-                                                const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                                setPreviewDocUrl(fullUrl);
-                                                setPreviewDocTitle(docItem.label);
-                                              }}
-                                              style={{
-                                                background: 'transparent',
-                                                border: 'none',
-                                                color: 'var(--brand-color)',
-                                                fontSize: '12px',
-                                                fontWeight: 600,
-                                                cursor: 'pointer',
-                                                display: 'inline-flex',
-                                                alignItems: 'center',
-                                                gap: '4px',
-                                                padding: 0,
-                                                overflow: 'hidden',
-                                                textOverflow: 'ellipsis',
-                                                whiteSpace: 'nowrap'
-                                              }}
-                                            >
-                                              <Eye size={13} style={{ flexShrink: 0 }} />
-                                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                Preview: {fileUrlDraft.split('/').pop()}
-                                              </span>
-                                            </button>
-
-                                            <button
-                                              onClick={() => {
-                                                setChecklistDrafts(prev => ({
-                                                  ...prev,
-                                                  [docItem.label]: {
-                                                    ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
-                                                    doc: '',
-                                                    verified: false
-                                                  }
-                                                }));
-                                              }}
-                                              style={{
-                                                background: 'rgba(239, 68, 68, 0.08)',
-                                                border: 'none',
+                                    <div style={{
+                                      padding: '16px',
+                                      borderTop: '1px solid var(--border-color)',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      gap: '12px',
+                                      background: 'var(--bg-secondary)',
+                                      flexShrink: 0
+                                    }}>
+                                      {fileUrlDraft ? (
+                                        /* Attached File State */
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+                                          <div style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            gap: '12px',
+                                            background: 'var(--bg-primary)',
+                                            padding: '10px 14px',
+                                            borderRadius: '8px',
+                                            border: '1px solid var(--border-color)',
+                                            flexWrap: 'wrap'
+                                          }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                                              <div style={{
+                                                width: '32px',
+                                                height: '32px',
                                                 borderRadius: '6px',
-                                                color: '#ef4444',
-                                                padding: '6px 10px',
-                                                cursor: 'pointer',
+                                                background: 'rgba(37, 99, 235, 0.08)',
+                                                color: 'var(--brand-color)',
                                                 display: 'flex',
                                                 alignItems: 'center',
                                                 justifyContent: 'center',
-                                                marginLeft: 'auto'
-                                              }}
-                                              title="Remove File"
-                                            >
-                                              <Trash2 size={13} />
-                                              <span style={{ fontSize: '11px', fontWeight: 600, marginLeft: '4px' }}>Remove</span>
-                                            </button>
+                                                flexShrink: 0
+                                              }}>
+                                                <FileText size={16} />
+                                              </div>
+                                              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                                <span
+                                                  style={{
+                                                    fontSize: '12.5px',
+                                                    fontWeight: 600,
+                                                    color: 'var(--text-primary)',
+                                                    overflow: 'hidden',
+                                                    textOverflow: 'ellipsis',
+                                                    whiteSpace: 'nowrap',
+                                                    maxWidth: '320px'
+                                                  }}
+                                                  title={fileUrlDraft.split('/').pop()}
+                                                >
+                                                  {fileUrlDraft.split('/').pop()}
+                                                </span>
+                                                <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
+                                                  ✓ Document Attached
+                                                </span>
+                                              </div>
+                                            </div>
+
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                                  setPreviewDocUrl(fullUrl);
+                                                  setPreviewDocTitle(docItem.label);
+                                                }}
+                                                style={{
+                                                  background: 'rgba(37, 99, 235, 0.08)',
+                                                  border: 'none',
+                                                  borderRadius: '6px',
+                                                  color: 'var(--brand-color)',
+                                                  fontSize: '12px',
+                                                  fontWeight: 600,
+                                                  cursor: 'pointer',
+                                                  display: 'inline-flex',
+                                                  alignItems: 'center',
+                                                  gap: '4px',
+                                                  padding: '6px 10px',
+                                                  transition: 'all 0.15s ease'
+                                                }}
+                                                title="Preview Document"
+                                              >
+                                                <Eye size={13} />
+                                                <span>Preview</span>
+                                              </button>
+
+                                              <button
+                                                type="button"
+                                                onClick={async () => {
+                                                  setChecklistDrafts(prev => ({
+                                                    ...prev,
+                                                    [docItem.label]: {
+                                                      ...(prev[docItem.label] || { doc: fileUrl, verified: isVerified }),
+                                                      doc: '',
+                                                      verified: false
+                                                    }
+                                                  }));
+                                                  await saveDocumentToERPNext(docItem.label, '', false);
+                                                }}
+                                                style={{
+                                                  background: 'rgba(239, 68, 68, 0.08)',
+                                                  border: 'none',
+                                                  borderRadius: '6px',
+                                                  color: '#ef4444',
+                                                  padding: '6px 10px',
+                                                  cursor: 'pointer',
+                                                  display: 'inline-flex',
+                                                  alignItems: 'center',
+                                                  gap: '4px',
+                                                  fontSize: '12px',
+                                                  fontWeight: 600,
+                                                  transition: 'all 0.15s ease'
+                                                }}
+                                                title="Remove File"
+                                              >
+                                                <Trash2 size={13} />
+                                                <span>Remove</span>
+                                              </button>
+                                            </div>
                                           </div>
-                                        ) : (
-                                          <label style={{
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: '6px',
-                                            padding: '8px 16px',
-                                            border: '1px solid var(--border-color)',
-                                            background: 'var(--bg-primary)',
-                                            borderRadius: '6px',
-                                            fontSize: '12px',
-                                            fontWeight: 600,
-                                            cursor: uploadingFile ? 'not-allowed' : 'pointer',
-                                            transition: 'all 0.15s ease'
-                                          }}>
-                                            <Paperclip size={14} />
-                                            <span>Attach Document</span>
+                                        </div>
+                                      ) : (
+                                        /* Unattached State - Small Attach Button on Left */
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                          <label
+                                            style={{
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '6px',
+                                              padding: '6px 14px',
+                                              borderRadius: '6px',
+                                              background: 'var(--brand-color, #2563eb)',
+                                              color: '#ffffff',
+                                              fontSize: '12px',
+                                              fontWeight: 600,
+                                              cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                                              transition: 'all 0.15s ease',
+                                              boxShadow: '0 1px 3px rgba(37, 99, 235, 0.2)'
+                                            }}
+                                          >
+                                            {isUploadingThis ? <Loader2 size={13} className="spin" /> : <Paperclip size={13} />}
+                                            <span>{isUploadingThis ? 'Uploading...' : 'Attach Document'}</span>
                                             <input
                                               type="file"
                                               disabled={uploadingFile}
-                                              onChange={(e) => handleFileUpload(e, (url) => {
+                                              onChange={(e) => handleFileUpload(e, async (url) => {
                                                 setChecklistDrafts(prev => ({
                                                   ...prev,
                                                   [docItem.label]: {
@@ -5133,29 +5341,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                                     doc: url
                                                   }
                                                 }));
-                                              })}
+                                                await saveDocumentToERPNext(docItem.label, url, isVerifiedDraft || false);
+                                              }, docItem.key)}
                                               style={{ display: 'none' }}
                                             />
                                           </label>
-                                        )}
-                                      </div>
-
-                                      {/* Tiny Preview Box */}
-                                      {fileUrlDraft && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrlDraft) && (
-                                        <div
-                                          onClick={() => {
-                                            const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
-                                            setPreviewDocUrl(fullUrl);
-                                            setPreviewDocTitle(docItem.label);
-                                          }}
-                                          style={{ width: '100%', height: '100px', background: '#000', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-color)', cursor: 'pointer' }}
-                                        >
-                                          <img
-                                            src={fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`}
-                                            alt={docItem.label}
-                                            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                                            crossOrigin="use-credentials"
-                                          />
+                                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                            Supports PDF, PNG, JPG, JPEG, WebP
+                                          </span>
                                         </div>
                                       )}
                                     </div>
@@ -5165,6 +5358,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             });
                           })()}
                         </div>
+
 
                         {/* Save Multiple Verifications Button */}
                         {Object.keys(checklistDrafts).length > 0 && (
@@ -5550,6 +5744,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                         <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Required Space(Sq Ft)</label>
                         <input
                           type="number"
+                          min="0"
                           placeholder="e.g. 120"
                           value={requiredSpace}
                           onChange={(e) => setRequiredSpace(e.target.value)}
@@ -5560,6 +5755,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                         <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Rental Budget(FJD)</label>
                         <input
                           type="number"
+                          min="0"
                           placeholder="e.g. 1900000"
                           value={budget}
                           onChange={(e) => setBudget(e.target.value)}
@@ -5667,6 +5863,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Lease Period (years)</label>
                           <input
                             type="number"
+                            min="0"
+                            step="1"
                             placeholder="e.g. 3"
                             value={leasePeriod}
                             onChange={(e) => setLeasePeriod(e.target.value)}
@@ -5684,6 +5882,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Rental Charges ($)</label>
                           <input
                             type="number"
+                            min="0"
                             placeholder="e.g. 5000"
                             value={rentalCharges}
                             onChange={(e) => setRentalCharges(e.target.value)}
@@ -5694,6 +5893,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Service / Promo Charges ($)</label>
                           <input
                             type="number"
+                            min="0"
                             placeholder="e.g. 1000"
                             value={servicePromoCharges}
                             onChange={(e) => setServicePromoCharges(e.target.value)}
@@ -5706,6 +5906,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Security Deposit Fee ($)</label>
                           <input
                             type="number"
+                            min="0"
                             placeholder="e.g. 15000"
                             value={securityDepositFee}
                             onChange={(e) => setSecurityDepositFee(e.target.value)}
@@ -5716,6 +5917,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Fitout Period (Days)</label>
                           <input
                             type="number"
+                            min="0"
+                            step="1"
                             placeholder="e.g. 30"
                             value={fitoutPeriod}
                             onChange={(e) => setFitoutPeriod(e.target.value)}
@@ -5863,8 +6066,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             borderRadius: '12px',
                             display: 'flex',
                             flexDirection: 'column',
+                            flexShrink: 0,
                             transition: 'all 0.2s ease',
-                            boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
                             overflow: 'hidden'
                           }}
                         >
@@ -5873,16 +6077,20 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             onClick={() => toggleModalDocExpand(doc.key)}
                             style={{
                               padding: '12px 16px',
+                              minHeight: '48px',
+                              boxSizing: 'border-box',
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'space-between',
                               cursor: 'pointer',
                               background: isExpanded ? 'var(--bg-secondary, #f8fafc)' : 'transparent',
-                              transition: 'background 0.2s ease'
+                              transition: 'background 0.2s ease',
+                              flexShrink: 0,
+                              userSelect: 'none'
                             }}
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-                              {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />}
+                              {isExpanded ? <ChevronDown size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} /> : <ChevronRight size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />}
                               <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary, #0f172a)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {doc.label}
                               </span>
@@ -5893,16 +6101,17 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 borderRadius: '4px',
                                 background: statusBg,
                                 color: statusColor,
-                                marginLeft: '8px'
+                                marginLeft: '8px',
+                                flexShrink: 0
                               }}>
                                 {statusText}
                               </span>
                             </div>
 
                             {/* Verify toggle checkbox */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                               <label
-                                onClick={(e) => e.stopPropagation()} // Prevent expand toggle when clicking checkbox
+                                onClick={(e) => e.stopPropagation()}
                                 style={{
                                   display: 'inline-flex',
                                   alignItems: 'center',
@@ -5934,88 +6143,141 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               display: 'flex',
                               flexDirection: 'column',
                               gap: '12px',
-                              background: 'var(--bg-secondary, #f8fafc)'
+                              background: 'var(--bg-secondary, #f8fafc)',
+                              flexShrink: 0
                             }}>
                               {docObj.doc ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const fullUrl = docObj.doc.startsWith('http') ? docObj.doc : `${erpnextConfig.url}${docObj.doc}`;
-                                      setPreviewDocUrl(fullUrl);
-                                      setPreviewDocTitle(doc.label);
-                                    }}
-                                    style={{
-                                      background: 'transparent',
-                                      border: 'none',
-                                      color: 'var(--brand-color, #2563eb)',
-                                      fontSize: '12px',
-                                      fontWeight: 600,
-                                      cursor: 'pointer',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      padding: 0,
-                                      overflow: 'hidden',
-                                      textOverflow: 'ellipsis',
-                                      whiteSpace: 'nowrap'
-                                    }}
-                                  >
-                                    <Eye size={13} style={{ flexShrink: 0 }} />
-                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                      Preview: {docObj.doc.split('/').pop()}
-                                    </span>
-                                  </button>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+                                  <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '12px',
+                                    background: 'var(--bg-primary, #ffffff)',
+                                    padding: '10px 14px',
+                                    borderRadius: '8px',
+                                    border: '1px solid var(--border-color, #e2e8f0)',
+                                    flexWrap: 'wrap'
+                                  }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                                      <div style={{
+                                        width: '32px',
+                                        height: '32px',
+                                        borderRadius: '6px',
+                                        background: 'rgba(37, 99, 235, 0.08)',
+                                        color: 'var(--brand-color)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        flexShrink: 0
+                                      }}>
+                                        <FileText size={16} />
+                                      </div>
+                                      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                        <span
+                                          style={{
+                                            fontSize: '12.5px',
+                                            fontWeight: 600,
+                                            color: 'var(--text-primary)',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap',
+                                            maxWidth: '300px'
+                                          }}
+                                          title={docObj.doc.split('/').pop()}
+                                        >
+                                          {docObj.doc.split('/').pop()}
+                                        </span>
+                                        <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
+                                          ✓ Document Attached
+                                        </span>
+                                      </div>
+                                    </div>
 
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateDoc('')}
-                                    style={{
-                                      background: 'transparent',
-                                      border: 'none',
-                                      color: '#ef4444',
-                                      cursor: 'pointer',
-                                      fontSize: '11px',
-                                      fontWeight: 700,
-                                      padding: '4px 8px',
-                                      borderRadius: '4px',
-                                      border: '1px solid var(--border-color, #e2e8f0)',
-                                      marginLeft: 'auto',
-                                      transition: 'all 0.2s'
-                                    }}
-                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.05)'; }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                  >
-                                    Remove
-                                  </button>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const fullUrl = docObj.doc.startsWith('http') ? docObj.doc : `${erpnextConfig.url}${docObj.doc}`;
+                                          setPreviewDocUrl(fullUrl);
+                                          setPreviewDocTitle(doc.label);
+                                        }}
+                                        style={{
+                                          background: 'rgba(37, 99, 235, 0.08)',
+                                          border: 'none',
+                                          borderRadius: '6px',
+                                          color: 'var(--brand-color, #2563eb)',
+                                          fontSize: '12px',
+                                          fontWeight: 600,
+                                          cursor: 'pointer',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          padding: '6px 10px',
+                                          transition: 'all 0.15s ease'
+                                        }}
+                                        title="Preview Document"
+                                      >
+                                        <Eye size={13} />
+                                        <span>Preview</span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUpdateDoc('')}
+                                        style={{
+                                          background: 'rgba(239, 68, 68, 0.08)',
+                                          border: 'none',
+                                          borderRadius: '6px',
+                                          color: '#ef4444',
+                                          padding: '6px 10px',
+                                          cursor: 'pointer',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          fontSize: '12px',
+                                          fontWeight: 600,
+                                          transition: 'all 0.15s ease'
+                                        }}
+                                        title="Remove File"
+                                      >
+                                        <Trash2 size={13} />
+                                        <span>Remove</span>
+                                      </button>
+                                    </div>
+                                  </div>
                                 </div>
                               ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                  <label style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '8px',
-                                    padding: '8px 16px',
-                                    border: '1px solid var(--border-color, #cbd5e1)',
-                                    background: 'var(--bg-primary, #ffffff)',
-                                    borderRadius: '8px',
-                                    fontSize: '12px',
-                                    fontWeight: 600,
-                                    cursor: uploadingFile ? 'not-allowed' : 'pointer',
-                                    width: 'fit-content',
-                                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                    transition: 'all 0.2s'
-                                  }}>
-                                    <Paperclip size={14} />
-                                    <span>{uploadingFile ? 'Uploading...' : 'Attach Document'}</span>
+                                /* Unattached State - Small Attach Button on Left */
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                  <label
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      padding: '6px 14px',
+                                      borderRadius: '6px',
+                                      background: 'var(--brand-color, #2563eb)',
+                                      color: '#ffffff',
+                                      fontSize: '12px',
+                                      fontWeight: 600,
+                                      cursor: uploadingFile ? 'not-allowed' : 'pointer',
+                                      transition: 'all 0.15s ease',
+                                      boxShadow: '0 1px 3px rgba(37, 99, 235, 0.2)'
+                                    }}
+                                  >
+                                    {uploadingDocKey === doc.key ? <Loader2 size={13} className="spin" /> : <Paperclip size={13} />}
+                                    <span>{uploadingDocKey === doc.key ? 'Uploading...' : 'Attach Document'}</span>
                                     <input
                                       type="file"
                                       disabled={uploadingFile}
-                                      onChange={(e) => handleFileUpload(e, handleUpdateDoc)}
+                                      onChange={(e) => handleFileUpload(e, handleUpdateDoc, doc.key)}
                                       style={{ display: 'none' }}
                                     />
                                   </label>
+                                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                    Supports PDF, PNG, JPG, JPEG, WebP
+                                  </span>
                                 </div>
                               )}
                             </div>
@@ -6071,8 +6333,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             'fitout_period'
                           ].includes(field.fieldname) && val !== undefined && val !== null && String(val).trim() !== '') {
                             const num = parseFloat(val);
-                            if (isNaN(num) || num <= 0) {
-                              alert(`${field.label || field.fieldname} should not be 0 or negative value.`, 'error');
+                            if (isNaN(num) || num < 0) {
+                              alert(`${field.label || field.fieldname} should not be a negative value.`, 'error');
                               return;
                             }
                             if ((field.fieldname === 'lease_period' || field.fieldtype === 'Int') && !Number.isInteger(num)) {
@@ -6192,7 +6454,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
             </div>
 
             {/* Modal Content */}
-            <div style={{ flex: 1, background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto', position: 'relative' }}>
+            <div style={{ flex: 1, background: 'var(--bg-secondary, #f8fafc)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto', position: 'relative' }}>
               {/\.(jpg|jpeg|png|gif|webp)$/i.test(previewDocUrl) ? (
                 <img
                   src={previewDocUrl}

@@ -560,13 +560,14 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                   <CheckCircle2 size={13} /> Record Payment Received
                 </button>
               )}
-              <button 
+              {/* Hidden: Print button preserved per request */}
+              {/* <button 
                 className="btn btn-secondary" 
                 style={{ flex: 1, minWidth: 100, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
                 onClick={() => handlePrint(selectedInvoice)}
               >
                 <Printer size={13} /> Print Official PDF
-              </button>
+              </button> */}
               <button 
                 className="btn btn-secondary" 
                 style={{ flex: 1, minWidth: 120, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
@@ -926,13 +927,14 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
             </div>
 
             <div style={{ display: 'flex', gap: 12 }}>
-              <button 
+              {/* Hidden: Print button preserved per request */}
+              {/* <button 
                 className="btn btn-secondary" 
                 style={{ width: '100%', borderColor: '#d1d5db', color: '#374151', background: '#f9fafb', fontSize: 11 }}
                 onClick={() => window.print()}
               >
                 Download PDF / Print
-              </button>
+              </button> */}
               <button 
                 className="btn btn-primary" 
                 style={{ width: '100%', background: '#ffdd00', color: '#000000', fontSize: 11 }}

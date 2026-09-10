@@ -405,9 +405,10 @@ export default function Reports() {
         </div>
         
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-secondary" onClick={handlePrint} style={{ gap: 6, fontSize: 12 }}>
+          {/* Hidden: Print button preserved per request */}
+          {/* <button className="btn btn-secondary" onClick={handlePrint} style={{ gap: 6, fontSize: 12 }}>
             <Printer size={14} /> Print Report
-          </button>
+          </button> */}
           <button className="btn btn-primary" onClick={handleExportCSV} style={{ gap: 6, fontSize: 12 }}>
             <Download size={14} /> Export CSV
           </button>
