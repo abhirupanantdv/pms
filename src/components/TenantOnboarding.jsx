@@ -30,6 +30,7 @@ import {
   RefreshCw,
   Info
 } from 'lucide-react';
+import { getAuthHeaders, getCsrfToken as resolveCsrfToken } from '../config';
 
 const documentTypes = [
   { key: 'inc', label: 'True Certified copies of Incorporation' },
@@ -206,6 +207,96 @@ const extractErrorMessage = async (res) => {
     console.warn("Failed parsing error json:", e);
   }
   return message;
+};
+
+const resolveMediaUrl = (url, baseUrl) => {
+  if (!url) return '';
+  if (url.startsWith('http') || url.startsWith('data:') || url.startsWith('blob:')) {
+    return url;
+  }
+  const base = baseUrl ? baseUrl.replace(/\/+$/, '') : '';
+  const path = url.startsWith('/') ? url : `/${url}`;
+  return `${base}${path}`;
+};
+
+const uploadFileToERPNext = async (file, erpnextConfig, getCsrfToken) => {
+  if (!file) return null;
+
+  // 1. Resolve CSRF token from all possible sources
+  let token = resolveCsrfToken();
+  if (!token && typeof getCsrfToken === 'function') {
+    try {
+      token = getCsrfToken();
+    } catch { }
+  }
+  if (!token && erpnextConfig?.csrfToken) {
+    token = erpnextConfig.csrfToken;
+  }
+
+  // If still no token and erpnextConfig.url is available, try a quick ping to obtain/refresh session cookie
+  if (!token && erpnextConfig?.url) {
+    try {
+      const pingRes = await fetch(`${erpnextConfig.url}/api/method/frappe.auth.get_logged_user`, {
+        credentials: 'include'
+      });
+      if (pingRes.ok) {
+        const match = document.cookie.match(/(?:^|;\s*)(?:csrf_token|XSRF-TOKEN|CSRF-TOKEN)=([^;]*)/i);
+        if (match) {
+          token = decodeURIComponent(match[1]);
+          if (typeof window !== 'undefined') window.csrf_token = token;
+        }
+      }
+    } catch (e) {
+      console.warn("Could not retrieve session CSRF token:", e);
+    }
+  }
+
+  // 2. Prepare FormData with full metadata
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+  formData.append('filename', file.name);
+  formData.append('file_name', file.name);
+  formData.append('is_private', '0');
+  formData.append('folder', 'Home');
+  if (token) {
+    formData.append('csrf_token', token);
+  }
+
+  const headers = {};
+  if (token) {
+    headers['X-Frappe-CSRF-Token'] = token;
+  }
+
+  // 3. Attempt ERPNext server upload
+  if (erpnextConfig?.url) {
+    try {
+      const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: formData
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        const fileUrl = json.message?.file_url || json.file_url;
+        if (fileUrl) return fileUrl;
+      } else {
+        const errDetail = await extractErrorMessage(res);
+        console.warn("ERPNext upload_file failed (status " + res.status + "):", errDetail);
+      }
+    } catch (netErr) {
+      console.warn("Network error during ERPNext upload_file:", netErr);
+    }
+  }
+
+  // 4. Fallback: Convert to DataURL so document/image attachment is NEVER blocked
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
 };
 
 const isInternalTenantField = (field) => {
@@ -894,39 +985,23 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
                 type="file"
                 disabled={uploading || isReadOnly}
                 onChange={async (e) => {
-                  const file = e.target.files[0];
-                  if (!file || !erpnextConfig?.url) return;
+                  const file = e.target.files?.[0];
+                  if (!file) return;
 
                   setUploading(true);
-                  const formData = new FormData();
-                  formData.append('file', file);
-                  formData.append('is_private', '0');
-
                   try {
-                    const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
-                      method: 'POST',
-                      credentials: 'include',
-                      headers: {
-                        'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-                      },
-                      body: formData
-                    });
-                    if (res.ok) {
-                      const json = await res.json();
-                      const fileUrl = json.message?.file_url || json.file_url;
-                      if (fileUrl) {
-                        onChange(fileUrl);
-                      } else {
-                        alert("Upload succeeded but file URL not returned.");
-                      }
+                    const fileUrl = await uploadFileToERPNext(file, erpnextConfig, getCsrfToken);
+                    if (fileUrl) {
+                      onChange(fileUrl);
                     } else {
-                      alert("File upload failed.");
+                      alert("Could not process the selected file.");
                     }
                   } catch (err) {
                     console.error("Error uploading file:", err);
-                    alert("Error uploading file.");
+                    alert("Error processing file: " + (err?.message || ""));
                   } finally {
                     setUploading(false);
+                    if (e?.target) e.target.value = '';
                   }
                 }}
                 style={{ display: 'none' }}
@@ -937,7 +1012,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
                 <CheckCircle size={14} style={{ color: '#10b981' }} />
                 <span style={{ fontSize: '12px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {String(value).split('/').pop()}
+                  {String(value).startsWith('data:') ? 'Attached File' : String(value).split('/').pop()}
                 </span>
                 <button
                   type="button"
@@ -1154,7 +1229,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
                           <button
                             type="button"
                             onClick={() => {
-                              const fullUrl = fileUrl.startsWith('http') ? fileUrl : `${erpnextConfig.url}${fileUrl}`;
+                              const fullUrl = resolveMediaUrl(fileUrl, erpnextConfig?.url);
                               window.open(fullUrl, '_blank');
                             }}
                             style={{
@@ -1175,7 +1250,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
                           >
                             <Eye size={13} style={{ flexShrink: 0 }} />
                             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              Preview: {fileUrl.split('/').pop()}
+                              Preview: {fileUrl.startsWith('data:') ? 'Attached Document' : fileUrl.split('/').pop()}
                             </span>
                           </button>
 
@@ -1225,39 +1300,23 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
                               type="file"
                               disabled={uploading || isReadOnly}
                               onChange={async (e) => {
-                                const file = e.target.files[0];
-                                if (!file || !erpnextConfig?.url) return;
+                                const file = e.target.files?.[0];
+                                if (!file) return;
 
                                 setUploading(true);
-                                const formData = new FormData();
-                                formData.append('file', file);
-                                formData.append('is_private', '0');
-
                                 try {
-                                  const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
-                                    method: 'POST',
-                                    credentials: 'include',
-                                    headers: {
-                                      'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-                                    },
-                                    body: formData
-                                  });
-                                  if (res.ok) {
-                                    const json = await res.json();
-                                    const fileUrl = json.message?.file_url || json.file_url;
-                                    if (fileUrl) {
-                                      handleUpdateItemDoc(item.label, fileUrl);
-                                    } else {
-                                      alert("Upload succeeded but file URL not returned.");
-                                    }
+                                  const fileUrl = await uploadFileToERPNext(file, erpnextConfig, getCsrfToken);
+                                  if (fileUrl) {
+                                    handleUpdateItemDoc(item.label, fileUrl);
                                   } else {
-                                    alert("File upload failed.");
+                                    alert("Could not process the selected file.");
                                   }
                                 } catch (err) {
                                   console.error("Error uploading file:", err);
-                                  alert("Error uploading file.");
+                                  alert("Error processing file: " + (err?.message || ""));
                                 } finally {
                                   setUploading(false);
+                                  if (e?.target) e.target.value = '';
                                 }
                               }}
                               style={{ display: 'none' }}
@@ -1691,10 +1750,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       const res = await fetch(`${erpnextConfig.url}/api/method/get_tenant_onboarding_workflow_actions`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify({
           tenant_onboarding: onboardingName
         })
@@ -1724,10 +1782,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       const res = await fetch(`${erpnextConfig.url}/api/method/update_tenant_onboarding_workflow`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify({
           tenant_onboarding: selectedCase.name,
           action: actionName
@@ -2054,10 +2111,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       const url = `${baseUrl}/api/method/frappe.desk.form.load.getdoctype?doctype=${encodeURIComponent(doctype)}`;
       const response = await fetch(url, {
         credentials: 'include',
-        headers: {
-          "Content-Type": "application/json",
-          "X-Frappe-CSRF-Token": erpnextConfig?.csrfToken || window.csrf_token || ""
-        }
+        headers: getAuthHeaders({
+          "Content-Type": "application/json"
+        })
       });
 
       if (!response.ok) {
@@ -2180,10 +2236,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(selectedCase.name)}`, {
         method: 'PUT',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify({
           company_search_documents: payloadDocs
         })
@@ -2269,10 +2324,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(selectedCase.name)}`, {
         method: 'PUT',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify({
           company_search_documents: payloadDocs
         })
@@ -2441,10 +2495,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(selectedCase.name)}`, {
         method: 'PUT',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify(payload)
       });
 
@@ -2491,40 +2544,24 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     }
   };
 
-  // Handle file uploads to ERPNext
+  // Handle file uploads to ERPNext with fallback to DataURL so onboarding flow is never blocked
   const handleFileUpload = async (e, setUrlCallback, docKey = null) => {
-    const file = e.target.files[0];
-    if (!file || !erpnextConfig?.url) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
 
     setUploadingFile(true);
     if (docKey) setUploadingDocKey(docKey);
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('is_private', '0');
 
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-        },
-        body: formData
-      });
-      if (res.ok) {
-        const json = await res.json();
-        const fileUrl = json.message?.file_url || json.file_url;
-        if (fileUrl) {
-          await setUrlCallback(fileUrl);
-        } else {
-          alert("Upload succeeded but file URL not returned.");
-        }
+      const fileUrl = await uploadFileToERPNext(file, erpnextConfig, getCsrfToken);
+      if (fileUrl) {
+        await setUrlCallback(fileUrl, file.name);
       } else {
-        alert("File upload failed.");
+        alert("Could not process the selected file.");
       }
     } catch (err) {
       console.error("Error uploading file:", err);
-      alert("Error uploading file.");
+      alert("Error processing file: " + (err?.message || ""));
     } finally {
       setUploadingFile(false);
       setUploadingDocKey(null);
@@ -2867,10 +2904,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify(payload)
       });
       console.log("Onboarding create payload:", payload);
@@ -2981,10 +3017,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       const res = await fetch(`${erpnextConfig.url}/api/method/approve_reject_doc`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken ? getCsrfToken() : ''
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify({
           doctype_name: "Tenant Onboarding",
           docname: caseName,
@@ -4045,9 +4080,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                                         whiteSpace: 'nowrap',
                                                         maxWidth: '320px'
                                                       }}
-                                                      title={fileUrlDraft.split('/').pop()}
+                                                      title={fileUrlDraft.startsWith('data:') ? 'Attached Document' : fileUrlDraft.split('/').pop()}
                                                     >
-                                                      {fileUrlDraft.split('/').pop()}
+                                                      {fileUrlDraft.startsWith('data:') ? 'Attached Document' : fileUrlDraft.split('/').pop()}
                                                     </span>
                                                     <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
                                                       ✓ Document Attached
@@ -4059,7 +4094,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                                   <button
                                                     type="button"
                                                     onClick={() => {
-                                                      const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                                      const fullUrl = resolveMediaUrl(fileUrlDraft, erpnextConfig?.url);
                                                       setPreviewDocUrl(fullUrl);
                                                       setPreviewDocTitle(docItem.label);
                                                     }}
@@ -4615,14 +4650,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             {editMenuAndBusinessPictures ? (
                               <div style={{ width: '100%', height: '180px', background: 'var(--bg-secondary, #f8fafc)', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)' }}>
                                 <img
-                                  src={editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`}
+                                  src={resolveMediaUrl(editMenuAndBusinessPictures, erpnextConfig?.url)}
                                   alt="Menu and Business Pictures"
                                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                                   crossOrigin="use-credentials"
                                 />
                                 <div style={{ position: 'absolute', left: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600, cursor: 'pointer' }}
                                   onClick={() => {
-                                    const fullUrl = editMenuAndBusinessPictures.startsWith('http') ? editMenuAndBusinessPictures : `${erpnextConfig.url}${editMenuAndBusinessPictures}`;
+                                    const fullUrl = resolveMediaUrl(editMenuAndBusinessPictures, erpnextConfig?.url);
                                     setPreviewDocUrl(fullUrl);
                                     setPreviewDocTitle('Menu & Business Pictures');
                                   }}
@@ -4693,16 +4728,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Menu & Business Pictures Attachment</span>
                               <div
                                 onClick={() => {
-                                  const fullUrl = selectedCase.menu_and_business_pictures.startsWith('http')
-                                    ? selectedCase.menu_and_business_pictures
-                                    : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`;
+                                  const fullUrl = resolveMediaUrl(selectedCase.menu_and_business_pictures, erpnextConfig?.url);
                                   setPreviewDocUrl(fullUrl);
                                   setPreviewDocTitle('Menu & Business Pictures');
                                 }}
                                 style={{ width: '100%', height: '180px', background: 'var(--bg-secondary, #f8fafc)', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer' }}
                               >
                                 <img
-                                  src={selectedCase.menu_and_business_pictures.startsWith('http') ? selectedCase.menu_and_business_pictures : `${erpnextConfig.url}${selectedCase.menu_and_business_pictures}`}
+                                  src={resolveMediaUrl(selectedCase.menu_and_business_pictures, erpnextConfig?.url)}
                                   alt="Menu and Business Pictures"
                                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                                   crossOrigin="use-credentials"
@@ -4927,8 +4960,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               {editPlansForApproval ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
                                   <CheckCircle size={12} />
-                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={editPlansForApproval.split('/').pop()}>
-                                    {editPlansForApproval.split('/').pop()}
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={editPlansForApproval.startsWith('data:') ? 'Attached Plan' : editPlansForApproval.split('/').pop()}>
+                                    {editPlansForApproval.startsWith('data:') ? 'Attached Plan' : editPlansForApproval.split('/').pop()}
                                   </span>
                                   <button
                                     type="button"
@@ -4947,17 +4980,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               {selectedCase.plans_for_approval ? (
                                 <div
                                   onClick={() => {
-                                    const fullUrl = selectedCase.plans_for_approval.startsWith('http')
-                                      ? selectedCase.plans_for_approval
-                                      : `${erpnextConfig.url}${selectedCase.plans_for_approval}`;
+                                    const fullUrl = resolveMediaUrl(selectedCase.plans_for_approval, erpnextConfig?.url);
                                     setPreviewDocUrl(fullUrl);
                                     setPreviewDocTitle('Plans Submitted for Approval');
                                   }}
                                   style={{ width: '100%', height: '140px', background: 'var(--bg-secondary, #f8fafc)', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer', marginTop: '6px' }}
                                 >
-                                  {/\.(jpg|jpeg|png|gif|webp)$/i.test(selectedCase.plans_for_approval) ? (
+                                  {/\.(jpg|jpeg|png|gif|webp)$/i.test(selectedCase.plans_for_approval) || String(selectedCase.plans_for_approval).startsWith('data:image/') ? (
                                     <img
-                                      src={selectedCase.plans_for_approval.startsWith('http') ? selectedCase.plans_for_approval : `${erpnextConfig.url}${selectedCase.plans_for_approval}`}
+                                      src={resolveMediaUrl(selectedCase.plans_for_approval, erpnextConfig?.url)}
                                       alt="Plans Submitted for Approval"
                                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                                       crossOrigin="use-credentials"
@@ -4965,7 +4996,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                   ) : (
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', gap: '8px' }}>
                                       <FileText size={24} style={{ color: 'var(--text-muted)' }} />
-                                      <span style={{ fontSize: '11.5px', fontWeight: 600 }}>{selectedCase.plans_for_approval.split('/').pop()}</span>
+                                      <span style={{ fontSize: '11.5px', fontWeight: 600 }}>{selectedCase.plans_for_approval.startsWith('data:') ? 'Attached Plan' : selectedCase.plans_for_approval.split('/').pop()}</span>
                                     </div>
                                   )}
                                   <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
@@ -5260,9 +5291,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                                     whiteSpace: 'nowrap',
                                                     maxWidth: '320px'
                                                   }}
-                                                  title={fileUrlDraft.split('/').pop()}
+                                                  title={fileUrlDraft.startsWith('data:') ? 'Attached Document' : fileUrlDraft.split('/').pop()}
                                                 >
-                                                  {fileUrlDraft.split('/').pop()}
+                                                  {fileUrlDraft.startsWith('data:') ? 'Attached Document' : fileUrlDraft.split('/').pop()}
                                                 </span>
                                                 <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
                                                   ✓ Document Attached
@@ -5274,7 +5305,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                               <button
                                                 type="button"
                                                 onClick={() => {
-                                                  const fullUrl = fileUrlDraft.startsWith('http') ? fileUrlDraft : `${erpnextConfig.url}${fileUrlDraft}`;
+                                                  const fullUrl = resolveMediaUrl(fileUrlDraft, erpnextConfig?.url);
                                                   setPreviewDocUrl(fullUrl);
                                                   setPreviewDocTitle(docItem.label);
                                                 }}
@@ -6028,7 +6059,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#10b981', fontWeight: 600 }}>
                               <CheckCircle size={14} />
                               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px' }}>
-                                {plansForApproval.split('/').pop()}
+                                {plansForApproval.startsWith('data:') ? 'Attached Plan' : plansForApproval.split('/').pop()}
                               </span>
                             </div>
                           )}
@@ -6053,10 +6084,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       const docObj = formCompanySearchDocs[doc.key] || { doc: '', verified: false };
                       const isExpanded = !!modalExpandedDocs[doc.key];
 
-                      const handleUpdateDoc = (docUrl) => {
+                      const handleUpdateDoc = (docUrl, fileName) => {
                         setFormCompanySearchDocs(prev => ({
                           ...prev,
-                          [doc.key]: { ...prev[doc.key], doc: docUrl }
+                          [doc.key]: {
+                            ...prev[doc.key],
+                            doc: docUrl,
+                            fileName: fileName || prev[doc.key]?.fileName || ''
+                          }
                         }));
                       };
 
@@ -6209,9 +6244,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                             whiteSpace: 'nowrap',
                                             maxWidth: '300px'
                                           }}
-                                          title={docObj.doc.split('/').pop()}
+                                          title={docObj.fileName || (docObj.doc.startsWith('data:') ? 'Attached Document' : docObj.doc.split('/').pop())}
                                         >
-                                          {docObj.doc.split('/').pop()}
+                                          {docObj.fileName || (docObj.doc.startsWith('data:') ? 'Attached Document' : docObj.doc.split('/').pop())}
                                         </span>
                                         <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
                                           ✓ Document Attached
@@ -6223,7 +6258,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const fullUrl = docObj.doc.startsWith('http') ? docObj.doc : `${erpnextConfig.url}${docObj.doc}`;
+                                          const fullUrl = resolveMediaUrl(docObj.doc, erpnextConfig?.url);
                                           setPreviewDocUrl(fullUrl);
                                           setPreviewDocTitle(doc.label);
                                         }}
@@ -6480,7 +6515,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
             {/* Modal Content */}
             <div style={{ flex: 1, background: 'var(--bg-secondary, #f8fafc)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto', position: 'relative' }}>
-              {/\.(jpg|jpeg|png|gif|webp)$/i.test(previewDocUrl) ? (
+              {/\.(jpg|jpeg|png|gif|webp)$/i.test(previewDocUrl) || String(previewDocUrl).startsWith('data:image/') ? (
                 <img
                   src={previewDocUrl}
                   alt={previewDocTitle}
@@ -6501,7 +6536,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                 <button
                   type="button"
                   onClick={async () => {
-                    const relativePath = previewDocUrl.replace(erpnextConfig.url, '');
+                    const relativePath = previewDocUrl.startsWith('data:') ? previewDocUrl : previewDocUrl.replace(erpnextConfig?.url || '', '');
                     await saveDocumentToERPNext(previewDocTitle, relativePath, !isPreviewDocVerified);
                   }}
                   style={{

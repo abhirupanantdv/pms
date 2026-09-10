@@ -2825,6 +2825,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Hammer, User, Clock, CheckCircle, CheckCircle2, AlertTriangle, Plus, X, Calendar as CalendarIcon, List, BarChart3, ClipboardList, Building, Search, Activity, Settings, DollarSign, PenTool, Archive, Check, ArrowRight, UserCheck, ShieldCheck, Mail, Phone, MapPin, Award, Trash, Save, RefreshCw, Users, Briefcase } from 'lucide-react';
 import TaskItemsPanel from './TaskItemsPanel';
+import { getAuthHeaders, getCsrfToken } from '../config';
 
 // ── Toast ────────────────────────────────────────────────────────────────────
 function Toast({ message, type, onClose }) {
@@ -3023,10 +3024,7 @@ function TaskAssignPanel({ taskDoc, employeeDir, vendorDir, erpnextConfig, getCs
         {
           method: "PUT",
           credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Frappe-CSRF-Token": getCsrfToken(),
-          },
+          headers: getAuthHeaders(),
           body: JSON.stringify(body),
         }
       );
@@ -3324,8 +3322,7 @@ export default function Maintenance({
   const [assetsList, setAssetsList] = useState([]);
   const [stockItems, setStockItems] = useState([]);
 
-  const getCsrfToken = () =>
-    document.cookie.split('; ').find(row => row.startsWith('sid='))?.split('=')[1] || '';
+  // getCsrfToken is safely imported from ../config
 
   const getPropertyIdFromBooking = (booking) => {
     if (!booking || !properties || properties.length === 0) return '';
@@ -3865,12 +3862,10 @@ export default function Maintenance({
 
     setWoSubmitting(true);
     try {
-      const csrfToken = getCsrfToken();
-
       // Step 1: Submit/approve schedule
       const approveRes = await fetch(`${erpnextConfig.url}/api/method/approve_reject_doc`, {
         method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': csrfToken },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ doctype_name: 'Maintenance Schedule', docname: selectedSchedule.name, state_code: 1 })
       });
       if (!approveRes.ok) {
@@ -3926,7 +3921,7 @@ export default function Maintenance({
 
         const putRes = await fetch(`${erpnextConfig.url}/api/resource/Task/${taskName}`, {
           method: 'PUT', credentials: 'include',
-          headers: { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': csrfToken },
+          headers: getAuthHeaders(),
           body: JSON.stringify(putBody)
         });
 
@@ -3967,7 +3962,7 @@ export default function Maintenance({
       try {
         await fetch(`${erpnextConfig.url}/api/resource/Task/${woId}`, {
           method: 'PUT', credentials: 'include',
-          headers: { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': getCsrfToken() },
+          headers: getAuthHeaders(),
           body: JSON.stringify({ status: erpStatus })
         });
       } catch (e) { }
@@ -4154,7 +4149,7 @@ export default function Maintenance({
     const payload = { quotation_to: 'Customer', party_name: customerId, transaction_date: new Date().toISOString().split('T')[0], company: 'CARPENTERS PROPERTIES PTE LIMITED', valid_till: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0], items: estimates.map(e => ({ item_code: e.itemCode || 'General Item', qty: Number(e.qty) || 1, rate: Number(e.cost) / (Number(e.qty) || 1), description: e.comment || e.name || 'Estimate Item' })) };
     if (erpnextConfig?.url) {
       try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': getCsrfToken() }, body: JSON.stringify(payload) });
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, { method: 'POST', credentials: 'include', headers: getAuthHeaders(), body: JSON.stringify(payload) });
         if (res.ok) { const json = await res.json(); showToast(`Quotation ${json.data?.name || ''} generated!`, 'success'); }
         else showToast('Failed to generate Quotation.', 'error');
       } catch (e) { showToast('Error generating quotation.', 'error'); }

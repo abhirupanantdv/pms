@@ -4,6 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Property Management System</title>
+    <script>
+        window.csrf_token = "{{ frappe.session.csrf_token }}";
+        window.frappe_user = "{{ frappe.session.user }}";
+        window.frappe = window.frappe || {};
+        window.frappe.csrf_token = "{{ frappe.session.csrf_token }}";
+        window.frappe.session = {
+            user: "{{ frappe.session.user }}",
+            csrf_token: "{{ frappe.session.csrf_token }}"
+        };
+    </script>
     {% if css_file %}
     <link rel="stylesheet" href="{{ css_file }}">
     {% endif %}

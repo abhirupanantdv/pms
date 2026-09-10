@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Send, CheckCircle2, MessageSquare, AlertCircle, BarChart2, ShieldAlert, Clock, User, Sparkles, Mic, MicOff, RefreshCw, X, HelpCircle, Check, Play, Pencil, Settings, Paperclip, Activity, FileText, Bell, Phone, Mail, Award, DollarSign } from 'lucide-react';
+import { getAuthHeaders } from '../config';
 
 const MOCK_ISSUE_LISTS = {
   "Utilities & Infrastructure Issues List": [
@@ -290,7 +291,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
         await fetch(`${erpnextConfig.url}/api/resource/Issue/${ticketId}`, {
           method: 'PUT',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(payload)
         });
       } catch (err) {

@@ -3,6 +3,13 @@ import json
 import os
 
 def get_context(context):
+    context.no_cache = 1
+
+    # Redirect unauthenticated Guest visitors to login with return path to /pms
+    if frappe.session.user == "Guest":
+        frappe.local.flags.redirect_location = "/login?redirect-to=/pms"
+        raise frappe.Redirect
+
     manifest_path = frappe.get_app_path("pms", "public", "dist", ".vite", "manifest.json")
     if not os.path.exists(manifest_path):
         manifest_path = frappe.get_app_path("pms", "public", "dist", "manifest.json")
@@ -25,3 +32,5 @@ def get_context(context):
 
     context.js_file = f"/assets/pms/dist/{js_file}" if js_file else ""
     context.css_file = f"/assets/pms/dist/{css_file}" if css_file else ""
+    context.csrf_token = frappe.session.csrf_token
+    context.session_user = frappe.session.user

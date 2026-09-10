@@ -2182,19 +2182,7 @@ import { Calendar, User, Building, DollarSign, Plus, X, Search, Filter, Loader, 
 import homeImg from '../assets/home.png';
 import houseImg from '../assets/new-house.png';
 import billingSummaryImg from '../assets/Billing-summary.png';
-
-const getCsrfToken = () => {
-  if (typeof window !== 'undefined' && window.csrf_token) {
-    return window.csrf_token;
-  }
-  if (typeof window !== 'undefined' && window.frappe && window.frappe.csrf_token) {
-    return window.frappe.csrf_token;
-  }
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; csrf_token=`);
-  if (parts.length === 2) return parts.pop().split(';').shift();
-  return '';
-};
+import { getAuthHeaders, getCsrfToken } from '../config';
 
 // Lightweight toast system — no external deps, self-contained styles/animation.
 let toastIdCounter = 0;
@@ -2696,10 +2684,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
       const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(selectedBookingDetails.name)}`, {
         method: 'PUT',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           starting_date: editStartDate,
           ending_date: editEndDate
@@ -2786,10 +2771,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
             const cRes = await fetch(`${erpnextConfig.url}/api/resource/Contract/${encodeURIComponent(contractId)}`, {
               method: 'PUT',
               credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Frappe-CSRF-Token': getCsrfToken()
-              },
+              headers: getAuthHeaders(),
               body: JSON.stringify({
                 start_date: actualStart,
                 end_date: actualEnd
@@ -2803,10 +2785,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
               const rpcRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
                 method: 'POST',
                 credentials: 'include',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-Frappe-CSRF-Token': getCsrfToken()
-                },
+                headers: getAuthHeaders(),
                 body: JSON.stringify({
                   doctype: 'Contract',
                   name: contractId,
@@ -2823,10 +2802,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                 await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
                   method: 'POST',
                   credentials: 'include',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'X-Frappe-CSRF-Token': getCsrfToken()
-                  },
+                  headers: getAuthHeaders(),
                   body: JSON.stringify({
                     doctype: 'Contract',
                     name: contractId,
@@ -2837,10 +2813,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                 await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
                   method: 'POST',
                   credentials: 'include',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'X-Frappe-CSRF-Token': getCsrfToken()
-                  },
+                  headers: getAuthHeaders(),
                   body: JSON.stringify({
                     doctype: 'Contract',
                     name: contractId,
@@ -3006,10 +2979,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
           const res = await fetch(`${erpnextConfig.url}/api/method/property_management.api.approve_booking`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Frappe-CSRF-Token': getCsrfToken()
-            },
+            headers: getAuthHeaders(),
             body: JSON.stringify({
               booking_id: selectedBookingId,
               contract_template: selectedTemplateId,
@@ -3160,10 +3130,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
           const res = await fetch(`${erpnextConfig.url}/api/method/erpnext.api.booking.create_booking`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Frappe-CSRF-Token': getCsrfToken()
-            },
+            headers: getAuthHeaders(),
             body: JSON.stringify(formData)
           });
           if (res.ok) {
@@ -3178,10 +3145,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
           const res = await fetch(`${erpnextConfig.url}/api/resource/Booking?order_by=creation%20desc`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Frappe-CSRF-Token': getCsrfToken()
-            },
+            headers: getAuthHeaders(),
             body: JSON.stringify(formData)
           });
           if (res.ok) {

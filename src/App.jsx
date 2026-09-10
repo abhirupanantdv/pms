@@ -2960,21 +2960,8 @@ import HRMS, { INITIAL_EMPLOYEES } from './components/HRMS';
 import Reports from './components/Reports';
 import Quotation from './components/Quotation';
 import TenantOnboarding from './components/TenantOnboarding';
-import { ERPNEXT_CONFIG } from './config';
+import { ERPNEXT_CONFIG, getCsrfToken, getAuthHeaders, getUploadHeaders } from './config';
 import MapComponent from './components/MapComponent';
-
-const getCsrfToken = () => {
-  if (typeof window !== 'undefined' && window.csrf_token) {
-    return window.csrf_token;
-  }
-  if (typeof window !== 'undefined' && window.frappe && window.frappe.csrf_token) {
-    return window.frappe.csrf_token;
-  }
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; csrf_token=`);
-  if (parts.length === 2) return parts.pop().split(';').shift();
-  return '';
-};
 
 // Sample INITIAL MOCK DATA
 const INITIAL_PROPERTIES = [
@@ -3456,11 +3443,9 @@ export default function App() {
             `${ERPNEXT_CONFIG.url}/api/resource/Customer?fields=["*"]&limit_page_length=200&order_by=modified desc`,
             {
               credentials: "include",
-              headers: {
-                "Content-Type": "application/json",
-                "X-Frappe-CSRF-Token":
-                  ERPNEXT_CONFIG.csrfToken || window.csrf_token || ""
-              }
+              headers: getAuthHeaders({
+                "Content-Type": "application/json"
+              })
             }
           );
 
@@ -3880,6 +3865,13 @@ export default function App() {
 
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    if (typeof window !== 'undefined' && window.frappe_user && window.frappe_user !== 'Guest' && window.frappe_user !== 'None') {
+      localStorage.setItem('pms_auth', 'true');
+      if (!localStorage.getItem('pms_user')) {
+        localStorage.setItem('pms_user', window.frappe_user);
+      }
+      return true;
+    }
     return localStorage.getItem('pms_auth') === 'true';
   });
   const [loginUser, setLoginUser] = useState('');
@@ -3888,14 +3880,14 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
 
   const [currentUserDetails, setCurrentUserDetails] = useState({
-    fullName: localStorage.getItem('pms_user') || 'Estate Admin',
+    fullName: (typeof window !== 'undefined' && window.frappe_user && window.frappe_user !== 'Guest' ? window.frappe_user : null) || localStorage.getItem('pms_user') || 'Estate Admin',
     designation: 'Superuser',
     image: ''
   });
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    const loggedInUser = localStorage.getItem('pms_user');
+    const loggedInUser = (typeof window !== 'undefined' && window.frappe_user && window.frappe_user !== 'Guest' ? window.frappe_user : null) || localStorage.getItem('pms_user');
     if (!loggedInUser) return;
 
     // Default values
@@ -3977,6 +3969,9 @@ export default function App() {
         localStorage.setItem('pms_auth', 'true');
         localStorage.setItem('pms_user', loginUser);
         setLoginError('');
+        if (typeof window !== 'undefined' && window.location.pathname.startsWith('/pms')) {
+          window.location.reload();
+        }
       } else {
         const errData = await res.json().catch(() => ({}));
         setLoginError(errData.message || 'Invalid username or password credentials.');
@@ -3994,10 +3989,16 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setIsAuthenticated(false);
     localStorage.removeItem('pms_auth');
     localStorage.removeItem('pms_user');
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/pms')) {
+      try {
+        await fetch(`${ERPNEXT_CONFIG.url}/api/method/logout`, { credentials: 'include' });
+      } catch (e) { }
+      window.location.href = '/login';
+    }
   };
 
   // Handlers
@@ -4090,10 +4091,9 @@ export default function App() {
       const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Property%20Group`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify(payload)
       });
 
@@ -4283,11 +4283,9 @@ export default function App() {
         {
           method: "POST",
           credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Frappe-CSRF-Token":
-              ERPNEXT_CONFIG.csrfToken || window.csrf_token || ""
-          },
+          headers: getAuthHeaders({
+            "Content-Type": "application/json"
+          }),
           body: JSON.stringify(payload)
         }
       );
@@ -4343,10 +4341,9 @@ export default function App() {
       const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify(newSchedule)
       });
       if (res.ok) {
@@ -4407,10 +4404,9 @@ export default function App() {
         await fetch(`${ERPNEXT_CONFIG.url}/api/method/frappe.desk.form.assign_to.add`, {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getAuthHeaders({
+            'Content-Type': 'application/json'
+          }),
           body: JSON.stringify({
             doctype: 'Maintenance Schedule',
             name: scheduleName,
@@ -4429,10 +4425,9 @@ export default function App() {
       const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Visit`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify(newVisit)
       });
       if (res.ok) {
@@ -4496,10 +4491,9 @@ export default function App() {
         await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule/${parentName}`, {
           method: 'PUT',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getAuthHeaders({
+            'Content-Type': 'application/json'
+          }),
           body: JSON.stringify({ schedules: updatedScheduleDoc.schedules })
         });
       } catch (err) {
@@ -4528,10 +4522,9 @@ export default function App() {
         await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule/${scheduleName}`, {
           method: 'PUT',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getAuthHeaders({
+            'Content-Type': 'application/json'
+          }),
           body: JSON.stringify({ status: erpStatus })
         });
       } catch (err) {
@@ -4561,10 +4554,9 @@ export default function App() {
         await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Visit/${visitName}`, {
           method: 'PUT',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getAuthHeaders({
+            'Content-Type': 'application/json'
+          }),
           body: JSON.stringify({ completion_status: erpStatus })
         });
       } catch (err) {
@@ -4579,10 +4571,9 @@ export default function App() {
         const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue`, {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getAuthHeaders({
+            'Content-Type': 'application/json'
+          }),
           body: JSON.stringify(newIssue)
         });
         if (res.ok) {
@@ -4648,10 +4639,9 @@ export default function App() {
         await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Sales%20Invoice/${invId}`, {
           method: 'PUT',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getAuthHeaders({
+            'Content-Type': 'application/json'
+          }),
           body: JSON.stringify({ status: 'Paid' })
         });
       } catch (err) {
@@ -4688,13 +4678,13 @@ export default function App() {
           formData.append('doctype', 'Issue');
           formData.append('docname', ticketId);
           formData.append('is_private', '0');
+          const token = getCsrfToken();
+          if (token) formData.append('csrf_token', token);
 
           const uploadRes = await fetch(`${ERPNEXT_CONFIG.url}/api/method/upload_file`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'X-Frappe-CSRF-Token': getCsrfToken()
-            },
+            headers: getUploadHeaders(),
             body: formData
           });
           if (uploadRes.ok) {
@@ -4720,10 +4710,9 @@ export default function App() {
             const res = await fetch(`${ERPNEXT_CONFIG.url}/api/method/frappe.core.doctype.communication.email.make`, {
               method: 'POST',
               credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Frappe-CSRF-Token': getCsrfToken()
-              },
+              headers: getAuthHeaders({
+                'Content-Type': 'application/json'
+              }),
               body: JSON.stringify({
                 recipients: customerEmail,
                 subject: `Re: ${currentTicket.subject || 'Support Ticket Response'}`,
@@ -4750,10 +4739,9 @@ export default function App() {
           await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Comment`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Frappe-CSRF-Token': getCsrfToken()
-            },
+            headers: getAuthHeaders({
+              'Content-Type': 'application/json'
+            }),
             body: JSON.stringify({
               comment_type: 'Comment',
               reference_doctype: 'Issue',
@@ -4792,10 +4780,9 @@ export default function App() {
         const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Employee`, {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getAuthHeaders({
+            'Content-Type': 'application/json'
+          }),
           body: JSON.stringify(payload)
         });
 

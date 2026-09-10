@@ -2050,6 +2050,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Home, Building2, Plus, Globe, Search, ArrowRight, ShieldCheck, X, Grid, Info, Edit, Upload } from 'lucide-react';
+import { getAuthHeaders, getUploadHeaders, getCsrfToken } from '../config';
 
 const fallbackImages = {
   residential: [
@@ -2730,13 +2731,13 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           const formData = new FormData();
           formData.append('file', file);
           formData.append('is_private', '0');
+          const token = getCsrfToken();
+          if (token) formData.append('csrf_token', token);
 
           const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'X-Frappe-CSRF-Token': erpnextConfig.csrfToken || window.csrf_token || ''
-            },
+            headers: getUploadHeaders(),
             body: formData
           });
 
@@ -2924,13 +2925,13 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           const formData = new FormData();
           formData.append('file', file);
           formData.append('is_private', '0');
+          const token = getCsrfToken();
+          if (token) formData.append('csrf_token', token);
 
           const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'X-Frappe-CSRF-Token': erpnextConfig.csrfToken || window.csrf_token || ''
-            },
+            headers: getUploadHeaders(),
             body: formData
           });
 
@@ -3067,10 +3068,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           const res = await fetch(`${erpnextConfig.url}/api/resource/Property%20Group/${encodeURIComponent(pId)}`, {
             method: 'PUT',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Frappe-CSRF-Token': erpnextConfig.csrfToken || window.csrf_token || ''
-            },
+            headers: getAuthHeaders({
+              'Content-Type': 'application/json'
+            }),
             body: JSON.stringify(payload)
           });
 
@@ -3252,10 +3252,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           const res = await fetch(`${erpnextConfig.url}/api/resource/Item/${encodeURIComponent(unitCode)}`, {
             method: 'PUT',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Frappe-CSRF-Token': erpnextConfig.csrfToken || window.csrf_token || ''
-            },
+            headers: getAuthHeaders({
+              'Content-Type': 'application/json'
+            }),
             body: JSON.stringify(payload)
           });
 
@@ -3410,10 +3409,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         const res = await fetch(`${erpnextConfig.url}/api/resource/Item`, {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': erpnextConfig.csrfToken || window.csrf_token || ''
-          },
+          headers: getAuthHeaders({
+            'Content-Type': 'application/json'
+          }),
           body: JSON.stringify(payload)
         });
 

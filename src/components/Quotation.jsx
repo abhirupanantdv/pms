@@ -4802,16 +4802,29 @@ import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Cal
 import houseImg from '../assets/new-house.png';
 
 const getCsrfToken = () => {
-  if (typeof window !== 'undefined' && window.csrf_token) {
-    return window.csrf_token;
+  if (typeof window !== 'undefined') {
+    if (window.csrf_token && window.csrf_token !== 'None' && window.csrf_token !== 'null') {
+      return String(window.csrf_token).trim();
+    }
+    if (window.frappe?.csrf_token && window.frappe.csrf_token !== 'None' && window.frappe.csrf_token !== 'null') {
+      return String(window.frappe.csrf_token).trim();
+    }
+    const match = document.cookie.match(/(?:^|;\s*)(?:csrf_token|XSRF-TOKEN|CSRF-TOKEN)=([^;]*)/i);
+    if (match && match[1]) {
+      const decoded = decodeURIComponent(match[1]).trim();
+      if (decoded && decoded !== 'None' && decoded !== 'null') return decoded;
+    }
   }
-  if (typeof window !== 'undefined' && window.frappe && window.frappe.csrf_token) {
-    return window.frappe.csrf_token;
-  }
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; csrf_token=`);
-  if (parts.length === 2) return parts.pop().split(';').shift();
   return '';
+};
+
+const getQuotationHeaders = (extra = {}) => {
+  const h = { 'Content-Type': 'application/json', ...extra };
+  const token = getCsrfToken();
+  if (token) {
+    h['X-Frappe-CSRF-Token'] = token;
+  }
+  return h;
 };
 
 // Small self-contained toast banner. Reuse your app-wide toast system instead
@@ -6390,10 +6403,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getQuotationHeaders(),
           body: JSON.stringify(payload)
         });
         if (!res.ok) {
@@ -6774,10 +6784,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           const submitRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.submit`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Frappe-CSRF-Token': getCsrfToken()
-            },
+            headers: getQuotationHeaders(),
             body: JSON.stringify({
               doc: { ...latestSource, docstatus: 1 }
             })
@@ -6795,10 +6802,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             const putRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(latestSource.name)}`, {
               method: 'PUT',
               credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Frappe-CSRF-Token': getCsrfToken()
-              },
+              headers: getQuotationHeaders(),
               body: JSON.stringify({ docstatus: 1, status: 'Submitted' })
             });
             if (putRes.ok) submitSuccess = true;
@@ -6812,10 +6816,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
               method: 'POST',
               credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Frappe-CSRF-Token': getCsrfToken()
-              },
+              headers: getQuotationHeaders(),
               body: JSON.stringify({
                 quotation: latestSource.name,
                 action: 'Submit'
@@ -6832,10 +6833,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           const cancelRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.cancel`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Frappe-CSRF-Token': getCsrfToken()
-            },
+            headers: getQuotationHeaders(),
             body: JSON.stringify({ doctype: 'Quotation', name: latestSource.name })
           });
           const cancelJson = await cancelRes.json();
@@ -6851,10 +6849,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(latestSource.name)}`, {
               method: 'PUT',
               credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Frappe-CSRF-Token': getCsrfToken()
-              },
+              headers: getQuotationHeaders(),
               body: JSON.stringify({ docstatus: 2, status: 'Cancelled' })
             });
           } catch (e) {
@@ -6913,10 +6908,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       let res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getQuotationHeaders(),
         body: JSON.stringify(payload)
       });
 
@@ -6929,10 +6921,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
             method: 'POST',
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Frappe-CSRF-Token': getCsrfToken()
-            },
+            headers: getQuotationHeaders(),
             body: JSON.stringify(fallbackPayload)
           });
         } else {
@@ -6969,7 +6958,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           await fetch(`${erpnextConfig.url}/api/resource/Comment`, {
             method: 'POST',
             credentials: 'include',
-            headers: { 'Content-Type': 'application/json', 'X-Frappe-CSRF-Token': getCsrfToken() },
+            headers: getQuotationHeaders(),
             body: JSON.stringify({
               comment_type: 'Comment',
               reference_doctype: 'Quotation',
@@ -7041,10 +7030,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             const submitRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.submit`, {
               method: 'POST',
               credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Frappe-CSRF-Token': getCsrfToken()
-              },
+              headers: getQuotationHeaders(),
               body: JSON.stringify({
                 doc: { ...latestDoc, docstatus: 1 }
               })
@@ -7075,10 +7061,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               const putRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(qName)}`, {
                 method: 'PUT',
                 credentials: 'include',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-Frappe-CSRF-Token': getCsrfToken()
-                },
+                headers: getQuotationHeaders(),
                 body: JSON.stringify({ docstatus: 1, status: 'Submitted' })
               });
               const putJson = await putRes.json();
@@ -7096,10 +7079,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               const wfRes = await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
                 method: 'POST',
                 credentials: 'include',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-Frappe-CSRF-Token': getCsrfToken()
-                },
+                headers: getQuotationHeaders(),
                 body: JSON.stringify({
                   quotation: qName,
                   action: 'Submit'
@@ -7124,10 +7104,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       const res = await fetch(`${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.booking.booking.create_booking_from_quotation`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getQuotationHeaders(),
         body: JSON.stringify({ quotation_name: qName })
       });
 
@@ -7183,10 +7160,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${qName}`, {
           method: 'PUT',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getQuotationHeaders(),
           body: JSON.stringify({ status: 'Cancelled' })
         });
         if (!res.ok) {
@@ -7235,10 +7209,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const cancelRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${selectedQuotationDetail.name}`, {
           method: 'PUT',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getQuotationHeaders(),
           body: JSON.stringify({ status: 'Cancelled' })
         });
         if (!cancelRes.ok) {
@@ -7290,10 +7261,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const createRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getQuotationHeaders(),
           body: JSON.stringify(payload)
         });
         if (!createRes.ok) {
@@ -7343,10 +7311,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       const res = await fetch(`${erpnextConfig.url}/api/method/approve_reject_doc`, {
         method: "POST",
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getQuotationHeaders(),
         body: JSON.stringify({
           doctype_name: "Quotation",
           docname: con.name,
@@ -7426,10 +7391,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       const discountRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${selectedQuotationDetail.name}`, {
         method: 'PUT',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getQuotationHeaders(),
         body: JSON.stringify({
           items: updatedItems,
           discount_amount: 0,
@@ -7448,10 +7410,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const commentRes = await fetch(`${erpnextConfig.url}/api/resource/Comment`, {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getQuotationHeaders(),
           body: JSON.stringify({
             comment_type: 'Comment',
             reference_doctype: 'Quotation',
@@ -7490,10 +7449,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       const res = await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
         method: "POST",
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getQuotationHeaders(),
         body: JSON.stringify({
           quotation: selectedQuotationDetail.name,
           action: actionName,
@@ -7610,10 +7566,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       const discountRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${selectedQuotationDetail.name}`, {
         method: 'PUT',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Frappe-CSRF-Token': getCsrfToken()
-        },
+        headers: getQuotationHeaders(),
         body: JSON.stringify({
           items: updatedItems,
           discount_amount: 0,
@@ -7632,10 +7585,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const commentRes = await fetch(`${erpnextConfig.url}/api/resource/Comment`, {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Frappe-CSRF-Token': getCsrfToken()
-          },
+          headers: getQuotationHeaders(),
           body: JSON.stringify({
             comment_type: 'Comment',
             reference_doctype: 'Quotation',
