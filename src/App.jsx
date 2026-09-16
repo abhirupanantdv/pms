@@ -3449,15 +3449,16 @@ export default function App() {
             }
           );
 
-          if (!res.ok) {
-            throw new Error(`Failed to fetch customers (${res.status})`);
+          if (res.ok) {
+            const { data } = await res.json();
+            if (Array.isArray(data) && data.length > 0) {
+              setTenants(data);
+            }
+          } else {
+            console.warn(`ERPNext Customer fetch returned status: ${res.status}`);
           }
-
-          const { data } = await res.json();
-
-          setTenants(data);
         } catch (err) {
-          console.error("ERPNext Customer fetch failed:", err);
+          console.warn("ERPNext Customer fetch failed:", err);
         }
 
         // 4. Fetch Suppliers for Owners
@@ -3552,10 +3553,10 @@ export default function App() {
                 const contactData = contactsMap[primaryContact] || {};
                 const contactPhones = phonesMap[primaryContact] || [];
                 const phoneVal = contactPhones.length > 0 ? contactPhones[0] : '';
-                
+
                 const contactPerson = contactData.full_name || s.custom_contact_person || '';
                 const emailVal = contactData.email_id || s.email_id || s.owner || '';
-                
+
                 return {
                   id: s.name || `OWN-${Math.floor(100 + Math.random() * 900)}`,
                   name: s.supplier_name || s.name || 'ERPNext Supplier',
@@ -3584,9 +3585,14 @@ export default function App() {
           setOwners([]);
         }
 
-        // 5. Fetch Issues for Helpdesk Support
+        // 5. Fetch Issues for Helpdesk Support (matching ERPNext DocType fields)
         try {
-          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue?fields=%5B%22name%22%2C%22subject%22%2C%22customer%22%2C%22customer_name1%22%2C%22customer_email%22%2C%22raised_by%22%2C%22status%22%2C%22priority%22%2C%22date%22%2C%22booking_number%22%2C%22main_issues%22%5D`, {
+          const issueFields = JSON.stringify([
+            "name", "subject", "booking_number", "main_issues", "company",
+            "status", "priority", "raised_by", "date", "opening_date",
+            "opening_time", "agreement_status", "budget", "naming_series"
+          ]);
+          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue?fields=${encodeURIComponent(issueFields)}`, {
             credentials: 'include',
             headers: {
               'Content-Type': 'application/json'
@@ -3600,21 +3606,24 @@ export default function App() {
                 const statusLower = (issue.status || 'open').toLowerCase();
                 const finalStatus = ['open', 'closed', 'in-progress', 'resolved'].includes(statusLower) ? statusLower : 'open';
                 const priorityLower = (issue.priority || 'medium').toLowerCase();
-                const finalPriority = ['low', 'medium', 'high'].includes(priorityLower) ? priorityLower : 'medium';
+                const finalPriority = ['low', 'medium', 'high', 'urgent'].includes(priorityLower) ? priorityLower : 'medium';
                 const categoriesList = ['maintenance', 'billing', 'permit'];
                 return {
                   id: issue.name || `SUP-${Math.floor(700 + Math.random() * 200)}`,
                   subject: issue.subject || 'Support Request',
-                  customerId: issue.customer,
-                  tenantName: issue.customer_name1 || issue.customer || 'Anonymous Tenant',
-                  customer_email: issue.customer_email || issue.raised_by,
+                  customerId: issue.customer || '',
+                  tenantName: issue.customer || issue.raised_by || 'Administrator',
+                  customer_email: issue.raised_by || '',
                   propertyId: 'PROP-2041',
                   status: finalStatus,
                   lastUpdated: 'Just now',
-                  dateRaised: issue.date || '2026-06-01',
+                  dateRaised: issue.date || issue.opening_date || '2026-06-01',
                   priority: finalPriority,
-                  booking_number: issue.booking_number,
-                  main_issues: issue.main_issues,
+                  booking_number: issue.booking_number || 'BOOKING-00243',
+                  main_issues: issue.main_issues || 'Utilities & Infrastructure Issues List',
+                  company: issue.company || 'CARPENTERS PROPERTIES PTE LIMITED',
+                  agreement_status: issue.agreement_status || 'First Response Due',
+                  budget: issue.budget || 0,
                   category: issue.main_issues || categoriesList[index % categoriesList.length],
                   messages: [
                     { sender: 'tenant', text: issue.subject || 'Please look into this issue.', timestamp: '10:00 AM' }
@@ -3969,7 +3978,7 @@ export default function App() {
         localStorage.setItem('pms_auth', 'true');
         localStorage.setItem('pms_user', loginUser);
         setLoginError('');
-        if (typeof window !== 'undefined' && window.location.pathname.startsWith('/pms')) {
+        if (typeof window !== 'undefined' && (window.location.pathname.startsWith('/pms') || window.location.pathname === '/')) {
           window.location.reload();
         }
       } else {
@@ -3991,14 +4000,26 @@ export default function App() {
 
   const handleLogout = async () => {
     setIsAuthenticated(false);
+
     localStorage.removeItem('pms_auth');
     localStorage.removeItem('pms_user');
-    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/pms')) {
-      try {
-        await fetch(`${ERPNEXT_CONFIG.url}/api/method/logout`, { credentials: 'include' });
-      } catch (e) { }
-      window.location.href = '/login';
+
+    if (typeof window !== 'undefined') {
+      window.frappe_user = 'Guest';
+      if (window.frappe?.session) {
+        window.frappe.session.user = 'Guest';
+      }
     }
+
+    try {
+      await fetch(`${ERPNEXT_CONFIG.url}/api/method/logout`, {
+        credentials: 'include',
+      });
+    } catch (e) { }
+
+    setLoginUser('');
+    setLoginPass('');
+    setLoginError('');
   };
 
   // Handlers
@@ -4108,6 +4129,39 @@ export default function App() {
 
       const json = await res.json();
       const doc = json.data || json;
+
+      // Link any uploaded images as attachments to newly created Property Group in ERPNext
+      const docName = doc.name || newProp.name;
+      const allImgsToAttach = [];
+      if (Array.isArray(newProp.gallery)) {
+        newProp.gallery.forEach(item => {
+          const u = typeof item === 'string' ? item : (item.image || item.file_url);
+          if (u && !u.startsWith('data:')) allImgsToAttach.push(u);
+        });
+      }
+      if (newProp.attachments && typeof newProp.attachments === 'string' && !newProp.attachments.startsWith('data:')) {
+        if (!allImgsToAttach.includes(newProp.attachments)) allImgsToAttach.push(newProp.attachments);
+      }
+      for (const imgUrl of allImgsToAttach) {
+        try {
+          const fd = new FormData();
+          fd.append('file_url', imgUrl);
+          fd.append('doctype', 'Property Group');
+          fd.append('docname', docName);
+          fd.append('is_private', '0');
+          fd.append('folder', 'Home/Attachments');
+          const token = getCsrfToken();
+          if (token) fd.append('csrf_token', token);
+          await fetch(`${ERPNEXT_CONFIG.url}/api/method/upload_file`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getUploadHeaders(),
+            body: fd
+          });
+        } catch (attErr) {
+          console.warn('Failed to link attachment to new Property Group:', attErr);
+        }
+      }
 
       const addedProp = {
         id: doc.name || newProp.name,
@@ -4568,27 +4622,128 @@ export default function App() {
   const handleCreateIssue = async (newIssue) => {
     if (ERPNEXT_CONFIG && ERPNEXT_CONFIG.url) {
       try {
-        const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: getAuthHeaders({
-            'Content-Type': 'application/json'
-          }),
-          body: JSON.stringify(newIssue)
-        });
+        // 1. Sanitize priority: ERPNext standard priorities are Low, Medium, High, Urgent
+        let safePriority = newIssue.priority || 'Medium';
+        if (safePriority.toString().trim().toLowerCase() === 'critical') {
+          safePriority = 'High';
+        } else {
+          safePriority = safePriority.charAt(0).toUpperCase() + safePriority.slice(1).toLowerCase();
+          if (!['Low', 'Medium', 'High', 'Urgent'].includes(safePriority)) {
+            safePriority = 'Medium';
+          }
+        }
+
+        const now = new Date();
+        const formattedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const formattedTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
+
+        const issuePayload = {
+          doctype: 'Issue',
+          naming_series: newIssue.naming_series || 'ISS-.YYYY.-',
+          subject: newIssue.subject,
+          booking_number: newIssue.booking_number || 'BOOKING-00243',
+          main_issues: newIssue.main_issues || 'Utilities & Infrastructure Issues List',
+          company: newIssue.company || 'CARPENTERS PROPERTIES PTE LIMITED',
+          priority: safePriority,
+          status: newIssue.status || 'Open',
+          raised_by: newIssue.raised_by || 'Administrator',
+          agreement_status: newIssue.agreement_status || 'First Response Due',
+          budget: newIssue.budget !== undefined ? Number(newIssue.budget) : 0,
+          via_customer_portal: newIssue.via_customer_portal !== undefined ? Number(newIssue.via_customer_portal) : 0,
+          date: newIssue.date || formattedDate,
+          opening_date: newIssue.opening_date || formattedDate,
+          opening_time: newIssue.opening_time || formattedTime,
+          custom_issue_items: Array.isArray(newIssue.custom_issue_items) ? newIssue.custom_issue_items : [],
+          table_fogi: Array.isArray(newIssue.table_fogi) ? newIssue.table_fogi : [],
+          table_gtmq: Array.isArray(newIssue.table_gtmq) ? newIssue.table_gtmq : [],
+          ...(newIssue.description ? { description: newIssue.description } : {}),
+          ...(newIssue.customer ? { customer: newIssue.customer } : {})
+        };
+
+        const postIssue = async (payload) => {
+          return await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getAuthHeaders({
+              'Content-Type': 'application/json'
+            }),
+            body: JSON.stringify(payload)
+          });
+        };
+
+        let res = await postIssue(issuePayload);
+
+        // 2. If rejected due to LinkValidationError
+        if (!res.ok) {
+          let errText = '';
+          try {
+            const errClone = res.clone();
+            const errData = await errClone.json();
+            errText = JSON.stringify(errData);
+          } catch { }
+
+          // A. If customer failed validation, retry without customer field
+          if (errText.includes('Customer') || errText.includes('customer')) {
+            const noCust = { ...issuePayload };
+            delete noCust.customer;
+            res = await postIssue(noCust);
+          }
+
+          // B. Handle Main Issues validation failure
+          if (!res.ok && (errText.includes('Main Issues') || errText.includes('main_issues'))) {
+            if (issuePayload.main_issues) {
+              try {
+                await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Main%20Issues`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                  body: JSON.stringify({ name: issuePayload.main_issues, main_issue: issuePayload.main_issues })
+                });
+                res = await postIssue(issuePayload);
+              } catch { }
+            }
+
+            // If still not ok, fallback to 'Utilities & Infrastructure Issues List' (known to exist)
+            if (!res.ok) {
+              const fallbackPayload = { ...issuePayload, main_issues: 'Utilities & Infrastructure Issues List' };
+              delete fallbackPayload.customer;
+              res = await postIssue(fallbackPayload);
+            }
+
+            // If still not ok, remove main_issues field completely so issue creation succeeds
+            if (!res.ok) {
+              const noMainIssuesPayload = { ...issuePayload };
+              delete noMainIssuesPayload.main_issues;
+              delete noMainIssuesPayload.customer;
+              res = await postIssue(noMainIssuesPayload);
+            }
+          }
+
+          // C. Handle Priority validation failure
+          if (!res.ok && (errText.includes('Priority') || errText.includes('priority'))) {
+            const fallbackPriorityPayload = { ...issuePayload, priority: 'Medium' };
+            res = await postIssue(fallbackPriorityPayload);
+          }
+        }
+
         if (res.ok) {
           const data = await res.json();
           const createdDoc = data.data || data;
           const mappedIssue = {
             id: createdDoc.name,
             subject: createdDoc.subject || newIssue.subject,
-            tenantName: createdDoc.customer_name1 || newIssue.customer || 'Anonymous Tenant',
+            tenantName: createdDoc.customer_name1 || createdDoc.customer || createdDoc.raised_by || newIssue.customer || 'Administrator',
             propertyId: 'PROP-2041',
             status: (createdDoc.status || newIssue.status || 'open').toLowerCase(),
             lastUpdated: 'Just now',
-            dateRaised: createdDoc.date || newIssue.date || '2026-06-03',
-            priority: (createdDoc.priority || newIssue.priority || 'medium').toLowerCase(),
-            category: 'maintenance',
+            dateRaised: createdDoc.date || newIssue.date || formattedDate,
+            priority: (createdDoc.priority || safePriority || 'medium').toLowerCase(),
+            booking_number: createdDoc.booking_number || newIssue.booking_number || 'BOOKING-00243',
+            main_issues: createdDoc.main_issues || newIssue.main_issues || 'Utilities & Infrastructure Issues List',
+            company: createdDoc.company || newIssue.company || 'CARPENTERS PROPERTIES PTE LIMITED',
+            agreement_status: createdDoc.agreement_status || newIssue.agreement_status || 'First Response Due',
+            budget: createdDoc.budget || 0,
+            category: createdDoc.main_issues || newIssue.main_issues || 'maintenance',
             messages: [
               { sender: 'tenant', text: createdDoc.description || newIssue.description || 'Support request created.', timestamp: '10:00 AM' }
             ]
@@ -5392,12 +5547,10 @@ export default function App() {
           </div>
 
           {/* Property Map View */}
-          {/* Property Map View */}
           <div
             className="card-panel"
             style={{ margin: 0, padding: 18, display: 'flex', flexDirection: 'column', cursor: 'pointer' }}
             onClick={() => setShowMapModal(true)}
-            ons
           >
             <h3 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: 8 }}>Property Map View</h3>
             {/* <div style={{ flex: 1, minHeight: 90, background: '#1e293b', borderRadius: 8, position: 'relative', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
@@ -5541,7 +5694,7 @@ export default function App() {
       case 'invoices':
         return <Invoices invoices={invoices} accounts={accounts} glEntries={glEntries} onAddInvoice={handleAddInvoice} onRecordPayment={handleRecordPayment} erpnextConfig={ERPNEXT_CONFIG} />;
       case 'support':
-        return <Support tickets={supportTickets} onAddMessage={handleAddSupportMessage} onCreateIssue={handleCreateIssue} tenants={tenants} properties={properties} erpnextConfig={ERPNEXT_CONFIG} onConvertToMaintenance={(ticket) => { setPreSelectedIssue(ticket); setCurrentTab('maintenance'); }} />;
+        return <Support tickets={supportTickets} onAddMessage={handleAddSupportMessage} onCreateIssue={handleCreateIssue} tenants={tenants} properties={properties} bookings={bookings} erpnextConfig={ERPNEXT_CONFIG} onConvertToMaintenance={(ticket) => { setPreSelectedIssue(ticket); setCurrentTab('maintenance'); }} />;
       case 'reports':
         return <Reports />;
       case 'hrms':

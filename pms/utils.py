@@ -1,5 +1,5 @@
-import frappe
-from frappe.utils import validate_phone_number
+import frappe  # type: ignore
+from frappe.utils import validate_phone_number  # type: ignore
 
 def validate_tenant_onboarding_phone(doc, method):
     if doc.contact_number:

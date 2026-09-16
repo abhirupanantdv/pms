@@ -2048,8 +2048,8 @@
 //   );
 // }
 
-import React, { useState, useEffect } from 'react';
-import { Home, Building2, Plus, Globe, Search, ArrowRight, ShieldCheck, X, Grid, Info, Edit, Upload } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Home, Building2, Plus, Globe, Search, ArrowRight, ShieldCheck, X, Grid, Info, Edit, Upload, Maximize2 } from 'lucide-react';
 import { getAuthHeaders, getUploadHeaders, getCsrfToken } from '../config';
 
 const fallbackImages = {
@@ -2133,24 +2133,42 @@ function SecureImage({ src, alt, style, className, erpnextConfig }) {
   return <img src={imgSrc || src} alt={alt} style={style} className={className} />;
 }
 
-function ImageCarousel({ images, height = 180, erpnextConfig }) {
+function ImageCarousel({ images, height = 180, erpnextConfig, onImageClick }) {
   const [activeIndex, setActiveIndex] = useState(0);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [images]);
 
   if (!images || images.length === 0) return null;
 
+  const safeActiveIndex = activeIndex >= images.length ? 0 : activeIndex;
+
   const handlePrev = (e) => {
     e.stopPropagation();
-    setActiveIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1));
+    setActiveIndex((prev) => (prev <= 0 ? images.length - 1 : prev - 1));
   };
 
   const handleNext = (e) => {
     e.stopPropagation();
-    setActiveIndex((prev) => (prev === images.length - 1 ? 0 : prev + 1));
+    setActiveIndex((prev) => (prev >= images.length - 1 ? 0 : prev + 1));
   };
 
   return (
-    <div style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-color)', background: '#1e293b', height }}>
-      <div style={{ display: 'flex', width: `${images.length * 100}%`, height: '100%', transform: `translateX(-${(activeIndex * 100) / images.length}%)`, transition: 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1)' }}>
+    <div
+      style={{
+        position: 'relative',
+        borderRadius: 'var(--radius-md)',
+        overflow: 'hidden',
+        border: '1px solid var(--border-color)',
+        background: '#1e293b',
+        height,
+        cursor: onImageClick ? 'pointer' : 'default'
+      }}
+      onClick={() => onImageClick && onImageClick(safeActiveIndex, images)}
+      title={onImageClick ? "Click to preview image" : undefined}
+    >
+      <div style={{ display: 'flex', width: `${images.length * 100}%`, height: '100%', transform: `translateX(-${(safeActiveIndex * 100) / images.length}%)`, transition: 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1)' }}>
         {images.map((img, i) => (
           <div key={i} style={{ width: `${100 / images.length}%`, height: '100%', flexShrink: 0 }}>
             <SecureImage
@@ -2163,8 +2181,35 @@ function ImageCarousel({ images, height = 180, erpnextConfig }) {
         ))}
       </div>
 
+      {onImageClick && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 10,
+            right: 10,
+            background: 'rgba(0,0,0,0.55)',
+            color: '#ffffff',
+            padding: 4,
+            borderRadius: 4,
+            zIndex: 10,
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'none'
+          }}
+          title="Click to preview"
+        >
+          <Maximize2 size={13} />
+        </div>
+      )}
+
       {images.length > 1 && (
         <>
+          <div style={{ position: 'absolute', top: 10, left: 10, background: 'rgba(0,0,0,0.55)', color: '#ffffff', fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 4, zIndex: 10, backdropFilter: 'blur(4px)', pointerEvents: 'none' }}>
+            {safeActiveIndex + 1} / {images.length}
+          </div>
+
           <button
             type="button"
             onClick={handlePrev}
@@ -2185,7 +2230,7 @@ function ImageCarousel({ images, height = 180, erpnextConfig }) {
               <div
                 key={i}
                 onClick={(e) => { e.stopPropagation(); setActiveIndex(i); }}
-                style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: i === activeIndex ? 'var(--brand-color)' : 'rgba(255,255,255,0.5)', cursor: 'pointer', transition: 'all 0.2s' }}
+                style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: i === safeActiveIndex ? 'var(--brand-color)' : 'rgba(255,255,255,0.5)', cursor: 'pointer', transition: 'all 0.2s' }}
               />
             ))}
           </div>
@@ -2314,6 +2359,101 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
   const [propertyImages, setPropertyImages] = useState([]);
   const [uploadingPropertyImage, setUploadingPropertyImage] = useState(false);
   const [propertyDocFields, setPropertyDocFields] = useState([]);
+  const [propertyAttachments, setPropertyAttachments] = useState([]);
+  const [uploadingDirectAttachment, setUploadingDirectAttachment] = useState(false);
+
+  // Image Lightbox / Fullscreen Preview Modal state
+  const [previewImageState, setPreviewImageState] = useState({
+    isOpen: false,
+    images: [],
+    currentIndex: 0,
+    title: ''
+  });
+
+  const openImagePreview = useCallback((images, index = 0, title = '') => {
+    if (!images) return;
+    const list = Array.isArray(images) ? images : [images];
+    const sanitized = list
+      .map(img => typeof img === 'string' ? img : (img?.file_url || img?.image || ''))
+      .filter(Boolean);
+    if (!sanitized.length) return;
+    setPreviewImageState({
+      isOpen: true,
+      images: sanitized,
+      currentIndex: Math.max(0, Math.min(index, sanitized.length - 1)),
+      title: title || ''
+    });
+  }, []);
+
+  const closeImagePreview = useCallback(() => {
+    setPreviewImageState(prev => ({ ...prev, isOpen: false }));
+  }, []);
+
+  const nextPreviewImage = useCallback((e) => {
+    if (e) e.stopPropagation();
+    setPreviewImageState(prev => ({
+      ...prev,
+      currentIndex: prev.currentIndex >= prev.images.length - 1 ? 0 : prev.currentIndex + 1
+    }));
+  }, []);
+
+  const prevPreviewImage = useCallback((e) => {
+    if (e) e.stopPropagation();
+    setPreviewImageState(prev => ({
+      ...prev,
+      currentIndex: prev.currentIndex <= 0 ? prev.images.length - 1 : prev.currentIndex - 1
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (!previewImageState.isOpen) return;
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        closeImagePreview();
+      } else if (e.key === 'ArrowLeft') {
+        prevPreviewImage();
+      } else if (e.key === 'ArrowRight') {
+        nextPreviewImage();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewImageState.isOpen, closeImagePreview, nextPreviewImage, prevPreviewImage]);
+
+  // Helper to fetch file attachments for a Property Group from ERPNext File DocType
+  const fetchPropertyAttachments = useCallback(async (propId) => {
+    if (!propId || !erpnextConfig?.url) return [];
+    try {
+      const url = `${erpnextConfig.url}/api/resource/File?filters=${encodeURIComponent(
+        JSON.stringify([
+          ['attached_to_doctype', '=', 'Property Group'],
+          ['attached_to_name', '=', propId]
+        ])
+      )}&fields=${encodeURIComponent(
+        JSON.stringify(['name', 'file_url', 'file_name', 'is_private'])
+      )}&order_by=creation%20asc&limit_page_length=50`;
+
+      const res = await fetch(url, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        const files = json.data || [];
+        const imageFiles = files.filter(f => {
+          const fn = (f.file_url || f.file_name || '').toLowerCase();
+          return !/\.(pdf|docx?|xlsx?|csv|zip|rar|txt|json)$/i.test(fn);
+        });
+        return imageFiles;
+      }
+    } catch (err) {
+      console.warn('Failed to fetch property attachments from File doctype:', err);
+    }
+    return [];
+  }, [erpnextConfig]);
 
   // Fetch Item & Property Group DocType fields to dynamically inspect schema
   useEffect(() => {
@@ -2920,11 +3060,17 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
 
     setUploadingPropertyImage(true);
     try {
+      const activePropId = isEditingProperty ? (selectedProp?.id || referenceNo) : (referenceNo || '');
       for (const file of files) {
         if (erpnextConfig && erpnextConfig.url) {
           const formData = new FormData();
           formData.append('file', file);
           formData.append('is_private', '0');
+          formData.append('folder', 'Home/Attachments');
+          if (activePropId) {
+            formData.append('doctype', 'Property Group');
+            formData.append('docname', activePropId);
+          }
           const token = getCsrfToken();
           if (token) formData.append('csrf_token', token);
 
@@ -2937,9 +3083,22 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
 
           if (res.ok) {
             const json = await res.json();
-            const fileUrl = json.message?.file_url || json.file_url;
+            const fileDoc = json.message || json;
+            const fileUrl = fileDoc.file_url;
             if (fileUrl) {
-              setPropertyImages(prev => [...prev, fileUrl]);
+              setPropertyImages(prev => {
+                if (!prev.includes(fileUrl)) return [...prev, fileUrl];
+                return prev;
+              });
+              if (activePropId) {
+                setPropertyAttachments(prev => {
+                  const exists = prev.some(p => (typeof p === 'string' ? p : p.file_url) === fileUrl);
+                  if (!exists) {
+                    return [...prev, { name: fileDoc.name, file_url: fileUrl, file_name: fileDoc.file_name || file.name }];
+                  }
+                  return prev;
+                });
+              }
             } else {
               console.warn('File upload response missing file_url:', json);
             }
@@ -2965,6 +3124,92 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     } finally {
       setUploadingPropertyImage(false);
       if (e.target) e.target.value = '';
+    }
+  };
+
+  // Direct attachment upload from carousel in the right panel
+  const handleDirectCarouselUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    const p = detailedProp || selectedProp;
+    if (!files.length || !p) return;
+
+    setUploadingDirectAttachment(true);
+    try {
+      const pId = p.id || p.name;
+      let uploadedCount = 0;
+      for (const file of files) {
+        if (erpnextConfig && erpnextConfig.url) {
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('is_private', '0');
+          formData.append('folder', 'Home/Attachments');
+          formData.append('doctype', 'Property Group');
+          formData.append('docname', pId);
+          const token = getCsrfToken();
+          if (token) formData.append('csrf_token', token);
+
+          const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getUploadHeaders(),
+            body: formData
+          });
+
+          if (res.ok) {
+            uploadedCount++;
+          } else {
+            console.warn('Direct upload failed:', await res.text());
+          }
+        }
+      }
+
+      if (pId) {
+        const fresh = await fetchPropertyAttachments(pId);
+        setPropertyAttachments(fresh);
+      }
+
+      if (uploadedCount > 0) {
+        setAlertState({
+          show: true,
+          success: true,
+          message: `${uploadedCount} image${uploadedCount > 1 ? 's' : ''} attached to Property Group successfully!`
+        });
+      }
+    } catch (err) {
+      console.error('Direct carousel upload error:', err);
+      setAlertState({ show: true, success: false, message: `Failed to attach image: ${err.message}` });
+    } finally {
+      setUploadingDirectAttachment(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  // Remove image from modal and delete File record from ERPNext if attached
+  const handleRemovePropertyImage = async (idx) => {
+    const imgToRemove = propertyImages[idx];
+    setPropertyImages(prev => prev.filter((_, i) => i !== idx));
+
+    if (imgToRemove && erpnextConfig?.url && (selectedProp?.id || referenceNo)) {
+      try {
+        const rawUrl = typeof imgToRemove === 'string' ? imgToRemove : (imgToRemove.file_url || imgToRemove.image);
+        const match = propertyAttachments.find(att => {
+          const u = typeof att === 'string' ? att : att.file_url;
+          return u === rawUrl;
+        });
+        if (match?.name) {
+          await fetch(`${erpnextConfig.url}/api/resource/File/${encodeURIComponent(match.name)}`, {
+            method: 'DELETE',
+            credentials: 'include',
+            headers: getAuthHeaders()
+          });
+        }
+        setPropertyAttachments(prev => prev.filter(att => {
+          const u = typeof att === 'string' ? att : att.file_url;
+          return u !== rawUrl;
+        }));
+      } catch (err) {
+        console.warn('Failed to delete attachment File record:', err);
+      }
     }
   };
 
@@ -3001,16 +3246,61 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     setLatitude(p.custom_latitude !== undefined ? p.custom_latitude : (p.latitude || ''));
     setLongitude(p.custom_longitude !== undefined ? p.custom_longitude : (p.longitude || ''));
 
-    const rawAttachments = p.attachments || p.custom_attachments || p.gallery || p.image || [];
-    let parsedImgs = [];
-    if (Array.isArray(rawAttachments)) {
-      parsedImgs = rawAttachments.map(img => typeof img === 'string' ? img : (img.image || img.file_url || '')).filter(Boolean);
-    } else if (typeof rawAttachments === 'string' && rawAttachments.trim()) {
-      parsedImgs = [rawAttachments.trim()];
-    }
-    if (parsedImgs.length === 0 && p.image) {
-      parsedImgs = [p.image];
-    }
+    const candidateList = [
+      ...(propertyAttachments || []),
+      ...(Array.isArray(p.gallery) ? p.gallery : []),
+      p.attachments,
+      p.custom_attachments,
+      p.image
+    ];
+    const parsedImgs = [];
+    const seen = new Set();
+    candidateList.forEach(item => {
+      if (!item) return;
+      if (Array.isArray(item)) {
+        item.forEach(sub => {
+          const u = typeof sub === 'string' ? sub : (sub?.file_url || sub?.image || '');
+          if (u && !seen.has(u)) {
+            seen.add(u);
+            parsedImgs.push(u);
+          }
+        });
+      } else if (typeof item === 'object') {
+        const u = item.file_url || item.image || '';
+        if (u && !seen.has(u)) {
+          seen.add(u);
+          parsedImgs.push(u);
+        }
+      } else if (typeof item === 'string' && item.trim()) {
+        try {
+          const parsed = JSON.parse(item);
+          if (Array.isArray(parsed)) {
+            parsed.forEach(sub => {
+              const u = typeof sub === 'string' ? sub : (sub?.file_url || sub?.image || '');
+              if (u && !seen.has(u)) {
+                seen.add(u);
+                parsedImgs.push(u);
+              }
+            });
+            return;
+          }
+        } catch (e) {}
+        if (item.includes(',')) {
+          item.split(',').map(s => s.trim()).filter(Boolean).forEach(u => {
+            if (!seen.has(u)) {
+              seen.add(u);
+              parsedImgs.push(u);
+            }
+          });
+        } else {
+          const u = item.trim();
+          if (!seen.has(u)) {
+            seen.add(u);
+            parsedImgs.push(u);
+          }
+        }
+      }
+    });
     setPropertyImages(parsedImgs);
 
     setIsEditingProperty(true);
@@ -3081,6 +3371,36 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
               : (errBody.message || res.statusText);
             throw new Error(message);
           }
+
+          // Ensure all propertyImages are linked in ERPNext File DocType
+          for (const img of propertyImages) {
+            const fileUrl = typeof img === 'string' ? img : (img.file_url || img.image);
+            if (!fileUrl || fileUrl.startsWith('data:')) continue;
+            const isAlreadyAttached = propertyAttachments.some(att => (typeof att === 'string' ? att : att.file_url) === fileUrl);
+            if (!isAlreadyAttached) {
+              try {
+                const fd = new FormData();
+                fd.append('file_url', fileUrl);
+                fd.append('doctype', 'Property Group');
+                fd.append('docname', pId);
+                fd.append('is_private', '0');
+                fd.append('folder', 'Home/Attachments');
+                const token = getCsrfToken();
+                if (token) fd.append('csrf_token', token);
+                await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getUploadHeaders(),
+                  body: fd
+                });
+              } catch (e) {
+                console.warn('Could not attach file_url to Property Group:', e);
+              }
+            }
+          }
+
+          const freshAttachments = await fetchPropertyAttachments(pId);
+          setPropertyAttachments(freshAttachments);
 
           const updatedDoc = {
             ...selectedProp,
@@ -3464,6 +3784,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     if (!selectedProp || !erpnextConfig) {
       setDetailedProp(null);
       setPropertyUnits([]);
+      setPropertyAttachments([]);
       setLoadedUnitDetails({});
       return;
     }
@@ -3473,25 +3794,45 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       setLoadingUnits(true);
       setLoadedUnitDetails({});
 
-      // 1. Fetch Property Group Details
+      // 1. Fetch Property Group Details & File Attachments
       try {
-        const res = await fetch(`${erpnextConfig.url}/api/method/erpnext.api.get_property_group?name=${selectedProp.id}`,
-          // const res = await fetch(`${erpnextConfig.url}/api/resource/Property Group`,
-          {
+        const propId = selectedProp.id || selectedProp.name;
+        const [apiRes, resRes, fileAttachments] = await Promise.allSettled([
+          fetch(`${erpnextConfig.url}/api/method/erpnext.api.get_property_group?name=${encodeURIComponent(propId)}`, {
             credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          });
-        if (res.ok) {
-          const data = await res.json();
-          const doc = data.message || data;
+            headers: { 'Content-Type': 'application/json' }
+          }),
+          fetch(`${erpnextConfig.url}/api/resource/Property%20Group/${encodeURIComponent(propId)}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          }),
+          fetchPropertyAttachments(propId)
+        ]);
+
+        let doc = {};
+        if (apiRes.status === 'fulfilled' && apiRes.value.ok) {
+          try {
+            const data = await apiRes.value.json();
+            doc = { ...doc, ...(data.message || data) };
+          } catch (e) {}
+        }
+        if (resRes.status === 'fulfilled' && resRes.value.ok) {
+          try {
+            const data = await resRes.value.json();
+            doc = { ...doc, ...(data.data || data) };
+          } catch (e) {}
+        }
+
+        const files = fileAttachments.status === 'fulfilled' ? (fileAttachments.value || []) : [];
+        setPropertyAttachments(files);
+
+        if (Object.keys(doc).length > 0) {
           setDetailedProp(doc);
-          if (doc && (doc.name || doc.id) && doc.legal_description) {
+          if ((doc.name || doc.id) && doc.legal_description) {
             setLegalDescriptions(prev => ({ ...prev, [doc.name || doc.id]: doc.legal_description }));
           }
         } else {
-          setDetailedProp(selectedProp); // fallback
+          setDetailedProp(selectedProp);
         }
       } catch (err) {
         console.warn('Failed to fetch detailed property group:', err);
@@ -4121,7 +4462,14 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                     const imgs = (details.custom_unit_images && details.custom_unit_images.length > 0)
                       ? details.custom_unit_images.map(item => item.image.startsWith('http') ? item.image : `${erpnextConfig?.url || ''}${item.image}`)
                       : (details.image ? [details.image.startsWith('http') ? details.image : `${erpnextConfig?.url || ''}${details.image}`] : [unitFallbackImages[selectedProp.type] || unitFallbackImages.commercial]);
-                    return <ImageCarousel images={imgs} height={160} erpnextConfig={erpnextConfig} />;
+                    return (
+                      <ImageCarousel
+                        images={imgs}
+                        height={160}
+                        erpnextConfig={erpnextConfig}
+                        onImageClick={(idx, allImgs) => openImagePreview(allImgs, idx, matchedUnit?.unit_name || details.item_name || selectedUnitId)}
+                      />
+                    );
                   })()}
 
                   {/* Header */}
@@ -4273,7 +4621,6 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                     <th>Type</th>
                     <th>Legal Description</th>
                     <th>Lease End</th>
-                    <th style={{ textAlign: 'right' }}>Picture</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -4289,18 +4636,8 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                     >
                       <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{prop.id}</td>
                       <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <SecureImage
-                            src={prop.image || fallbackImages[prop.type]?.[0] || fallbackImages.commercial[0]}
-                            alt=""
-                            style={{ width: 26, height: 26, objectFit: 'cover', borderRadius: '50%', border: '1px solid var(--border-color)' }}
-                            erpnextConfig={erpnextConfig}
-                          />
-                          <div>
-                            <div style={{ fontWeight: 600 }}>{prop.name}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{prop.address}</div>
-                          </div>
-                        </div>
+                        <div style={{ fontWeight: 600 }}>{prop.name}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{prop.address}</div>
                       </td>
                       <td>
                         <span className={`badge ${(prop.land_and_building_type || prop.type) === 'residential' ? 'badge-success' : (prop.land_and_building_type || prop.type) === 'commercial' ? 'badge-info' : 'badge-warning'}`}>
@@ -4315,19 +4652,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                           {prop.lease_end_date || '2026-12-31'}
                         </span>
                       </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <SecureImage
-                          src={prop.image || fallbackImages[prop.type]?.[0] || fallbackImages.commercial[0]}
-                          alt={prop.name}
-                          style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'inline-block' }}
-                          erpnextConfig={erpnextConfig}
-                        />
-                      </td>
                     </tr>
                   ))}
                   {filteredProperties.length === 0 && (
                     <tr>
-                      <td colSpan="6" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
+                      <td colSpan="5" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
                         No properties match your filter.
                       </td>
                     </tr>
@@ -4371,15 +4700,116 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                   </div>
                 </div>
 
-                {/* Property Group Image at top */}
+                {/* Property Group Image Carousel at top */}
                 {(() => {
-                  const imgs = (p.gallery && p.gallery.length > 0)
-                    ? p.gallery.map(item => item.image.startsWith('http') ? item.image : `${erpnextConfig?.url || ''}${item.image}`)
-                    : (p.attachments ? [p.attachments.startsWith('http') ? p.attachments : `${erpnextConfig?.url || ''}${p.attachments}`]
-                      : (p.custom_attachments ? [p.custom_attachments.startsWith('http') ? p.custom_attachments : `${erpnextConfig?.url || ''}${p.custom_attachments}`]
-                        : (p.image ? [p.image.startsWith('http') ? p.image : `${erpnextConfig?.url || ''}${p.image}`]
-                          : (fallbackImages[p.type] || fallbackImages.commercial))));
-                  return <ImageCarousel images={imgs} height={180} erpnextConfig={erpnextConfig} />;
+                  const allCandidateImages = [];
+
+                  // 1. From ERPNext File attachments for this Property Group
+                  if (Array.isArray(propertyAttachments) && propertyAttachments.length > 0) {
+                    propertyAttachments.forEach(att => {
+                      const u = typeof att === 'string' ? att : (att.file_url || att.image || '');
+                      if (u) allCandidateImages.push(u);
+                    });
+                  }
+
+                  // 2. From p.gallery
+                  if (Array.isArray(p.gallery) && p.gallery.length > 0) {
+                    p.gallery.forEach(item => {
+                      const u = typeof item === 'string' ? item : (item.image || item.file_url || '');
+                      if (u) allCandidateImages.push(u);
+                    });
+                  }
+
+                  // 3. From p.attachments, p.custom_attachments, p.image
+                  [p.attachments, p.custom_attachments, p.image].forEach(field => {
+                    if (!field) return;
+                    if (Array.isArray(field)) {
+                      field.forEach(sub => {
+                        const u = typeof sub === 'string' ? sub : (sub.image || sub.file_url || '');
+                        if (u) allCandidateImages.push(u);
+                      });
+                    } else if (typeof field === 'string' && field.trim()) {
+                      try {
+                        const parsed = JSON.parse(field);
+                        if (Array.isArray(parsed)) {
+                          parsed.forEach(sub => {
+                            const u = typeof sub === 'string' ? sub : (sub.image || sub.file_url || '');
+                            if (u) allCandidateImages.push(u);
+                          });
+                          return;
+                        }
+                      } catch (e) {}
+                      if (field.includes(',')) {
+                        field.split(',').map(s => s.trim()).filter(Boolean).forEach(u => allCandidateImages.push(u));
+                      } else {
+                        allCandidateImages.push(field.trim());
+                      }
+                    }
+                  });
+
+                  // Normalize & Deduplicate
+                  const uniqueImages = [];
+                  const seen = new Set();
+                  for (const raw of allCandidateImages) {
+                    if (!raw) continue;
+                    const normalizedKey = raw.replace(/^https?:\/\/[^\/]+/, '');
+                    if (!seen.has(normalizedKey)) {
+                      seen.add(normalizedKey);
+                      const fullUrl = raw.startsWith('http') || raw.startsWith('data:') ? raw : `${erpnextConfig?.url || ''}${raw}`;
+                      uniqueImages.push(fullUrl);
+                    }
+                  }
+
+                  const imgs = uniqueImages.length > 0
+                    ? uniqueImages
+                    : (fallbackImages[p.type] || fallbackImages.commercial);
+
+                  return (
+                    <div style={{ position: 'relative' }}>
+                      <ImageCarousel
+                        images={imgs}
+                        height={180}
+                        erpnextConfig={erpnextConfig}
+                        onImageClick={(idx, allImgs) => openImagePreview(allImgs, idx, p.name || p.id)}
+                      />
+                      {/* Direct Add Photo button on carousel */}
+                      <label
+                        style={{
+                          position: 'absolute',
+                          bottom: 8,
+                          right: 8,
+                          background: 'rgba(0, 0, 0, 0.65)',
+                          color: '#ffffff',
+                          border: '1px solid rgba(255, 255, 255, 0.25)',
+                          borderRadius: 4,
+                          padding: '3px 8px',
+                          fontSize: 10,
+                          fontWeight: 600,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          cursor: uploadingDirectAttachment ? 'not-allowed' : 'pointer',
+                          zIndex: 12,
+                          backdropFilter: 'blur(6px)',
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                          transition: 'all 0.2s'
+                        }}
+                        title="Attach images directly to this Property Group"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          disabled={uploadingDirectAttachment}
+                          style={{ display: 'none' }}
+                          onChange={handleDirectCarouselUpload}
+                        />
+                        <Upload size={11} />
+                        <span>{uploadingDirectAttachment ? 'Attaching...' : '+ Add Photo'}</span>
+                      </label>
+                    </div>
+                  );
                 })()}
 
                 <div>
@@ -4494,7 +4924,12 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                                         : (details.image ? [details.image.startsWith('http') ? details.image : `${erpnextConfig?.url || ''}${details.image}`] : (unitFallbackImages[p.type] || unitFallbackImages.commercial));
                                       return (
                                         <div style={{ marginBottom: 8 }}>
-                                          <ImageCarousel images={imgs} height={120} erpnextConfig={erpnextConfig} />
+                                          <ImageCarousel
+                                            images={imgs}
+                                            height={120}
+                                            erpnextConfig={erpnextConfig}
+                                            onImageClick={(idx, allImgs) => openImagePreview(allImgs, idx, unit.unit_name || unit.name || 'Unit Photo')}
+                                          />
                                         </div>
                                       );
                                     })()}
@@ -4520,7 +4955,8 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                   </div>
                 </div>
 
-                <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: 14, display: 'flex', gap: 10 }}>
+                {/* Action Buttons hidden per user requirement */}
+                <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: 14, display: 'none', gap: 10 }}>
                   <button
                     className={`btn ${p.listedOnline ? 'btn-danger' : 'btn-primary'}`}
                     style={{ flex: 1, fontSize: 12 }}
@@ -4689,13 +5125,16 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                               borderRadius: 6,
                               overflow: 'hidden',
                               border: '1px solid var(--border-color, #e2e8f0)',
-                              background: '#f1f5f9'
+                              background: '#f1f5f9',
+                              cursor: 'pointer'
                             }}
+                            onClick={() => openImagePreview(propertyImages, idx, referenceNo || selectedProp?.id || 'Property Attachment')}
+                            title="Click to preview image"
                           >
                             <img src={fullUrl} alt={`Property Attachment ${idx + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                             <button
                               type="button"
-                              onClick={() => setPropertyImages(prev => prev.filter((_, i) => i !== idx))}
+                              onClick={(e) => { e.stopPropagation(); handleRemovePropertyImage(idx); }}
                               style={{
                                 position: 'absolute',
                                 top: 3,
@@ -4952,6 +5391,253 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           </div>
         </div>
       )}
+
+      {/* FULLSCREEN IMAGE LIGHTBOX / PREVIEW MODAL */}
+      {previewImageState.isOpen && previewImageState.images.length > 0 && (() => {
+        const currentUrl = previewImageState.images[previewImageState.currentIndex];
+        const fullUrl = currentUrl.startsWith('http') || currentUrl.startsWith('data:') || currentUrl.startsWith('blob:')
+          ? currentUrl
+          : `${erpnextConfig?.url || ''}${currentUrl}`;
+
+        return (
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 100000,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(10, 15, 29, 0.88)',
+              backdropFilter: 'blur(8px)',
+              padding: '20px'
+            }}
+            onClick={closeImagePreview}
+          >
+            {/* Top Bar / Header */}
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                padding: '16px 24px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: 'linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 100%)',
+                zIndex: 100002,
+                color: '#fff'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.05em', color: '#fff' }}>
+                  {previewImageState.title || 'Image Preview'}
+                </span>
+                {previewImageState.images.length > 1 && (
+                  <span style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    background: 'rgba(255, 255, 255, 0.2)',
+                    padding: '2px 8px',
+                    borderRadius: 12,
+                    color: '#e2e8f0'
+                  }}>
+                    {previewImageState.currentIndex + 1} / {previewImageState.images.length}
+                  </span>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {fullUrl && !fullUrl.startsWith('data:') && (
+                  <a
+                    href={fullUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.15)',
+                      border: 'none',
+                      borderRadius: 6,
+                      color: '#ffffff',
+                      padding: '6px 12px',
+                      fontSize: 12,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      textDecoration: 'none',
+                      cursor: 'pointer',
+                      transition: 'background 0.2s'
+                    }}
+                    title="Open full resolution in new tab"
+                  >
+                    <Globe size={14} /> Open original
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={closeImagePreview}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.15)',
+                    border: 'none',
+                    borderRadius: '50%',
+                    color: '#ffffff',
+                    cursor: 'pointer',
+                    width: 32,
+                    height: 32,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'background 0.2s'
+                  }}
+                  title="Close (Esc)"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Central Image View */}
+            <div
+              style={{
+                position: 'relative',
+                maxWidth: '90vw',
+                maxHeight: '76vh',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 100001
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <SecureImage
+                src={fullUrl}
+                alt="Preview"
+                style={{
+                  maxWidth: '90vw',
+                  maxHeight: '74vh',
+                  objectFit: 'contain',
+                  borderRadius: 8,
+                  boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+                  display: 'block'
+                }}
+                erpnextConfig={erpnextConfig}
+              />
+
+              {/* Prev / Next buttons */}
+              {previewImageState.images.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={prevPreviewImage}
+                    style={{
+                      position: 'fixed',
+                      left: 20,
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'rgba(0, 0, 0, 0.65)',
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      color: '#ffffff',
+                      borderRadius: '50%',
+                      width: 44,
+                      height: 44,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      fontSize: 24,
+                      zIndex: 100003,
+                      backdropFilter: 'blur(4px)',
+                      transition: 'all 0.2s'
+                    }}
+                    title="Previous (Left Arrow)"
+                  >
+                    ‹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={nextPreviewImage}
+                    style={{
+                      position: 'fixed',
+                      right: 20,
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'rgba(0, 0, 0, 0.65)',
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      color: '#ffffff',
+                      borderRadius: '50%',
+                      width: 44,
+                      height: 44,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      fontSize: 24,
+                      zIndex: 100003,
+                      backdropFilter: 'blur(4px)',
+                      transition: 'all 0.2s'
+                    }}
+                    title="Next (Right Arrow)"
+                  >
+                    ›
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* Bottom thumbnail strip if multiple images */}
+            {previewImageState.images.length > 1 && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: 16,
+                  display: 'flex',
+                  gap: 10,
+                  padding: '8px 16px',
+                  background: 'rgba(0, 0, 0, 0.6)',
+                  backdropFilter: 'blur(8px)',
+                  borderRadius: 10,
+                  maxWidth: '85vw',
+                  overflowX: 'auto',
+                  zIndex: 100002
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {previewImageState.images.map((img, idx) => {
+                  const tUrl = img.startsWith('http') || img.startsWith('data:') || img.startsWith('blob:')
+                    ? img
+                    : `${erpnextConfig?.url || ''}${img}`;
+                  const isActive = idx === previewImageState.currentIndex;
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => setPreviewImageState(prev => ({ ...prev, currentIndex: idx }))}
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 6,
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        border: isActive ? '2px solid var(--brand-color, #3b82f6)' : '1px solid rgba(255,255,255,0.3)',
+                        opacity: isActive ? 1 : 0.6,
+                        transform: isActive ? 'scale(1.08)' : 'scale(1)',
+                        transition: 'all 0.2s',
+                        flexShrink: 0
+                      }}
+                    >
+                      <img src={tUrl} alt={`Thumb ${idx + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

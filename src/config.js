@@ -75,11 +75,19 @@ export const getUploadHeaders = (extraHeaders = {}) => {
  * - On production domains, ensures https:// is used to avoid Nginx 301 redirects (which drop headers and POST bodies).
  */
 export const getApiBaseUrl = () => {
-  if (typeof window === 'undefined') return 'https://pms.advtinni.com';
+  if (typeof window === 'undefined') return 'http://192.168.101.180:8980';
   const { origin, protocol, hostname, host } = window.location;
 
   // Local development via Vite dev server proxy
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+  const isLocalDev =
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname.startsWith('192.168.') ||
+    hostname.startsWith('10.') ||
+    hostname.startsWith('172.') ||
+    window.location.port === '5173';
+
+  if (isLocalDev) {
     return origin;
   }
 

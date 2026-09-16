@@ -1,18 +1,23 @@
-import frappe
+import frappe  # type: ignore
 import json
 import os
 
 def get_context(context):
     context.no_cache = 1
 
-    # Redirect unauthenticated Guest visitors to login with return path to /pms
-    if frappe.session.user == "Guest":
-        frappe.local.flags.redirect_location = "/login?redirect-to=/pms"
+    # Redirect root URL ("/") to "/pms"
+    req_path = getattr(getattr(frappe, "request", None), "path", "")
+    if req_path in ("/", ""):
+        frappe.local.flags.redirect_location = "/pms"
         raise frappe.Redirect
 
     manifest_path = frappe.get_app_path("pms", "public", "dist", ".vite", "manifest.json")
     if not os.path.exists(manifest_path):
         manifest_path = frappe.get_app_path("pms", "public", "dist", "manifest.json")
+    if not os.path.exists(manifest_path):
+        manifest_path = frappe.get_app_path("pms", "public", ".vite", "manifest.json")
+    if not os.path.exists(manifest_path):
+        manifest_path = frappe.get_app_path("pms", "public", "manifest.json")
 
     js_file = ""
     css_file = ""
@@ -30,7 +35,13 @@ def get_context(context):
         except Exception:
             pass
 
-    context.js_file = f"/assets/pms/dist/{js_file}" if js_file else ""
-    context.css_file = f"/assets/pms/dist/{css_file}" if css_file else ""
+    # Check if files reside inside dist or public root
+    if js_file and os.path.exists(frappe.get_app_path("pms", "public", "dist", js_file)):
+        base_prefix = "/assets/pms/dist"
+    else:
+        base_prefix = "/assets/pms"
+
+    context.js_file = f"{base_prefix}/{js_file}" if js_file else ""
+    context.css_file = f"{base_prefix}/{css_file}" if css_file else ""
     context.csrf_token = frappe.session.csrf_token
     context.session_user = frappe.session.user

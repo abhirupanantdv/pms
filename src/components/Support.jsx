@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Send, CheckCircle2, MessageSquare, AlertCircle, BarChart2, ShieldAlert, Clock, User, Sparkles, Mic, MicOff, RefreshCw, X, HelpCircle, Check, Play, Pencil, Settings, Paperclip, Activity, FileText, Bell, Phone, Mail, Award, DollarSign } from 'lucide-react';
 import { getAuthHeaders } from '../config';
 
@@ -31,7 +31,7 @@ const MOCK_ISSUE_LISTS = {
   ]
 };
 
-export default function Support({ tickets, onAddMessage, onCreateIssue, tenants = [], properties = [], erpnextConfig, onConvertToMaintenance }) {
+export default function Support({ tickets, onAddMessage, onCreateIssue, tenants = [], properties = [], bookings = [], erpnextConfig, onConvertToMaintenance }) {
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'issue', 'tinni'
   const [dashboardRole, setDashboardRole] = useState('manager'); // 'tenant', 'technician', 'manager', 'admin'
   const [selectedTicketId, setSelectedTicketId] = useState(tickets[0]?.id || null);
@@ -42,23 +42,27 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [issueSubject, setIssueSubject] = useState('');
   const [issueCustomer, setIssueCustomer] = useState('');
-  const [issueRaisedBy, setIssueRaisedBy] = useState('');
+  const [issueRaisedBy, setIssueRaisedBy] = useState('Administrator');
   const [issueStatus, setIssueStatus] = useState('Open');
   const [issuePriority, setIssuePriority] = useState('Medium');
   const [issueDescription, setIssueDescription] = useState('');
   const [issueCompany, setIssueCompany] = useState('CARPENTERS PROPERTIES PTE LIMITED');
+  const [issueAgreementStatus, setIssueAgreementStatus] = useState('First Response Due');
+  const [issueBudget, setIssueBudget] = useState(0);
 
   // Custom Upgrades form fields
-  const [issueSubcategory, setIssueSubcategory] = useState('Leakage');
+  const [issueSubcategory, setIssueSubcategory] = useState('');
   const [preferredVisitDate, setPreferredVisitDate] = useState('2026-06-18');
   const [isEmergency, setIsEmergency] = useState(false);
 
   // New Booking & Issue List fields states
   const [bookingOptions, setBookingOptions] = useState([]);
   const [loadingBookings, setLoadingBookings] = useState(false);
-  const [selectedBookingNumber, setSelectedBookingNumber] = useState('');
+  const [selectedBookingNumber, setSelectedBookingNumber] = useState('BOOKING-00243');
   const [selectedIssueList, setSelectedIssueList] = useState('Utilities & Infrastructure Issues List');
   const [issueListRows, setIssueListRows] = useState([]);
+  const [issuesListsData, setIssuesListsData] = useState([]);
+  const [loadingIssuesLists, setLoadingIssuesLists] = useState(false);
 
   // Submit status & validation message states
   const [submitting, setSubmitting] = useState(false);
@@ -138,22 +142,47 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
     fetchComments();
   }, [selectedTicketId, erpnextConfig]);
 
-  // Sync issue rows on list selection
+  // Dynamic categories and sub-issues extracted from ERPNext Issues List DocType
+  const availableCategories = useMemo(() => {
+    if (issuesListsData && issuesListsData.length > 0) {
+      return issuesListsData.map(doc => ({
+        name: doc.name || doc.main_issue,
+        main_issue: doc.main_issue || doc.name,
+        subIssues: Array.isArray(doc.list_of_issue)
+          ? doc.list_of_issue.map(row => typeof row === 'string' ? row : (row.issue || '')).filter(Boolean)
+          : (MOCK_ISSUE_LISTS[doc.name || doc.main_issue] || [])
+      }));
+    }
+    return Object.entries(MOCK_ISSUE_LISTS).map(([catName, items]) => ({
+      name: catName,
+      main_issue: catName,
+      subIssues: items
+    }));
+  }, [issuesListsData]);
+
+  // Sync issue rows and default sub-issue on main issue selection
   useEffect(() => {
-    const items = MOCK_ISSUE_LISTS[selectedIssueList] || [];
-    setIssueListRows(items.map((item, idx) => ({
+    const currentCat = availableCategories.find(c => c.name === selectedIssueList || c.main_issue === selectedIssueList);
+    const subItems = currentCat ? currentCat.subIssues : (MOCK_ISSUE_LISTS[selectedIssueList] || []);
+    setIssueListRows(subItems.map((item, idx) => ({
       no: idx + 1,
       selected: false,
       agreed: false,
       issue: item
     })));
-  }, [selectedIssueList]);
+    if (subItems.length > 0) {
+      setIssueSubcategory(prev => (prev && subItems.includes(prev)) ? prev : subItems[0]);
+    } else {
+      setIssueSubcategory('');
+    }
+  }, [selectedIssueList, availableCategories]);
 
   // Fetch detailed Booking options
   useEffect(() => {
     const fetchBookingDetails = async () => {
       if (!erpnextConfig || !erpnextConfig.url) {
         setBookingOptions([
+          { value: 'BOOKING-00243', label: 'BOOKING-00243 - Carpenters Properties Pte Ltd', customer: 'Administrator', property: '31CT28' },
           { value: 'BOOKING-00222', label: 'BOOKING-00222 - Unit: 31CT28 (Cnr Rodwell/ Robertson Roads, Suva, Fiji)', customer: '', property: '31CT28' },
           { value: 'BOOKING-00226', label: 'BOOKING-00226 - Unit: 31GF10 (Public Lobby Corridor, Suva, Fiji)', customer: '', property: '31GF10' }
         ]);
@@ -168,12 +197,16 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
         if (res.ok) {
           const json = await res.json();
           const list = json.data || [];
-          setBookingOptions(list.map(b => ({
+          const mapped = list.map(b => ({
             value: b.name,
-            label: `${b.name} - Unit: ${b.property || 'N/A'} (${b.customer || 'Tenant'})`,
+            label: `${b.name} (${b.customer || 'Tenant'})`,
             customer: b.customer,
             property: b.property
-          })));
+          }));
+          if (!mapped.some(b => b.value === 'BOOKING-00243')) {
+            mapped.unshift({ value: 'BOOKING-00243', label: 'BOOKING-00243 - Carpenters Properties Pte Ltd', customer: 'Administrator', property: '31CT28' });
+          }
+          setBookingOptions(mapped);
         }
       } catch (e) {
         console.warn('Failed fetching booking details:', e);
@@ -183,20 +216,134 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
     };
     if (showCreateModal) {
       fetchBookingDetails();
+
+      // Fetch dynamic Issues List from ERPNext (DocType: "Issues List")
+      const fetchDynamicIssuesLists = async () => {
+        if (!erpnextConfig || !erpnextConfig.url) return;
+        setLoadingIssuesLists(true);
+        try {
+          const res = await fetch(`${erpnextConfig.url}/api/resource/Issues%20List?fields=%5B%22name%22%2C%22main_issue%22%5D&limit_page_length=100`, {
+            credentials: 'include',
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+          });
+          if (res.ok) {
+            const json = await res.json();
+            const items = json.data || [];
+            if (Array.isArray(items) && items.length > 0) {
+              const detailedPromises = items.map(async (item) => {
+                try {
+                  const detRes = await fetch(`${erpnextConfig.url}/api/resource/Issues%20List/${encodeURIComponent(item.name)}`, {
+                    credentials: 'include',
+                    headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+                  });
+                  if (detRes.ok) {
+                    const detJson = await detRes.json();
+                    return detJson.data || detJson;
+                  }
+                } catch (e) {
+                  console.warn(`Failed fetching detail for Issues List ${item.name}:`, e);
+                }
+                return item;
+              });
+              const detailedResults = await Promise.all(detailedPromises);
+              const validDetailed = detailedResults.filter(Boolean);
+              setIssuesListsData(validDetailed);
+
+              if (validDetailed.length > 0) {
+                setSelectedIssueList(prev => {
+                  const match = validDetailed.find(d => d.name === prev || d.main_issue === prev);
+                  return match ? (match.name || match.main_issue) : (validDetailed[0].name || validDetailed[0].main_issue);
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Failed fetching dynamic Issues List from ERPNext:', err);
+        } finally {
+          setLoadingIssuesLists(false);
+        }
+      };
+
+      fetchDynamicIssuesLists();
     }
   }, [erpnextConfig, showCreateModal]);
 
+  // Only show Booking Tenants (tenants who have at least one Booking record)
+  const bookingTenants = useMemo(() => {
+    const customerMap = new Map();
+
+    // 1. Collect customers from bookingOptions
+    (bookingOptions || []).forEach(b => {
+      const cust = b.customer;
+      if (cust && String(cust).trim()) {
+        const val = String(cust).trim();
+        const key = val.toLowerCase();
+        if (!customerMap.has(key)) {
+          customerMap.set(key, { id: val, name: val });
+        }
+      }
+    });
+
+    // 2. Collect customers from bookings prop
+    (bookings || []).forEach(b => {
+      const custId = b.customer || b.customer_name;
+      const custName = b.customer_name || b.customer;
+      if (custId && String(custId).trim()) {
+        const valId = String(custId).trim();
+        const valName = custName ? String(custName).trim() : valId;
+        const key = valId.toLowerCase();
+        if (!customerMap.has(key)) {
+          customerMap.set(key, { id: valId, name: valName });
+        } else if (valName && customerMap.get(key).name === customerMap.get(key).id) {
+          customerMap.get(key).name = valName;
+        }
+      }
+    });
+
+    // 3. Match against tenants prop to enrich display name and email
+    if (Array.isArray(tenants) && tenants.length > 0) {
+      tenants.forEach(t => {
+        const tId = (t.id || '').toString().trim().toLowerCase();
+        const tName = (t.name || '').toString().trim().toLowerCase();
+        const tCustName = (t.customer_name || '').toString().trim().toLowerCase();
+
+        [tId, tName, tCustName].forEach(k => {
+          if (k && customerMap.has(k)) {
+            const entry = customerMap.get(k);
+            if (t.customer_name || t.name) {
+              entry.name = t.customer_name || t.name;
+            }
+            if (t.id) {
+              entry.id = t.id;
+            }
+            if (t.email || t.email_id) {
+              entry.email = t.email || t.email_id;
+            }
+          }
+        });
+      });
+    }
+
+    return Array.from(customerMap.values()).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }, [bookingOptions, bookings, tenants]);
+
   // Handle booking options auto-selection based on selected customer
   useEffect(() => {
-    const customerBookings = bookingOptions.filter(opt => opt.customer === issueCustomer);
+    if (!issueCustomer) return;
+    const customerBookings = bookingOptions.filter(opt => {
+      const c = (opt.customer || '').toString().trim().toLowerCase();
+      const ic = issueCustomer.toString().trim().toLowerCase();
+      return c === ic;
+    });
     if (customerBookings.length > 0) {
-      setSelectedBookingNumber(customerBookings[0].value);
-    } else if (bookingOptions.length > 0) {
+      const alreadyValid = customerBookings.some(b => b.value === selectedBookingNumber);
+      if (!alreadyValid) {
+        setSelectedBookingNumber(customerBookings[0].value);
+      }
+    } else if (bookingOptions.length > 0 && !selectedBookingNumber) {
       setSelectedBookingNumber(bookingOptions[0].value);
-    } else {
-      setSelectedBookingNumber('');
     }
-  }, [issueCustomer, bookingOptions]);
+  }, [issueCustomer, bookingOptions, selectedBookingNumber]);
 
   // Calculate ticket age in days
   const calculateAge = (dateRaised) => {
@@ -285,7 +432,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
         const ticket = localTickets.find(t => t.id === ticketId);
         const payload = {
           status: displayStatus,
-          booking_number: ticket?.booking_number || 'BOOKING-00222',
+          booking_number: ticket?.booking_number || 'BOOKING-00243',
           main_issues: ticket?.main_issues || 'Utilities & Infrastructure Issues List'
         };
         await fetch(`${erpnextConfig.url}/api/resource/Issue/${ticketId}`, {
@@ -366,7 +513,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   // Create Ticket Submit
   const handleCreateIssueSubmit = async (e) => {
     e.preventDefault();
-    if (!issueSubject || !issueCustomer || !issueRaisedBy) return;
+    if (!issueSubject) return;
     console.log("DocType name where the issue is getting created:", "Issue");
     setSubmitting(true);
     setErrorMsg('');
@@ -376,18 +523,39 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
       .map(row => `- [${row.agreed ? 'Agreed' : 'Selected'}] ${row.issue}`)
       .join('\n');
 
-    const fullDescription = `${issueDescription}\n\n**Subcategory:** ${issueSubcategory}\n**Preferred Visit:** ${preferredVisitDate}\n**Emergency:** ${isEmergency ? 'YES' : 'NO'}\n**Booking Link:** ${selectedBookingNumber || 'None'}\n\n**Issues Selected:**\n${selectedIssuesText || 'None'}`;
+    const fullDescription = issueDescription
+      ? `${issueDescription}\n\n**Main Issue:** ${selectedIssueList}\n**Sub Issue:** ${issueSubcategory || 'N/A'}\n**Preferred Visit:** ${preferredVisitDate}\n**Emergency:** ${isEmergency ? 'YES' : 'NO'}\n**Booking Link:** ${selectedBookingNumber || 'BOOKING-00243'}${selectedIssuesText ? `\n\n**Issues Selected:**\n${selectedIssuesText}` : ''}`
+      : `**Main Issue:** ${selectedIssueList}\n**Sub Issue:** ${issueSubcategory || 'N/A'}\n**Preferred Visit:** ${preferredVisitDate}\n**Emergency:** ${isEmergency ? 'YES' : 'NO'}\n**Booking Link:** ${selectedBookingNumber || 'BOOKING-00243'}${selectedIssuesText ? `\n\n**Issues Selected:**\n${selectedIssuesText}` : ''}`;
+
+    const safePriority = isEmergency ? 'High' : (issuePriority.toString().trim().toLowerCase() === 'critical' ? 'High' : (['low', 'medium', 'high', 'urgent'].includes(issuePriority.toString().trim().toLowerCase()) ? (issuePriority.charAt(0).toUpperCase() + issuePriority.slice(1).toLowerCase()) : 'Medium'));
+
+    const now = new Date();
+    const formattedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const formattedTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
 
     const payload = {
+      doctype: 'Issue',
+      naming_series: 'ISS-.YYYY.-',
       subject: issueSubject,
-      customer: issueCustomer,
-      raised_by: issueRaisedBy,
-      status: issueStatus,
-      priority: isEmergency ? 'Critical' : issuePriority,
+      booking_number: selectedBookingNumber || 'BOOKING-00243',
+      main_issues: selectedIssueList || 'Utilities & Infrastructure Issues List',
+      company: issueCompany || 'CARPENTERS PROPERTIES PTE LIMITED',
+      priority: safePriority,
+      status: issueStatus || 'Open',
+      raised_by: issueRaisedBy || 'Administrator',
+      agreement_status: issueAgreementStatus || 'First Response Due',
+      budget: Number(issueBudget) || 0,
+      via_customer_portal: 0,
+      date: formattedDate,
+      opening_date: formattedDate,
+      opening_time: formattedTime,
+      custom_issue_items: [],
+      table_fogi: [],
+      table_gtmq: [],
       description: fullDescription,
-      company: issueCompany,
-      booking_number: selectedBookingNumber,
-      main_issues: selectedIssueList
+      subcategory: issueSubcategory,
+      issue_type: issueSubcategory,
+      ...(issueCustomer ? { customer: issueCustomer } : {})
     };
 
     try {
@@ -399,12 +567,16 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
       const newTicket = {
         id: `SUP-${Math.floor(800 + Math.random() * 200)}`,
         subject: issueSubject,
-        tenantName: issueCustomer,
-        status: issueStatus.toLowerCase(),
-        priority: isEmergency ? 'critical' : issuePriority.toLowerCase(),
+        tenantName: issueCustomer || issueRaisedBy || 'Administrator',
+        status: (issueStatus || 'Open').toLowerCase(),
+        priority: safePriority.toLowerCase(),
         lastUpdated: 'Just now',
-        dateRaised: '2026-06-16',
+        dateRaised: formattedDate,
         category: selectedIssueList,
+        booking_number: selectedBookingNumber || 'BOOKING-00243',
+        main_issues: selectedIssueList,
+        company: issueCompany || 'CARPENTERS PROPERTIES PTE LIMITED',
+        agreement_status: issueAgreementStatus || 'First Response Due',
         messages: [{ sender: 'tenant', text: fullDescription, timestamp: 'Just now' }]
       };
       setLocalTickets(prev => [newTicket, ...prev]);
@@ -412,8 +584,9 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
       // Reset
       setIssueSubject('');
       setIssueCustomer('');
-      setIssueRaisedBy('');
+      setIssueRaisedBy('Administrator');
       setIssueStatus('Open');
+      setIssuePriority('Medium');
       setIsEmergency(false);
       setIssueDescription('');
       setShowCreateModal(false);
@@ -734,8 +907,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                 padding: 0,
                 display: 'flex',
                 flexDirection: 'column',
-                filter: selectedTicketId ? 'blur(4px)' : 'none',
-                transition: 'filter 0.3s ease'
+                filter: 'none'
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border-color)', marginBottom: 10 }}>
                   <h3 style={{ fontSize: '0.95rem', margin: 0 }}>Open Issues ({openTickets.length})</h3>
@@ -1057,52 +1229,152 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
 
                 <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
                   <div className="form-group">
-                    <label className="form-label">Category</label>
-                    <select value={selectedIssueList} onChange={(e) => setSelectedIssueList(e.target.value)} className="form-select">
-                      {Object.keys(MOCK_ISSUE_LISTS).map(lstName => (
-                        <option key={lstName} value={lstName}>{lstName}</option>
+                    <label className="form-label">Main Issue</label>
+                    <select
+                      value={selectedIssueList}
+                      onChange={(e) => setSelectedIssueList(e.target.value)}
+                      className="form-select"
+                      required
+                    >
+                      {loadingIssuesLists && availableCategories.length === 0 && (
+                        <option value="" disabled>Loading issues list...</option>
+                      )}
+                      {availableCategories.map(cat => (
+                        <option key={cat.name} value={cat.name}>{cat.main_issue || cat.name}</option>
                       ))}
                     </select>
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Subcategory</label>
-                    <select value={issueSubcategory} onChange={(e) => setIssueSubcategory(e.target.value)} className="form-select">
-                      <option value="Leakage">Leakage</option>
-                      <option value="Wiring">Wiring</option>
-                      <option value="Heating">Heating</option>
-                      <option value="Pest">Pest Infestation</option>
+                    <label className="form-label">Sub Issue</label>
+                    <select
+                      value={issueSubcategory}
+                      onChange={(e) => setIssueSubcategory(e.target.value)}
+                      className="form-select"
+                      required
+                    >
+                      {(() => {
+                        const currentCat = availableCategories.find(c => c.name === selectedIssueList || c.main_issue === selectedIssueList);
+                        const subIssues = currentCat ? currentCat.subIssues : [];
+                        if (subIssues.length === 0) {
+                          return <option value="">-- No Sub Issues Found --</option>;
+                        }
+                        return subIssues.map((sub, idx) => (
+                          <option key={idx} value={sub}>{sub}</option>
+                        ));
+                      })()}
                     </select>
                   </div>
                 </div>
 
                 <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
                   <div className="form-group">
-                    <label className="form-label">Customer (Tenant)</label>
-                    <select value={issueCustomer} onChange={(e) => setIssueCustomer(e.target.value)} className="form-select" required>
-                      <option value="">-- Select Tenant --</option>
-                      {tenants.map(t => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
+                    <label className="form-label">Tenant / Customer (Optional)</label>
+                    <select
+                      value={issueCustomer}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setIssueCustomer(val);
+                        const matched = bookingTenants.find(t => t.id === val || t.name === val);
+                        if (matched?.email) {
+                          setIssueRaisedBy(matched.email);
+                        }
+                      }}
+                      className="form-select"
+                    >
+                      <option value="">-- None / General Request --</option>
+                      {loadingBookings && bookingTenants.length === 0 && (
+                        <option value="" disabled>Loading booking tenants...</option>
+                      )}
+                      {bookingTenants.map(t => (
+                        <option key={t.id || t.name} value={t.id || t.name}>{t.name || t.id}</option>
                       ))}
                     </select>
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Raised By (Email)</label>
-                    <input type="email" value={issueRaisedBy} onChange={(e) => setIssueRaisedBy(e.target.value)} className="form-input" required />
+                    <label className="form-label">Raised By</label>
+                    <input
+                      type="text"
+                      value={issueRaisedBy}
+                      onChange={(e) => setIssueRaisedBy(e.target.value)}
+                      placeholder="e.g. Administrator or email"
+                      className="form-input"
+                      required
+                    />
                   </div>
                 </div>
 
-                <div className="form-group">
-                  <label className="form-label">Booking Number (Mandatory in ERPNext)</label>
-                  <select value={selectedBookingNumber} onChange={(e) => setSelectedBookingNumber(e.target.value)} className="form-select" required>
-                    <option value="">-- Select Booking --</option>
-                    {(() => {
-                      const customerBookings = bookingOptions.filter(opt => !issueCustomer || opt.customer === issueCustomer);
-                      const bookingsToShow = customerBookings.length > 0 ? customerBookings : bookingOptions;
-                      return bookingsToShow.map(opt => (
+                <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
+                  <div className="form-group">
+                    <label className="form-label">Booking Number (Required)</label>
+                    <select
+                      value={selectedBookingNumber}
+                      onChange={(e) => {
+                        const bVal = e.target.value;
+                        setSelectedBookingNumber(bVal);
+                        const matched = bookingOptions.find(b => b.value === bVal);
+                        if (matched?.customer && !issueCustomer) {
+                          const matchedTenant = bookingTenants.find(t =>
+                            (t.id || '').toLowerCase() === (matched.customer || '').toLowerCase() ||
+                            (t.name || '').toLowerCase() === (matched.customer || '').toLowerCase()
+                          );
+                          if (matchedTenant) {
+                            setIssueCustomer(matchedTenant.id || matchedTenant.name);
+                            if (matchedTenant.email && !issueRaisedBy) {
+                              setIssueRaisedBy(matchedTenant.email);
+                            }
+                          } else {
+                            setIssueCustomer(matched.customer);
+                          }
+                        }
+                      }}
+                      className="form-select"
+                      required
+                    >
+                      {bookingOptions.map(opt => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ));
-                    })()}
-                  </select>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Company</label>
+                    <input
+                      type="text"
+                      value={issueCompany}
+                      onChange={(e) => setIssueCompany(e.target.value)}
+                      className="form-input"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
+                  <div className="form-group">
+                    <label className="form-label">Priority</label>
+                    <select
+                      value={issuePriority}
+                      onChange={(e) => setIssuePriority(e.target.value)}
+                      className="form-select"
+                    >
+                      <option value="Low">Low</option>
+                      <option value="Medium">Medium</option>
+                      <option value="High">High</option>
+                      <option value="Urgent">Urgent</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Status</label>
+                    <select
+                      value={issueStatus}
+                      onChange={(e) => setIssueStatus(e.target.value)}
+                      className="form-select"
+                    >
+                      <option value="Open">Open</option>
+                      <option value="Replied">Replied</option>
+                      <option value="On Hold">On Hold</option>
+                      <option value="Resolved">Resolved</option>
+                      <option value="Closed">Closed</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
@@ -1116,14 +1388,37 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                   </div>
                 </div>
 
+                {issueListRows && issueListRows.length > 0 && (
+                  <div className="form-group">
+                    <label className="form-label">Checklist Items from Issues List</label>
+                    <div style={{ maxHeight: 130, overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 6, padding: '8px 12px', background: 'var(--bg-secondary)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {issueListRows.map((row, idx) => (
+                        <label key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer', margin: 0 }}>
+                          <input
+                            type="checkbox"
+                            checked={row.selected}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setIssueListRows(prev => prev.map((r, i) => i === idx ? { ...r, selected: checked } : r));
+                            }}
+                          />
+                          <span>{row.issue}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="form-group">
                   <label className="form-label">Description</label>
-                  <textarea value={issueDescription} onChange={(e) => setIssueDescription(e.target.value)} className="form-input" rows="3" />
+                  <textarea value={issueDescription} onChange={(e) => setIssueDescription(e.target.value)} placeholder="Describe the issue in detail..." className="form-input" rows="3" />
                 </div>
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowCreateModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Create Ticket</button>
+                <button type="submit" className="btn btn-primary" disabled={submitting}>
+                  {submitting ? 'Creating...' : 'Create Ticket'}
+                </button>
               </div>
             </form>
           </div>

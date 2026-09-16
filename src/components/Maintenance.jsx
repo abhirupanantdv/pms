@@ -3278,6 +3278,8 @@ export default function Maintenance({
   const [schedBookingId, setSchedBookingId] = useState('');
   const [schedProperty, setSchedProperty] = useState('');
   const [schedPropertyGroup, setSchedPropertyGroup] = useState('');
+  const [customerBookings, setCustomerBookings] = useState([]);
+  const [customerUnits, setCustomerUnits] = useState([]);
 
   // ── Schedule items child table ──────────────────────────────────────────────
   const [schedItems, setSchedItems] = useState([
@@ -3400,6 +3402,12 @@ export default function Maintenance({
     setCustomMaintenanceSchedule(value);
   };
   const availableSchedUnits = useMemo(() => {
+    // 1. If customerUnits from all bookings of the selected customer is populated, use it!
+    if (customerUnits && customerUnits.length > 0) {
+      return customerUnits;
+    }
+
+    // 2. Otherwise fallback to single bookingDetails
     if (!bookingDetails || !schedUnits.length) return [];
 
     // Extract item codes from booking_item array that belong to item_group = "Commercial"
@@ -3445,7 +3453,7 @@ export default function Maintenance({
     });
 
     return filtered.length > 0 ? filtered : [];
-  }, [schedUnits, bookingDetails]);
+  }, [schedUnits, bookingDetails, customerUnits]);
 
   useEffect(() => {
     if (!schedBookingId) {
@@ -3475,15 +3483,26 @@ export default function Maintenance({
       setSchedProperty(propertyValue);
     }
 
-    const customerKey = bookingDetails.customer || bookingDetails.customer_name || '';
-    const resolvedTenantId = resolveTenantId(customerKey);
-    setSchedCustomer(resolvedTenantId || customerKey);
+    if (!schedCustomer) {
+      const customerKey = bookingDetails.customer || bookingDetails.customer_name || '';
+      const resolvedTenantId = resolveTenantId(customerKey);
+      setSchedCustomer(resolvedTenantId || customerKey);
+    }
 
     const bookingPropertyGroup = bookingDetails.property_group || '';
-    setSchedPropertyGroup(bookingPropertyGroup);
+    if (bookingPropertyGroup) {
+      setSchedPropertyGroup(bookingPropertyGroup);
+    }
 
     const unitCode = bookingDetails.property_unit || bookingDetails.unit || bookingDetails.unit_name || bookingDetails.unit_code || '';
-    setSchedUnitSpec(unitCode);
+    if (unitCode) {
+      setSchedUnitSpec(unitCode);
+    }
+
+    // If customerUnits is already populated, let multi-booking customer units manage schedItems
+    if (customerUnits.length > 0) {
+      return;
+    }
 
     // Extract booking items from booking_item array where item_group is Commercial
     if (bookingDetails.booking_item && Array.isArray(bookingDetails.booking_item) && bookingDetails.booking_item.length > 0) {
@@ -3503,7 +3522,8 @@ export default function Maintenance({
         startDate: bookingDetails.start_date || new Date().toISOString().split('T')[0],
         periodicity: 'Weekly',
         noOfVisits: 1,
-        endDate: bookingDetails.end_date || ''
+        endDate: bookingDetails.end_date || '',
+        bookingId: bookingDetails.name || ''
       }));
 
       setSchedItems(bookingItems.length > 0 ? bookingItems : [{
@@ -3512,7 +3532,8 @@ export default function Maintenance({
         startDate: bookingDetails.start_date || new Date().toISOString().split('T')[0],
         periodicity: 'Weekly',
         noOfVisits: 1,
-        endDate: bookingDetails.end_date || ''
+        endDate: bookingDetails.end_date || '',
+        bookingId: bookingDetails.name || ''
       }]);
 
       // Fetch item details for each item code
@@ -3533,7 +3554,7 @@ export default function Maintenance({
       const isCommercial = schedGrp === 'commercial' || !schedGrp;
 
       if (isCommercial) {
-        setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: '' } : row));
+        setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: '', bookingId: bookingDetails.name || '' } : row));
         fetchItemDetails(unitCode).then(details => {
           setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: details.itemName } : row));
           if (!bookingPropertyGroup && details.propertyGroup) {
@@ -3542,7 +3563,7 @@ export default function Maintenance({
         });
       }
     }
-  }, [bookingDetails, schedUnits]);
+  }, [bookingDetails, schedUnits, customerUnits]);
 
   // ── Fetch Bookings & Filter Approved Tenants ──────────────────────────────
   const [loadingBookings, setLoadingBookings] = useState(false);
@@ -3550,7 +3571,7 @@ export default function Maintenance({
   useEffect(() => {
     if (!erpnextConfig?.url) return;
     setLoadingBookings(true);
-    const bookingFields = encodeURIComponent(JSON.stringify(["name", "customer", "customer_name", "workflow_state", "docstatus"]));
+    const bookingFields = encodeURIComponent(JSON.stringify(["name", "customer", "customer_name", "workflow_state", "docstatus", "property"]));
     fetch(`${erpnextConfig.url}/api/resource/Booking?fields=${bookingFields}&limit_page_length=500&order_by=creation%20desc`, {
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' }
@@ -3568,7 +3589,7 @@ export default function Maintenance({
       });
   }, [showScheduleModal, erpnextConfig?.url]);
 
-  // Only show tenants whose Booking workflow_state is "Approved" / "Approve"
+  // Only show tenants whose Booking workflow_state is "Approved"
   const filteredTenants = useMemo(() => {
     if (!bookings || bookings.length === 0) return [];
 
@@ -3576,8 +3597,8 @@ export default function Maintenance({
 
     bookings.forEach(b => {
       const ws = (b.workflow_state || '').toString().trim().toLowerCase();
-      // Match approved workflow state
-      if (ws === 'approved' || ws === 'approve' || ws.includes('approv')) {
+      // Only match Booking workflow_state === "Approved"
+      if (ws === 'approved') {
         const custId = b.customer || b.customer_name;
         const custName = b.customer_name || b.customer;
         if (custId) {
@@ -3643,11 +3664,86 @@ export default function Maintenance({
     return itemCode;
   };
 
-  const handleSchedItemCodeChange = async (idx, value) => {
+  const handleSchedItemCodeChange = async (idx, rawValue) => {
+    // rawValue might be "BOOKING_ID::UNIT_CODE" or just "UNIT_CODE"
+    const [bIdPart, unitCodePart] = rawValue && rawValue.includes('::') 
+      ? rawValue.split('::') 
+      : [null, rawValue];
+    const value = unitCodePart !== undefined ? unitCodePart : rawValue;
+
+    // Find in customerUnits or availableSchedUnits
+    const matchedUnit = (customerUnits || []).find(u => {
+      if (bIdPart) {
+        return u.booking_id === bIdPart && (u.name === value || u.item_code === value);
+      }
+      return u.name === value || u.item_code === value;
+    }) || (availableSchedUnits || []).find(u => {
+      if (bIdPart) {
+        return u.booking_id === bIdPart && (u.name === value || u.item_code === value);
+      }
+      return u.name === value || u.item_code === value;
+    });
+
     const details = value ? await fetchItemDetails(value) : { itemName: '', propertyGroup: '' };
-    setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, itemCode: value, itemName: details.itemName } : r));
-    if (details.propertyGroup) {
-      setSchedPropertyGroup(details.propertyGroup);
+    const itemName = matchedUnit?.item_name || details.itemName || value;
+
+    // Target booking ID for this unit
+    const targetBookingId = matchedUnit?.booking_id || bIdPart;
+
+    setSchedItems(prev => prev.map((r, i) => i === idx ? {
+      ...r,
+      itemCode: value,
+      itemName: itemName,
+      startDate: matchedUnit?.start_date || r.startDate || new Date().toISOString().split('T')[0],
+      endDate: matchedUnit?.end_date || r.endDate || '',
+      bookingId: targetBookingId || r.bookingId || ''
+    } : r));
+
+    // Automatically update Linked Booking ID to this unit's booking!
+    if (targetBookingId) {
+      setSchedBookingId(targetBookingId);
+    }
+    if (matchedUnit?.property) {
+      setSchedProperty(matchedUnit.property);
+    }
+    if (matchedUnit?.property_group || details.propertyGroup) {
+      setSchedPropertyGroup(matchedUnit.property_group || details.propertyGroup);
+    }
+    if (matchedUnit?.bookingDoc) {
+      setBookingDetails(matchedUnit.bookingDoc);
+    } else if (targetBookingId && customerBookings.length > 0) {
+      const foundB = customerBookings.find(b => b.name === targetBookingId);
+      if (foundB) {
+        setBookingDetails(foundB);
+        const prop = getPropertyIdFromBooking(foundB) || foundB.property || '';
+        if (prop) setSchedProperty(prop);
+      }
+    }
+  };
+
+  const handleLinkedBookingChange = (newBookingId) => {
+    setSchedBookingId(newBookingId);
+    if (!newBookingId) return;
+
+    const bDoc = (customerBookings || []).find(b => b.name === newBookingId);
+    if (bDoc) {
+      setBookingDetails(bDoc);
+      const propId = getPropertyIdFromBooking(bDoc) || bDoc.property || '';
+      if (propId) setSchedProperty(propId);
+      if (bDoc.property_group) setSchedPropertyGroup(bDoc.property_group);
+
+      // Find first unit belonging to this booking
+      const firstUnit = (customerUnits || []).find(u => u.booking_id === newBookingId);
+      if (firstUnit) {
+        setSchedItems(prev => prev.map((r, i) => i === 0 ? {
+          ...r,
+          itemCode: firstUnit.item_code,
+          itemName: firstUnit.item_name,
+          startDate: firstUnit.start_date || r.startDate,
+          endDate: firstUnit.end_date || r.endDate,
+          bookingId: newBookingId
+        } : r));
+      }
     }
   };
 
@@ -3829,12 +3925,32 @@ export default function Maintenance({
     }
   };
 
+  const handleOpenScheduleModal = () => {
+    setSchedCustomer('');
+    setSchedBookingId('');
+    setBookingDetails(null);
+    setCustomerBookings([]);
+    setCustomerUnits([]);
+    setCustomMaintenanceSchedule('');
+    setSchedItems([{
+      itemCode: '',
+      itemName: '',
+      startDate: new Date().toISOString().split('T')[0],
+      periodicity: 'Weekly',
+      noOfVisits: 1,
+      endDate: '',
+      bookingId: ''
+    }]);
+    setScheduleStatusMessage(null);
+    setShowScheduleModal(true);
+  };
+
   // ── Create Schedule ─────────────────────────────────────────────────────────
   const handleCreateScheduleSubmit = async (e) => {
     e.preventDefault();
     setSubmittingSchedule(true); setScheduleStatusMessage(null);
-    const tenantObj = tenants.find(t => t.id === schedCustomer);
-    const customerName = tenantObj ? tenantObj.name : schedCustomer;
+    const tenantObj = (tenants || []).find(t => t.id === schedCustomer || t.name === schedCustomer);
+    const customerName = tenantObj ? (tenantObj.customer_name || tenantObj.name) : schedCustomer;
     const payload = {
       customer: schedCustomer, customer_name: customerName, transaction_date: schedTransDate,
       custom_booking_id: schedBookingId, custom_property: schedProperty, status: 'Draft', custom_maintenance_schedule: custom_maintenance_schedule,
@@ -3970,140 +4086,275 @@ export default function Maintenance({
   };
 
   const handleSchedCustomerChange = async (customerName) => {
-
     setSchedCustomer(customerName);
 
-    if (!customerName || !erpnextConfig?.url) {
+    if (!customerName) {
+      setCustomerBookings([]);
+      setCustomerUnits([]);
+      setSchedBookingId('');
+      setBookingDetails(null);
+      setSchedItems([{
+        itemCode: '',
+        itemName: '',
+        startDate: new Date().toISOString().split('T')[0],
+        periodicity: 'Weekly',
+        noOfVisits: 1,
+        endDate: '',
+        bookingId: ''
+      }]);
+      return;
+    }
+
+    if (!erpnextConfig?.url) {
       return;
     }
 
     try {
-      // Find matching approved booking from loaded bookings first
-      const cachedApprovedBooking = bookings.find(b => {
-        const ws = (b.workflow_state || '').toString().trim().toLowerCase();
-        const isApprove = ws === 'approved' || ws === 'approve' || ws.includes('approv');
-        const bCust = (b.customer || '').toString().trim().toLowerCase();
-        const bCustName = (b.customer_name || '').toString().trim().toLowerCase();
-        const target = customerName.toString().trim().toLowerCase();
-        return isApprove && (bCust === target || bCustName === target);
-      });
-
-      let booking = cachedApprovedBooking || null;
-
-      if (!booking) {
-        const filters = encodeURIComponent(
-          JSON.stringify([
-            ["customer", "=", customerName]
-          ])
-        );
-
-        const url =
-          `${erpnextConfig.url}/api/resource/Booking` +
-          `?filters=${filters}` +
-          `&limit_page_length=200` +
-          `&order_by=creation desc`;
-
-        console.log("Customer:", customerName);
-        console.log("URL:", url);
-
-        const res = await fetch(url, {
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json"
-          }
-        });
-
-        const json = await res.json();
-        console.log("Response:", json);
-
-        if (res.ok) {
-          const fetchedList = json.data || [];
-          booking = fetchedList.find(b => {
-            const ws = (b.workflow_state || '').toString().trim().toLowerCase();
-            return ws === 'approved' || ws === 'approve' || ws.includes('approv');
-          }) || fetchedList.find(b => b.docstatus === 1) || fetchedList[0];
+      // 1. Gather all possible identifiers/aliases for this customer (IDs, display names, party names)
+      const custKeys = new Set();
+      const addKey = (val) => {
+        if (val && typeof val === 'string') {
+          const s = val.trim().toLowerCase();
+          if (s) custKeys.add(s);
         }
+      };
+
+      addKey(customerName);
+
+      const tenantObj = (tenants || []).find(t =>
+        (t.id && t.id.toString().toLowerCase() === customerName.toLowerCase()) ||
+        (t.name && t.name.toString().toLowerCase() === customerName.toLowerCase()) ||
+        (t.customer_name && t.customer_name.toString().toLowerCase() === customerName.toLowerCase())
+      );
+      if (tenantObj) {
+        addKey(tenantObj.id);
+        addKey(tenantObj.name);
+        addKey(tenantObj.customer_name);
       }
 
-      if (!booking) {
+      // Two-pass search in existing in-memory bookings to find cross-referenced customer IDs/names
+      for (let pass = 0; pass < 2; pass++) {
+        (bookings || []).forEach(b => {
+          const bc = (b.customer || '').toString().trim().toLowerCase();
+          const bcn = (b.customer_name || '').toString().trim().toLowerCase();
+          if ((bc && custKeys.has(bc)) || (bcn && custKeys.has(bcn))) {
+            addKey(b.customer);
+            addKey(b.customer_name);
+          }
+        });
+      }
+
+      const isCustomerMatch = (b) => {
+        const bc = (b.customer || '').toString().trim().toLowerCase();
+        const bcn = (b.customer_name || '').toString().trim().toLowerCase();
+        return (bc && custKeys.has(bc)) || (bcn && custKeys.has(bcn));
+      };
+
+      const isApproved = (b) => {
+        const ws = (b.workflow_state || '').toString().trim();
+        return ws.toLowerCase() === 'approved';
+      };
+
+      // 2. Find all matching approved bookings (workflow_state === "Approved") from memory first
+      let matchedBookings = (bookings || []).filter(b => isCustomerMatch(b) && isApproved(b));
+
+      // 3. Query ERPNext API for any approved bookings for this customer
+      try {
+        const custFilterVals = Array.from(new Set(Array.from(custKeys).map(k => k.trim()))).filter(Boolean);
+        if (custFilterVals.length > 0) {
+          const queries = [
+            JSON.stringify([["customer", "in", custFilterVals], ["workflow_state", "=", "Approved"]]),
+            JSON.stringify([["customer_name", "in", custFilterVals], ["workflow_state", "=", "Approved"]])
+          ];
+
+          for (const fStr of queries) {
+            try {
+              const url = `${erpnextConfig.url}/api/resource/Booking?filters=${encodeURIComponent(fStr)}&limit_page_length=200&order_by=creation desc`;
+              const res = await fetch(url, {
+                credentials: "include",
+                headers: { "Content-Type": "application/json" }
+              });
+              if (res.ok) {
+                const json = await res.json();
+                const fetchedList = json.data || [];
+                const existingIds = new Set(matchedBookings.map(b => b.name));
+                fetchedList.forEach(b => {
+                  if (!existingIds.has(b.name) && isApproved(b)) {
+                    matchedBookings.push(b);
+                    existingIds.add(b.name);
+                  }
+                });
+              }
+            } catch (qErr) {
+              console.warn("API booking fetch query failed:", qErr);
+            }
+          }
+        }
+      } catch (fetchErr) {
+        console.warn("API booking fetch for customer failed:", fetchErr);
+      }
+
+      if (matchedBookings.length === 0) {
+        setCustomerBookings([]);
+        setCustomerUnits([]);
+        setSchedBookingId('');
+        setBookingDetails(null);
         if (typeof frappe !== 'undefined' && frappe.msgprint) {
-          frappe.msgprint(
-            `No approved booking found for ${customerName}`
-          );
+          frappe.msgprint(`No approved booking (workflow_state: Approved) found for ${tenantObj?.customer_name || customerName}`);
+        } else {
+          showToast(`No approved booking (workflow_state: Approved) found for ${tenantObj?.customer_name || customerName}`, 'info');
         }
         return;
       }
 
-      setSchedBookingId(booking.name);
-      setBookingDetails(booking);
-
-      // Fetch complete booking document
-      const detailRes = await fetch(
-        `${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(booking.name)}`,
-        {
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json"
+      // 4. Fetch full details for ALL matched bookings in parallel
+      const fullBookings = await Promise.all(
+        matchedBookings.map(async (b) => {
+          try {
+            const detailRes = await fetch(
+              `${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(b.name)}`,
+              {
+                credentials: "include",
+                headers: {
+                  "Content-Type": "application/json"
+                }
+              }
+            );
+            if (detailRes.ok) {
+              const detailJson = await detailRes.json();
+              return detailJson.data || b;
+            }
+          } catch (e) {
+            console.warn(`Failed to fetch complete booking details for ${b.name}:`, e);
           }
-        }
+          return b;
+        })
       );
 
-      const detailJson = await detailRes.json();
-
-      if (!detailRes.ok) {
-        throw new Error(
-          detailJson.exception ||
-          "Unable to fetch complete booking details"
+      // Helper to identify non-unit charges/fees
+      const isFee = (str) => {
+        const s = (str || '').toString().trim().toLowerCase();
+        return (
+          s === 'promotional fee' ||
+          s === 'service charge' ||
+          s === 'security deposit' ||
+          s === 'booking fee' ||
+          s === 'advance amount' ||
+          s.includes('promotional fee') ||
+          s.includes('service charge')
         );
-      }
+      };
 
-      const fullBooking = detailJson.data;
+      // 5. Extract all units across all bookings
+      const allUnits = [];
+      const seenUnitKeys = new Set();
 
-      setBookingDetails(fullBooking);
+      fullBookings.forEach(booking => {
+        const bStartDate = booking.start_date || booking.starting_date || new Date().toISOString().split('T')[0];
+        const bEndDate = booking.end_date || booking.ending_date || '';
+        const bProp = getPropertyIdFromBooking(booking) || booking.property || '';
+        const bPropGroup = booking.property_group || '';
 
-      // Commercial units only (item_group === 'Commercial'), excluding Promotional Fee and Service Charge
-      const commercialItems = (fullBooking.booking_item || [])
-        .filter(item => {
-          const code = (item.item_code || '').toString().trim().toLowerCase();
-          if (code === 'promotional fee' || code === 'service charge') return false;
-          const grp = (item.item_group || item.unit_group || '').toString().trim().toLowerCase();
-          const schedMatch = schedUnits.find(u => (u.name || '').toLowerCase() === code);
-          const schedGrp = (schedMatch?.item_group || '').toString().trim().toLowerCase();
-          const isCommercial = grp === 'commercial' || schedGrp === 'commercial' || (!grp && !schedGrp);
-          return isCommercial;
+        const bItems = Array.isArray(booking.booking_item) ? booking.booking_item : [];
+        const unitItems = bItems.filter(item => {
+          const code = (item.item_code || '').toString().trim();
+          const name = (item.item_name || '').toString().trim();
+          if (!code && !name) return false;
+          if (isFee(code) || isFee(name)) return false;
+          return true;
         });
 
-      const scheduleItems = commercialItems.map(item => ({
-        itemCode: item.item_code,
-        itemName: item.item_name || item.item_code,
-        startDate: fullBooking.start_date || new Date().toISOString().split('T')[0],
-        periodicity: "Weekly",
-        noOfVisits: 1,
-        endDate: fullBooking.end_date || ""
-      }));
+        if (unitItems.length > 0) {
+          unitItems.forEach(item => {
+            const unitCode = item.item_code || item.name;
+            const unitName = item.item_name || item.name || unitCode;
+            const key = `${booking.name}::${unitCode}`;
+            if (!seenUnitKeys.has(key)) {
+              seenUnitKeys.add(key);
+              allUnits.push({
+                name: unitCode,
+                item_code: unitCode,
+                item_name: unitName,
+                booking_id: booking.name,
+                property: bProp,
+                property_group: bPropGroup,
+                start_date: bStartDate,
+                end_date: bEndDate,
+                bookingDoc: booking
+              });
+            }
+          });
+        }
 
-      setSchedItems(
-        scheduleItems.length
-          ? scheduleItems
-          : [{
-            itemCode: "",
-            itemName: "",
-            startDate: fullBooking.start_date || new Date().toISOString().split('T')[0],
-            periodicity: "Weekly",
-            noOfVisits: 1,
-            endDate: fullBooking.end_date || ""
-          }]
-      );
-
-    } catch (error) {
-
-      console.error("Customer Booking Error:", error);
-
-      frappe.msgprint({
-        title: __("Error"),
-        indicator: "red",
-        message: error.message
+        // Also check document-level unit fields
+        const docUnit = booking.property_unit || booking.unit || booking.unit_name || booking.unit_code || '';
+        if (docUnit && !isFee(docUnit)) {
+          const key = `${booking.name}::${docUnit}`;
+          if (!seenUnitKeys.has(key)) {
+            seenUnitKeys.add(key);
+            allUnits.push({
+              name: docUnit,
+              item_code: docUnit,
+              item_name: booking.unit_name || docUnit,
+              booking_id: booking.name,
+              property: bProp,
+              property_group: bPropGroup,
+              start_date: bStartDate,
+              end_date: bEndDate,
+              bookingDoc: booking
+            });
+          }
+        }
       });
+
+      setCustomerBookings(fullBookings);
+      setCustomerUnits(allUnits);
+
+      if (allUnits.length > 0) {
+        const firstUnit = allUnits[0];
+        setSchedBookingId(firstUnit.booking_id);
+        setBookingDetails(firstUnit.bookingDoc);
+        if (firstUnit.property) setSchedProperty(firstUnit.property);
+        if (firstUnit.property_group) setSchedPropertyGroup(firstUnit.property_group);
+
+        setSchedItems([{
+          itemCode: firstUnit.item_code,
+          itemName: firstUnit.item_name,
+          startDate: firstUnit.start_date,
+          periodicity: "Weekly",
+          noOfVisits: 1,
+          endDate: firstUnit.end_date,
+          bookingId: firstUnit.booking_id
+        }]);
+      } else if (fullBookings.length > 0) {
+        const firstB = fullBookings[0];
+        setSchedBookingId(firstB.name);
+        setBookingDetails(firstB);
+        const propId = getPropertyIdFromBooking(firstB) || firstB.property || '';
+        if (propId) setSchedProperty(propId);
+        if (firstB.property_group) setSchedPropertyGroup(firstB.property_group);
+
+        setSchedItems([{
+          itemCode: "",
+          itemName: "",
+          startDate: firstB.start_date || firstB.starting_date || new Date().toISOString().split('T')[0],
+          periodicity: "Weekly",
+          noOfVisits: 1,
+          endDate: firstB.end_date || firstB.ending_date || "",
+          bookingId: firstB.name
+        }]);
+      }
+    } catch (error) {
+      console.error("Customer Booking Error:", error);
+      if (typeof frappe !== 'undefined' && frappe.msgprint) {
+        frappe.msgprint({
+          title: "Error",
+          indicator: "red",
+          message: error.message
+        });
+      } else {
+        showToast(error.message, 'error');
+      }
     }
   };
 
@@ -4245,7 +4496,7 @@ export default function Maintenance({
                 ))}
               </div>
             </div>
-            <button className="btn btn-primary btn-sm" onClick={() => setShowScheduleModal(true)}><Plus size={14} /> New Schedule</button>
+            <button className="btn btn-primary btn-sm" onClick={handleOpenScheduleModal}><Plus size={14} /> New Schedule</button>
           </div>
 
           <div className="grid-2col" style={{ gridTemplateColumns: selectedSchedule ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
@@ -4709,16 +4960,38 @@ export default function Maintenance({
                     <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Clock size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
                       Linked Booking
+                      {customerBookings && customerBookings.length > 1 && (
+                        <span style={{ fontSize: 10, background: 'var(--bg-accent-alpha, rgba(6, 95, 70, 0.1))', color: 'var(--brand-color, #065f46)', padding: '1px 6px', borderRadius: 10, fontWeight: 600, marginLeft: 4 }}>
+                          {customerBookings.length} Bookings
+                        </span>
+                      )}
                     </label>
-                    <input
-                      type="text"
-                      value={schedBookingId || ''}
-                      placeholder={schedCustomer ? 'No submitted booking' : 'Auto-linked upon selection'}
-                      readOnly
-                      className="form-input"
-                      disabled
-                      style={{ height: 38, fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-tertiary, #f8fafc)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0 12px', color: schedBookingId ? 'var(--text-primary)' : 'var(--text-muted)' }}
-                    />
+                    {customerBookings && customerBookings.length > 1 ? (
+                      <select
+                        value={schedBookingId || ''}
+                        onChange={(e) => handleLinkedBookingChange(e.target.value)}
+                        className="form-select"
+                        disabled={submittingSchedule}
+                        style={{ height: 38, fontSize: 13, borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', padding: '0 12px', color: 'var(--text-primary)', fontWeight: 500 }}
+                      >
+                        <option value="">-- Select Linked Booking --</option>
+                        {customerBookings.map(b => (
+                          <option key={b.name} value={b.name}>
+                            {b.name} {b.property ? `· ${b.property}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={schedBookingId || ''}
+                        placeholder={schedCustomer ? 'No submitted booking' : 'Auto-linked upon selection'}
+                        readOnly
+                        className="form-input"
+                        disabled
+                        style={{ height: 38, fontSize: 13, boxSizing: 'border-box', background: 'var(--bg-tertiary, #f8fafc)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0 12px', color: schedBookingId ? 'var(--text-primary)' : 'var(--text-muted)' }}
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -4731,6 +5004,37 @@ export default function Maintenance({
                         {schedItems.length} {schedItems.length === 1 ? 'item' : 'items'}
                       </span>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setSchedItems(prev => [
+                        ...prev,
+                        {
+                          itemCode: '',
+                          itemName: '',
+                          startDate: schedTransDate || new Date().toISOString().split('T')[0],
+                          periodicity: 'Weekly',
+                          noOfVisits: 1,
+                          endDate: '',
+                          bookingId: schedBookingId || ''
+                        }
+                      ])}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        padding: '4px 10px',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        borderRadius: 6,
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--bg-secondary)',
+                        color: 'var(--brand-color, #065f46)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Plus size={13} />
+                      Add Unit
+                    </button>
                   </div>
 
                   <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-secondary)' }}>
@@ -4747,7 +5051,7 @@ export default function Maintenance({
                         </colgroup>
                         <thead>
                           <tr style={{ background: 'var(--bg-tertiary, #f8fafc)', position: 'sticky', top: 0, zIndex: 1, borderBottom: '1px solid var(--border-color)' }}>
-                            {['Item Code', 'Item Name', 'Start Date', 'Periodicity', 'No. of Visits', 'End Date', ''].map((h, i) => (
+                            {['Unit Code', 'Unit Name', 'Start Date', 'Periodicity', 'No. of Visits', 'End Date', ''].map((h, i) => (
                               <th key={i} style={{ ...thStyle, textTransform: 'uppercase', letterSpacing: '0.03em', fontSize: 11, fontWeight: 600, padding: i === 4 ? '10px 4px' : '10px 8px', textAlign: i === 4 || i === 6 ? 'center' : 'left', whiteSpace: 'nowrap' }}>
                                 {h}
                               </th>
@@ -4759,11 +5063,43 @@ export default function Maintenance({
                             <tr key={idx} style={{ borderBottom: idx < schedItems.length - 1 ? '1px solid var(--border-color)' : 'none', background: idx % 2 === 0 ? 'transparent' : 'var(--bg-tertiary, rgba(0,0,0,0.015))' }}>
                               <td style={{ padding: '8px 10px' }}>
                                 {availableSchedUnits.length === 0 ? (
-                                  <input type="text" value={row.itemCode} onChange={(e) => handleSchedItemCodeChange(idx, e.target.value)} placeholder="Enter or select unit" className="form-input" style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }} />
+                                  <input
+                                    type="text"
+                                    value={row.itemCode}
+                                    onChange={(e) => handleSchedItemCodeChange(idx, e.target.value)}
+                                    placeholder="Enter or select unit"
+                                    className="form-input"
+                                    style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }}
+                                  />
                                 ) : (
-                                  <select value={row.itemCode} onChange={(e) => handleSchedItemCodeChange(idx, e.target.value)} className="form-select" required style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                                  <select
+                                    value={
+                                      row.bookingId && row.itemCode
+                                        ? `${row.bookingId}::${row.itemCode}`
+                                        : (availableSchedUnits.find(u => (u.item_code || u.name) === row.itemCode && (!row.bookingId || u.booking_id === row.bookingId))
+                                          ? (availableSchedUnits.find(u => (u.item_code || u.name) === row.itemCode && (!row.bookingId || u.booking_id === row.bookingId)).booking_id
+                                            ? `${availableSchedUnits.find(u => (u.item_code || u.name) === row.itemCode && (!row.bookingId || u.booking_id === row.bookingId)).booking_id}::${row.itemCode}`
+                                            : row.itemCode)
+                                          : row.itemCode)
+                                    }
+                                    onChange={(e) => handleSchedItemCodeChange(idx, e.target.value)}
+                                    className="form-select"
+                                    required
+                                    style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)', fontWeight: 500 }}
+                                  >
                                     <option value="">-- Select Unit --</option>
-                                    {availableSchedUnits.map(u => <option key={u.name} value={u.name}>{u.name}</option>)}
+                                    {availableSchedUnits.map((u, uIdx) => {
+                                      const optVal = u.booking_id ? `${u.booking_id}::${u.item_code || u.name}` : (u.item_code || u.name);
+                                      const hasMultipleBookings = customerBookings && customerBookings.length > 1;
+                                      const optLabel = u.booking_id && hasMultipleBookings
+                                        ? `${u.name || u.item_code} · ${u.booking_id}`
+                                        : (u.name || u.item_code);
+                                      return (
+                                        <option key={`${optVal}-${uIdx}`} value={optVal}>
+                                          {optLabel}
+                                        </option>
+                                      );
+                                    })}
                                   </select>
                                 )}
                               </td>
