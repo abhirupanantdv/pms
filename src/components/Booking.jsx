@@ -3601,9 +3601,9 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     </td>
                     <td>
                       <span className={`badge ${(b.workflow_state === 'Approved' || b.status === 'Confirmed' || (b.docstatus === 1 && !b.workflow_state)) ? 'badge-success' :
-                          (b.workflow_state === 'Cancelled' || b.status === 'Cancelled' || b.docstatus === 2) ? 'badge-danger' :
-                            (b.workflow_state === 'Request For Approval' || b.workflow_state === 'Waiting For Contract Submit') ? 'badge-warning' :
-                              'badge-info'
+                        (b.workflow_state === 'Cancelled' || b.status === 'Cancelled' || b.docstatus === 2) ? 'badge-danger' :
+                          (b.workflow_state === 'Request For Approval' || b.workflow_state === 'Waiting For Contract Submit') ? 'badge-warning' :
+                            'badge-info'
                         }`}>
                         {b.workflow_state || b.status || (b.docstatus === 1 ? 'Approved' : 'Draft')}
                       </span>
@@ -4215,44 +4215,56 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                       Monthly Installment Amount
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
-                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Net Total:</span>
-                      <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '12px', fontWeight: 600 }}>
-                        ${parseFloat(selectedBookingDetails.net_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </strong>
-                    </div>
                     {(() => {
                       // Calculate Discount Amount by summing discount_amount across all items in booking_item
                       const itemsDiscount = Array.isArray(selectedBookingDetails.booking_item)
                         ? selectedBookingDetails.booking_item.reduce((sum, item) => {
-                            const val = parseFloat(
-                              item?.discount_amount !== undefined && item?.discount_amount !== null && item?.discount_amount !== ''
-                                ? item.discount_amount
-                                : (item?.deposit_amount ?? item?.diposite_amount ?? item?.discount ?? 0)
-                            );
-                            return sum + (isNaN(val) ? 0 : val);
-                          }, 0)
+                          const val = parseFloat(
+                            item?.discount_amount !== undefined && item?.discount_amount !== null && item?.discount_amount !== ''
+                              ? item.discount_amount
+                              : (item?.deposit_amount ?? item?.diposite_amount ?? item?.discount ?? 0)
+                          );
+                          return sum + (isNaN(val) ? 0 : val);
+                        }, 0)
                         : 0;
 
                       const calculatedDiscount = itemsDiscount > 0
                         ? itemsDiscount
                         : (parseFloat(selectedBookingDetails.discount_amount || selectedBookingDetails.quotation_discount_amount || 0) || 0);
 
+                      const currentNetTotal = parseFloat(selectedBookingDetails.net_total || 0);
+                      const displayNetTotal = currentNetTotal + calculatedDiscount;
+                      const monthlyGrandTotal = parseFloat(selectedBookingDetails.grand_totalmonthly || selectedBookingDetails.per_month_billing_amount || 0);
+
+                      // Taxes & Charges = Monthly Grand Total + discount - Net Total (current net total)
+                      const computedTaxes = (monthlyGrandTotal + calculatedDiscount) - displayNetTotal;
+                      const displayTaxes = computedTaxes > 0
+                        ? computedTaxes
+                        : Math.max(0, parseFloat(selectedBookingDetails.taxes_and_charges || 0));
+
                       return (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
-                          <span style={{ color: '#d97706', fontWeight: 500 }}>Discount Amount:</span>
-                          <strong style={{ color: '#d97706', fontSize: '12px', fontWeight: 600 }}>
-                            - ${calculatedDiscount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </strong>
-                        </div>
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                            <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Net Total:</span>
+                            <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '12px', fontWeight: 600 }}>
+                              ${displayNetTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                            <span style={{ color: '#d97706', fontWeight: 500 }}>Discount Amount:</span>
+                            <strong style={{ color: '#d97706', fontSize: '12px', fontWeight: 600 }}>
+                              - ${calculatedDiscount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                            <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Taxes & Charges:</span>
+                            <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '12px', fontWeight: 600 }}>
+                              + ${displayTaxes.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </strong>
+                          </div>
+                        </>
                       );
                     })()}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
-                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Taxes & Charges:</span>
-                      <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '12px', fontWeight: 600 }}>
-                        + ${parseFloat(selectedBookingDetails.taxes_and_charges || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </strong>
-                    </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px', borderBottom: '1px dashed #f1f5f9', paddingBottom: '6px', marginBottom: '6px' }}>
                       <span style={{ color: 'var(--text-primary, #0f172a)', fontWeight: 700 }}>Monthly Grand Total:</span>
                       <strong style={{ color: '#0a6c66', fontSize: '12.5px', fontWeight: 800 }}>
