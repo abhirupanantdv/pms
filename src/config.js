@@ -75,7 +75,7 @@ export const getUploadHeaders = (extraHeaders = {}) => {
  * - On production domains, ensures https:// is used to avoid Nginx 301 redirects (which drop headers and POST bodies).
  */
 export const getApiBaseUrl = () => {
-  if (typeof window === 'undefined') return 'http://192.168.101.180:8980';
+  if (typeof window === 'undefined') return 'https://pms.advtinni.com';
   const { origin, protocol, hostname, host } = window.location;
 
   // Local development via Vite dev server proxy
