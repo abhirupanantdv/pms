@@ -8233,7 +8233,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             <div style={{ padding: '10px 14px', background: '#f9fafb', borderTop: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', gap: 5, fontSize: 11, flexShrink: 0 }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
                                 <span>Net Total</span>
-                                <span style={{ fontWeight: 600, color: '#111827' }}>${calculatedNetTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+                                <span style={{ fontWeight: 600, color: '#111827' }}>${(calculatedNetTotal + discount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#ef4444', fontWeight: 600 }}>
                                 <span>Negotiated Discount</span>
@@ -8502,7 +8502,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                                   <td style={{ padding: '10px 14px', fontWeight: 600 }}>Net Total</td>
                                   {sortedComp.map((n) => (
-                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600 }}>${(n.current_net_total || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600 }}>${((parseFloat(n.current_net_total || 0) + parseFloat(n.current_discount || 0))).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
                                   ))}
                                 </tr>
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
