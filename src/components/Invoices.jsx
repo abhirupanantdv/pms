@@ -1653,7 +1653,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
 
                       <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
                         <div className="form-group">
-                          <label className="form-label">Approved Booking ID</label>
+                          <label className="form-label">Booking ID</label>
                           <select
                             value={formValues.booking_id}
                             onChange={(e) => handleBookingSelect(e.target.value)}
@@ -1664,12 +1664,12 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                               .filter(b => !formValues.customer || b.customer === formValues.customer || b.customer_name === formValues.customer || b.tenantName === formValues.customer)
                               .map(b => (
                                 <option key={b.name} value={b.name}>
-                                  {b.name} - {b.property || 'Unit'} (${Number(b.booking_amount || 0).toLocaleString()})
+                                  {b.name}
                                 </option>
                               ))}
-                            {formValues.booking_id && !approvedBookings.some(b => b.name === formValues.booking_id) && (
+                            {/* {formValues.booking_id && !approvedBookings.some(b => b.name === formValues.booking_id) && (
                               <option value={formValues.booking_id}>{formValues.booking_id}</option>
-                            )}
+                            )} */}
                           </select>
                           <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', display: 'block' }}>
                             Auto-fills leased property unit and monthly rental rate into line items.
@@ -1733,7 +1733,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           </div>
                           <div>
                             <h4 style={{ margin: 0, fontSize: '13.5px', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <span>Invoice Line Units</span>
+                              <span>Line Units</span>
                               {loadingBookingItems && (
                                 <span style={{ fontSize: '11px', color: '#0a6c66', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                                   <Loader2 size={12} className="spin" /> Fetching booking items...
@@ -1750,9 +1750,9 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                             <thead>
                               <tr style={{ background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-secondary)' }}>
                                 <th style={{ padding: '8px 10px', width: '30px' }}>#</th>
-                                <th style={{ padding: '8px 10px', minWidth: '140px' }}>Item Code / Unit <span style={{ color: '#ef4444' }}>*</span></th>
+                                <th style={{ padding: '8px 10px', minWidth: '140px' }}>Unit Code/Services <span style={{ color: '#ef4444' }}>*</span></th>
                                 <th style={{ padding: '8px 10px', minWidth: '160px' }}>Description</th>
-                                <th style={{ padding: '8px 10px', width: '75px' }}>Qty</th>
+                                <th style={{ padding: '8px 10px', width: '75px' }}>Period(Monthly)</th>
                                 <th style={{ padding: '8px 10px', width: '110px' }}>Rate ({formValues.currency})</th>
                                 <th style={{ padding: '8px 10px', width: '100px' }}>Amount</th>
                                 <th style={{ padding: '8px 10px', width: '85px' }}>UOM</th>
@@ -2088,12 +2088,12 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           <Calculator size={15} />
                         </div>
                         <div>
-                          <h4 style={{ margin: 0, fontSize: '13.5px', fontWeight: 700, color: 'var(--text-primary)' }}>Discounts & Grand Total Summary</h4>
+                          <h4 style={{ margin: 0, fontSize: '13.5px', fontWeight: 700, color: 'var(--text-primary)' }}>Grand Total Summary</h4>
 
                         </div>
                       </div>
 
-                      <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
+                      {/* <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
                         <div className="form-group">
                           <label className="form-label">Additional Discount Percentage (%)</label>
                           <input
@@ -2106,9 +2106,9 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                             placeholder="0"
                             className="form-input"
                           />
-                        </div>
+                        </div> */}
 
-                        <div className="form-group">
+                      {/* <div className="form-group">
                           <label className="form-label">Direct Discount Amount ({formValues.currency})</label>
                           <input
                             type="number"
@@ -2120,7 +2120,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                             className="form-input"
                           />
                         </div>
-                      </div>
+                      </div> */}
 
                       {/* Financial Card Summary */}
                       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '9px' }}>

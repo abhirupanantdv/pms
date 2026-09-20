@@ -27,6 +27,7 @@ import {
   ChevronRight,
   ClipboardList,
   Edit,
+  Printer,
   RefreshCw,
   Info
 } from 'lucide-react';
@@ -1815,6 +1816,64 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     }
   };
 
+  const handlePrintBookingForm = () => {
+    if (selectedCase?.business_status === 'Cancelled' || selectedCase?.workflow_state === 'Cancelled' || selectedCase?.docstatus === 2) {
+      alert('Not allowed to print cancelled documents', 'error');
+      return;
+    }
+    if (erpnextConfig?.url && selectedCase?.name) {
+      const printUrl = `${erpnextConfig.url}/printview?doctype=Tenant%20Onboarding&name=${encodeURIComponent(selectedCase.name)}&format=Booking%20form&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+      const printWindow = window.open(printUrl, '_blank');
+
+      if (printWindow) {
+        const injectAndPrint = () => {
+          try {
+            const doc = printWindow.document;
+            if (doc) {
+              doc.title = "";
+              if (doc.head) {
+                if (doc.getElementById('pms-custom-print-style')) return;
+                const style = doc.createElement('style');
+                style.id = 'pms-custom-print-style';
+                style.innerHTML = `
+                  .action-banner { display: none !important; }
+                  @page { size: auto; margin: 0mm; }
+                  @media print {
+                    @page { size: auto; margin: 0mm; }
+                    body { margin: 15mm !important; padding: 0px !important; }
+                    .action-banner, .action-bar, header, footer { display: none !important; }
+                  }
+                `;
+                doc.head.appendChild(style);
+                setTimeout(() => { printWindow.print(); }, 500);
+              }
+            }
+          } catch (err) {
+            console.warn("Failed to inject CSS to print window:", err);
+          }
+        };
+
+        printWindow.onload = injectAndPrint;
+        let attempts = 0;
+        const checkInterval = setInterval(() => {
+          attempts++;
+          if (printWindow.closed || attempts > 80) {
+            clearInterval(checkInterval);
+            return;
+          }
+          try {
+            if (printWindow.document && printWindow.document.readyState === 'complete') {
+              clearInterval(checkInterval);
+              injectAndPrint();
+            }
+          } catch (err) {
+            // ignore cross-origin transitions
+          }
+        }, 100);
+      }
+    }
+  };
+
   const getActionButtonStyle = (actionName) => {
     const name = (actionName || '').toLowerCase();
     if (name.includes('reject') || name.includes('cancel') || name.includes('deny')) {
@@ -3583,6 +3642,43 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       >
                         {isEditingDetails ? <X size={12} /> : <Edit size={12} />}
                         <span>{isEditingDetails ? 'Cancel' : 'Edit Details'}</span>
+                      </button>
+                    )}
+
+                    {/* Print Booking Form Action */}
+                    {!isEditingDetails && (
+                      <button
+                        id="tob-print-action-btn"
+                        type="button"
+                        onClick={handlePrintBookingForm}
+                        title="Print Booking Form"
+                        style={{
+                          backgroundColor: '#0a6c66',
+                          border: '1px solid #0a6c66',
+                          borderRadius: '20px',
+                          color: '#ffffff',
+                          padding: '6px 14px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          height: '28px',
+                          boxShadow: '0 2px 6px rgba(10, 108, 102, 0.25)',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#085450';
+                          e.currentTarget.style.borderColor = '#085450';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = '#0a6c66';
+                          e.currentTarget.style.borderColor = '#0a6c66';
+                        }}
+                      >
+                        <Printer size={12} />
+                        <span>Print Booking Form</span>
                       </button>
                     )}
 

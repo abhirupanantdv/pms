@@ -2412,7 +2412,7 @@
 //       return (
 //         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 16 }}>
 //           <div className="spin" style={{ width: 40, height: 40, border: '4px solid #cbd5e1', borderTopColor: '#3b82f6', borderRadius: '50%' }}></div>
-//           <p style={{ fontSize: '1rem', color: '#64748b', fontWeight: 500 }}>Syncing with ERPNext Server...</p>
+//           <p style={{ fontSize: '1rem', color: '#64748b', fontWeight: 500 }}>Waiting for response</p>
 //         </div>
 //       );
 //     }
@@ -3312,7 +3312,7 @@ export default function App() {
 
         // 1b. Fetch Bookings for statistics
         try {
-          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Booking?fields=["name","property","booking_date","booking_amount","status","starting_date","ending_date","customer"]&limit_page_length=500`, {
+          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Booking?fields=["name","property","booking_date","booking_amount","workflow_state","starting_date","ending_date","customer","customer_name"]&limit_page_length=500`, {
             credentials: 'include',
             headers: {
               'Content-Type': 'application/json'
@@ -5638,7 +5638,7 @@ export default function App() {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 16 }}>
           <div className="spin" style={{ width: 40, height: 40, border: '4px solid #cbd5e1', borderTopColor: '#3b82f6', borderRadius: '50%' }}></div>
-          <p style={{ fontSize: '1rem', color: '#64748b', fontWeight: 500 }}>Syncing with ERPNext Server...</p>
+          <p style={{ fontSize: '1rem', color: '#64748b', fontWeight: 500 }}>Waiting for response</p>
         </div>
       );
     }
@@ -5692,7 +5692,7 @@ export default function App() {
           />
         );
       case 'invoices':
-        return <Invoices invoices={invoices} accounts={accounts} glEntries={glEntries} onAddInvoice={handleAddInvoice} onRecordPayment={handleRecordPayment} erpnextConfig={ERPNEXT_CONFIG} />;
+        return <Invoices invoices={invoices} accounts={accounts} glEntries={glEntries} onAddInvoice={handleAddInvoice} onRecordPayment={handleRecordPayment} erpnextConfig={ERPNEXT_CONFIG} tenants={tenants} properties={properties} bookings={bookings} />;
       case 'support':
         return <Support tickets={supportTickets} onAddMessage={handleAddSupportMessage} onCreateIssue={handleCreateIssue} tenants={tenants} properties={properties} bookings={bookings} erpnextConfig={ERPNEXT_CONFIG} onConvertToMaintenance={(ticket) => { setPreSelectedIssue(ticket); setCurrentTab('maintenance'); }} />;
       case 'reports':

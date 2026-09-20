@@ -4798,8 +4798,43 @@
 
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, Check, RotateCcw, Zap, Home, Send, XCircle, Layers, Bookmark, GitBranch } from 'lucide-react';
+import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, Check, RotateCcw, Zap, Home, Send, XCircle, Layers, Bookmark, GitBranch, Upload, Eye, ExternalLink, Loader2 } from 'lucide-react';
 import houseImg from '../assets/new-house.png';
+
+const resolveMediaUrl = (url, baseUrl) => {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('blob:')) {
+    return url;
+  }
+  const base = baseUrl ? baseUrl.replace(/\/+$/, '') : '';
+  const path = url.startsWith('/') ? url : `/${url}`;
+  return `${base}${path}`;
+};
+
+const isImageDoc = (url) => {
+  if (!url) return false;
+  if (url.startsWith('data:image/')) return true;
+  const cleanUrl = url.split('?')[0].toLowerCase();
+  return cleanUrl.endsWith('.png') || cleanUrl.endsWith('.jpg') || cleanUrl.endsWith('.jpeg') || cleanUrl.endsWith('.webp') || cleanUrl.endsWith('.svg') || cleanUrl.endsWith('.gif');
+};
+
+const isPdfDoc = (url) => {
+  if (!url) return false;
+  if (url.startsWith('data:application/pdf')) return true;
+  const cleanUrl = url.split('?')[0].toLowerCase();
+  return cleanUrl.endsWith('.pdf');
+};
+
+const getDocFileName = (url) => {
+  if (!url) return '';
+  if (url.startsWith('data:')) return 'Signed_Document';
+  const name = url.split('/').pop() || 'Signed_Document';
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+};
 
 const getCsrfToken = () => {
   if (typeof window !== 'undefined') {
@@ -4997,6 +5032,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   const [defaultServiceItems, setDefaultServiceItems] = useState([]);
   const [creatingBooking, setCreatingBooking] = useState(false);
   const [creatingBookingId, setCreatingBookingId] = useState(null);
+  const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
+  const [previewModalDoc, setPreviewModalDoc] = useState(null);
+  const signedDocInputRef = useRef(null);
   const [discountAmount, setDiscountAmount] = useState('');
   const [messageText, setMessageText] = useState('');
   const [savingDiscount, setSavingDiscount] = useState(false);
@@ -5476,7 +5514,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
     setLoading(true);
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=["name","customer_name","party_name","transaction_date","valid_till","grand_total","status","workflow_state","booking_id","docstatus"]&limit_page_length=100&order_by=creation desc`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=["name","customer_name","party_name","transaction_date","valid_till","grand_total","status","workflow_state","booking_id","docstatus","signed_document"]&limit_page_length=100&order_by=creation desc`, {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json'
@@ -6991,10 +7029,153 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
   };
 
+  // Handle uploading signed document to ERPNext and attaching to Quotation
+  const handleUploadSignedDocument = async (file) => {
+    if (!file || !selectedQuotationDetail?.name) return;
+    setUploadingSignedDoc(true);
+    try {
+      let fileUrl = '';
+      const token = getCsrfToken();
+
+      // 1. Try ERPNext /api/method/upload_file
+      if (erpnextConfig?.url) {
+        try {
+          const formData = new FormData();
+          formData.append('file', file, file.name);
+          formData.append('filename', file.name);
+          formData.append('file_name', file.name);
+          formData.append('is_private', '0');
+          formData.append('folder', 'Home');
+          formData.append('doctype', 'Quotation');
+          formData.append('docname', selectedQuotationDetail.name);
+          formData.append('fieldname', 'signed_document');
+          if (token) {
+            formData.append('csrf_token', token);
+          }
+
+          const uploadHeaders = {};
+          if (token) {
+            uploadHeaders['X-Frappe-CSRF-Token'] = token;
+          }
+
+          const res = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: uploadHeaders,
+            body: formData
+          });
+
+          if (res.ok) {
+            const json = await res.json();
+            fileUrl = json.message?.file_url || json.file_url || '';
+          } else {
+            console.warn('ERPNext upload_file returned status', res.status);
+          }
+        } catch (uploadErr) {
+          console.warn('Error during ERPNext upload_file:', uploadErr);
+        }
+      }
+
+      // 2. Fallback to Data URL if server upload was offline or failed
+      if (!fileUrl) {
+        fileUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      }
+
+      // 3. Persist signed_document field on Quotation DocType in ERPNext
+      if (erpnextConfig?.url && selectedQuotationDetail.name && fileUrl) {
+        let persisted = false;
+        try {
+          const rpcRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({
+              doctype: 'Quotation',
+              name: selectedQuotationDetail.name,
+              fieldname: 'signed_document',
+              value: fileUrl
+            })
+          });
+          if (rpcRes.ok) {
+            persisted = true;
+          }
+        } catch (rpcErr) {
+          console.warn('frappe.client.set_value failed:', rpcErr);
+        }
+
+        if (!persisted) {
+          try {
+            await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(selectedQuotationDetail.name)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: getQuotationHeaders(),
+              body: JSON.stringify({ signed_document: fileUrl })
+            });
+          } catch (putErr) {
+            console.warn('PUT Quotation signed_document failed:', putErr);
+          }
+        }
+      }
+
+      // 4. Update state locally
+      setSelectedQuotationDetail(prev => prev ? { ...prev, signed_document: fileUrl } : null);
+      setQuotations(prev => prev.map(q => q.name === selectedQuotationDetail.name ? { ...q, signed_document: fileUrl } : q));
+      showToast('success', 'Signed document attached successfully! Create Booking is now enabled.');
+    } catch (err) {
+      console.error('Failed to attach signed document:', err);
+      showToast('error', `Failed to upload document: ${err.message || 'Unknown error'}`);
+    } finally {
+      setUploadingSignedDoc(false);
+    }
+  };
+
+  // Remove signed document from Quotation
+  const handleRemoveSignedDocument = async () => {
+    if (!selectedQuotationDetail?.name) return;
+    if (!(await confirm('Are you sure you want to remove this signed document? This will hide the Create Booking action until a document is re-uploaded.'))) return;
+
+    try {
+      if (erpnextConfig?.url && selectedQuotationDetail.name) {
+        try {
+          await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({
+              doctype: 'Quotation',
+              name: selectedQuotationDetail.name,
+              fieldname: 'signed_document',
+              value: ''
+            })
+          });
+        } catch (e) {
+          console.warn('Failed clearing signed_document via RPC:', e);
+        }
+      }
+
+      setSelectedQuotationDetail(prev => prev ? { ...prev, signed_document: '' } : null);
+      setQuotations(prev => prev.map(q => q.name === selectedQuotationDetail.name ? { ...q, signed_document: '' } : q));
+      showToast('info', 'Signed document removed.');
+    } catch (err) {
+      console.error('Failed removing signed document:', err);
+      showToast('error', 'Could not remove signed document.');
+    }
+  };
+
   // Create Booking from Quotation
   const handleCreateBooking = async (quotationToBook = null) => {
     const qDoc = quotationToBook || selectedQuotationDetail;
     if (!qDoc) return;
+    if (!qDoc.signed_document) {
+      showToast('error', 'Please upload a signed document before creating a booking.');
+      showAlert('Signed Document Required', 'A signed document must be uploaded to the quotation before creating a booking.');
+      return;
+    }
     const qName = qDoc.name;
     if (!(await confirm(`Create Booking from Quotation ${qName}?`))) return;
 
@@ -7770,7 +7951,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               <Check size={11} />
                               <span>Go to Booking</span>
                             </button>
-                          ) : (
+                          ) : q.signed_document && (q.status !== 'Cancelled' && q.docstatus !== 2) ? (
                             <button
                               type="button"
                               className="btn btn-primary btn-sm"
@@ -7785,20 +7966,19 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 borderColor: '#2563eb',
                                 color: '#ffffff',
                                 boxShadow: '0 1px 2px rgba(37,99,235,0.2)',
-                                cursor: (creatingBookingId === q.name || q.status === 'Cancelled' || q.docstatus === 2) ? 'not-allowed' : 'pointer',
-                                opacity: (q.status === 'Cancelled' || q.docstatus === 2) ? 0.45 : 1
+                                cursor: creatingBookingId === q.name ? 'not-allowed' : 'pointer'
                               }}
-                              disabled={creatingBookingId === q.name || q.status === 'Cancelled' || q.docstatus === 2}
+                              disabled={creatingBookingId === q.name}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleCreateBooking(q);
                               }}
-                              title={q.status === 'Cancelled' ? 'Cannot book cancelled quotation' : `Create Booking from ${q.name}`}
+                              title={`Create Booking from ${q.name}`}
                             >
                               <Bookmark size={11} />
                               <span>{creatingBookingId === q.name ? 'Creating...' : 'Create Booking'}</span>
                             </button>
-                          )}
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -8546,6 +8726,31 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   if (activeTab === 'DOCUMENTS') {
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                        {selectedQuotationDetail.signed_document && (
+                          <div style={{ border: '1px solid #bbf7d0', borderRadius: 8, padding: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f0fdf4', flexShrink: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                              <div style={{ width: 40, height: 40, borderRadius: 8, background: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#15803d' }}>
+                                <CheckCircle2 size={20} />
+                              </div>
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <h5 style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: '#14532d' }}>Customer Signed Document</h5>
+                                  <span style={{ fontSize: 9.5, fontWeight: 700, color: '#15803d', background: '#dcfce7', padding: '1px 6px', borderRadius: 4 }}>Uploaded</span>
+                                </div>
+                                <p style={{ margin: '3px 0 0 0', fontSize: 11, color: '#166534' }}>{getDocFileName(selectedQuotationDetail.signed_document)}</p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-outline-success btn-sm"
+                              style={{ fontSize: 11, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                              onClick={() => setPreviewModalDoc({ url: selectedQuotationDetail.signed_document, name: getDocFileName(selectedQuotationDetail.signed_document) })}
+                            >
+                              <Eye size={12} />
+                              <span>Preview</span>
+                            </button>
+                          </div>
+                        )}
                         {[
                           { title: 'PMS Offer Letter', desc: 'Official proposal offer letter with printable layouts.', type: 'Offer Letter' },
                           { title: 'Sales Contract Draft', desc: 'Standard leasing terms and conditions for commercial units.', type: 'Leasing Agreement' },
@@ -8556,8 +8761,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               <h5 style={{ margin: 0, fontSize: 12.5, fontWeight: 700, color: '#1f2937' }}>{doc.title}</h5>
                               <p style={{ margin: '3px 0 0 0', fontSize: 11, color: '#6b7280' }}>{doc.desc}</p>
                             </div>
-                            {/* Hidden: Print button preserved per request */}
-                            {/* <button
+                            <button
                               type="button"
                               className="btn btn-secondary btn-sm"
                               style={{ fontSize: 11, padding: '5px 12px' }}
@@ -8571,7 +8775,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               }}
                             >
                               View / Print
-                            </button> */}
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -8645,14 +8849,14 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       color: #d97706 !important;
                     }
                     .qtn-btn-print {
-                      background-color: #ffffff !important;
-                      border: 1px solid #d1d5db !important;
-                      color: #374151 !important;
+                      background-color: #0a6c66 !important;
+                      border: 1px solid #0a6c66 !important;
+                      color: #ffffff !important;
                     }
                     .qtn-btn-print:hover {
-                      background-color: #f9fafb !important;
-                      border-color: #9ca3af !important;
-                      color: #111827 !important;
+                      background-color: #085450 !important;
+                      border-color: #085450 !important;
+                      color: #ffffff !important;
                     }
                   ` }} />
                     {/* Left Column: Quotation Summary */}
@@ -8695,6 +8899,188 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     {/* Right Column: Final Decision */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 10.5, textTransform: 'uppercase' }}>Final Decision</span>
+
+                      {/* SECTION: Upload Signed Document */}
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 8,
+                          border: selectedQuotationDetail.signed_document ? '1px solid #bbf7d0' : '1px dashed #cbd5e1',
+                          backgroundColor: selectedQuotationDetail.signed_document ? '#f0fdf4' : '#f8fafc',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 8,
+                          transition: 'all 0.2s ease',
+                          marginTop: 2,
+                          marginBottom: 4
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: selectedQuotationDetail.signed_document ? '#166534' : '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {selectedQuotationDetail.signed_document ? (
+                              <CheckCircle2 size={13} color="#16a34a" />
+                            ) : (
+                              <FileText size={13} color="#64748b" />
+                            )}
+                            Upload Signed Document
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 9.5,
+                              fontWeight: 700,
+                              padding: '2px 7px',
+                              borderRadius: 4,
+                              letterSpacing: '0.02em',
+                              backgroundColor: selectedQuotationDetail.signed_document ? '#dcfce7' : '#fef3c7',
+                              color: selectedQuotationDetail.signed_document ? '#15803d' : '#b45309',
+                              border: `1px solid ${selectedQuotationDetail.signed_document ? '#86efac' : '#fde68a'}`
+                            }}
+                          >
+                            {selectedQuotationDetail.signed_document ? 'Ready for Booking' : 'Required for Booking'}
+                          </span>
+                        </div>
+
+                        {selectedQuotationDetail.signed_document ? (
+                          /* Document Preview & Management Box */
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 10,
+                            background: '#ffffff',
+                            padding: '6px 10px',
+                            borderRadius: 6,
+                            border: '1px solid #dcfce7'
+                          }}>
+                            <div
+                              style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, cursor: 'pointer' }}
+                              onClick={() => setPreviewModalDoc({ url: selectedQuotationDetail.signed_document, name: getDocFileName(selectedQuotationDetail.signed_document) })}
+                              title="Click to preview document"
+                            >
+                              {isImageDoc(selectedQuotationDetail.signed_document) ? (
+                                <img
+                                  src={resolveMediaUrl(selectedQuotationDetail.signed_document, erpnextConfig?.url)}
+                                  alt="Signed Doc"
+                                  style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, border: '1px solid #e2e8f0' }}
+                                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                />
+                              ) : (
+                                <div style={{ width: 34, height: 34, borderRadius: 4, background: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 800 }}>
+                                  PDF
+                                </div>
+                              )}
+                              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                <span style={{ fontSize: 11, fontWeight: 600, color: '#1f2937', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160 }}>
+                                  {getDocFileName(selectedQuotationDetail.signed_document)}
+                                </span>
+                                <span style={{ fontSize: 9.5, color: '#16a34a', fontWeight: 500 }}>
+                                  Click to view full preview
+                                </span>
+                              </div>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                              <button
+                                type="button"
+                                className="btn btn-light btn-sm"
+                                style={{
+                                  fontSize: 10.5,
+                                  padding: '4px 10px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  color: '#1e293b',
+                                  border: '1px solid #cbd5e1',
+                                  borderRadius: 6,
+                                  backgroundColor: '#ffffff',
+                                  cursor: 'pointer',
+                                  fontWeight: 600
+                                }}
+                                onClick={() => setPreviewModalDoc({ url: selectedQuotationDetail.signed_document, name: getDocFileName(selectedQuotationDetail.signed_document) })}
+                                title="Preview Document"
+                              >
+                                <Eye size={12} />
+                                <span>Preview</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-light btn-sm"
+                                style={{
+                                  fontSize: 10.5,
+                                  padding: '4px 10px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  color: '#dc2626',
+                                  border: '1px solid #fecaca',
+                                  borderRadius: 6,
+                                  backgroundColor: '#fef2f2',
+                                  cursor: 'pointer',
+                                  fontWeight: 600
+                                }}
+                                onClick={handleRemoveSignedDocument}
+                                title="Remove Signed Document"
+                              >
+                                <Trash2 size={12} />
+                                <span>Remove</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          /* Upload Attach Box */
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <p style={{ margin: 0, fontSize: 10.5, color: '#64748b', lineHeight: 1.35 }}>
+                              Please attach the customer-signed offer letter. <strong>Create Booking</strong> will be enabled once uploaded.
+                            </p>
+                            <button
+                              type="button"
+                              className="btn btn-outline-primary btn-sm"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: 6,
+                                padding: '6px 12px',
+                                fontSize: 11,
+                                fontWeight: 600,
+                                borderRadius: 6,
+                                backgroundColor: '#eff6ff',
+                                border: '1px dashed #3b82f6',
+                                color: '#1d4ed8',
+                                cursor: uploadingSignedDoc ? 'wait' : 'pointer'
+                              }}
+                              onClick={() => signedDocInputRef.current?.click()}
+                              disabled={uploadingSignedDoc}
+                            >
+                              {uploadingSignedDoc ? (
+                                <>
+                                  <Loader2 size={13} className="animate-spin" />
+                                  <span>Uploading signed document...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Upload size={13} />
+                                  <span>Attach Signed Document</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
+
+                        <input
+                          ref={signedDocInputRef}
+                          type="file"
+                          accept="image/*,application/pdf,.pdf"
+                          style={{ display: 'none' }}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              handleUploadSignedDocument(file);
+                            }
+                            e.target.value = '';
+                          }}
+                        />
+                      </div>
 
                       {/* BUTTONS ROW (Dynamic workflow buttons + Booking + Print) */}
                       {(() => {
@@ -8787,17 +9173,18 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             })}
 
                             {/* Booking Action: For submitted/approved or any active quotation */}
-                            {(selectedQuotationDetail.booking_id || (selectedQuotationDetail.status !== 'Cancelled' && selectedQuotationDetail.docstatus !== 2)) && (
-                              selectedQuotationDetail.booking_id ? (
-                                <button
-                                  type="button"
-                                  className="qtn-btn-base qtn-btn-approve"
-                                  onClick={() => onGoToBooking && onGoToBooking({ ...selectedQuotationDetail, booking_id: selectedQuotationDetail.booking_id })}
-                                >
-                                  <Check size={11} />
-                                  <span>Go to Booking</span>
-                                </button>
-                              ) : (
+                            {selectedQuotationDetail.booking_id ? (
+                              <button
+                                type="button"
+                                className="qtn-btn-base qtn-btn-approve"
+                                onClick={() => onGoToBooking && onGoToBooking({ ...selectedQuotationDetail, booking_id: selectedQuotationDetail.booking_id })}
+                              >
+                                <Check size={11} />
+                                <span>Go to Booking</span>
+                              </button>
+                            ) : (
+                              // Only enable and show Create Booking after signed document is uploaded/present
+                              selectedQuotationDetail.signed_document && (selectedQuotationDetail.status !== 'Cancelled' && selectedQuotationDetail.docstatus !== 2) ? (
                                 <button
                                   type="button"
                                   className="qtn-btn-base"
@@ -8808,7 +9195,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                   <Bookmark size={11} />
                                   <span>{creatingBooking ? 'Creating Booking...' : 'Create Booking'}</span>
                                 </button>
-                              )
+                              ) : null
                             )}
 
                             {/* New Version Button - Only show when Go to Booking is NOT shown */}
@@ -8834,13 +9221,13 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               </button>
                             )}
 
-                            {/* Hidden: Print button preserved per request */}
-                            {/* <button
+                            {/* Print Offer Letter Action */}
+                            <button
                               id="qtn-print-action-btn"
                               type="button"
                               className="qtn-btn-base qtn-btn-print"
                               onClick={() => {
-                                if (selectedQuotationDetail.status === 'Cancelled') {
+                                if (selectedQuotationDetail?.status === 'Cancelled' || selectedQuotationDetail?.workflow_state === 'Cancelled') {
                                   showToast('error', 'Not allowed to print cancelled documents');
                                   return;
                                 }
@@ -8859,22 +9246,24 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                             const style = doc.createElement('style');
                                             style.id = 'pms-custom-print-style';
                                             style.innerHTML = `
-                                            .action-banner { display: none !important; }
-                                            @page { size: auto; margin: 0mm; }
-                                            @media print {
-                                              body { margin: 1.6cm 2cm; background: #fff !important; }
-                                              .action-banner, .action-bar, header, footer { display: none !important; }
-                                            }
-                                          `;
+                                              .action-banner { display: none !important; }
+                                              @page { size: auto; margin: 0mm; }
+                                              @media print {
+                                                @page { size: auto; margin: 0mm; }
+                                                body { margin: 15mm !important; padding: 0px !important; }
+                                                .action-banner, .action-bar, header, footer { display: none !important; }
+                                              }
+                                            `;
                                             doc.head.appendChild(style);
+                                            setTimeout(() => { printWindow.print(); }, 500);
                                           }
-                                          printWindow.print();
                                         }
                                       } catch (err) {
                                         console.warn("Failed to inject CSS to print window:", err);
                                       }
                                     };
 
+                                    printWindow.onload = injectAndPrint;
                                     let attempts = 0;
                                     const checkInterval = setInterval(() => {
                                       attempts++;
@@ -8895,9 +9284,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 }
                               }}
                             >
-                              <Printer size={11} />
-                              <span>Print</span>
-                            </button> */}
+                              <Printer size={13} />
+                              <span>Print Offer Letter</span>
+                            </button>
                           </div>
                         );
                       })()}
@@ -10261,8 +10650,154 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 onMouseEnter={(e) => { e.currentTarget.style.boxShadow = '0 6px 16px rgba(15, 23, 42, 0.25)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.boxShadow = '0 4px 12px rgba(15, 23, 42, 0.15)'; }}
               >
-                Dimiss
+                Dismiss
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SIGNED DOCUMENT PREVIEW MODAL */}
+      {previewModalDoc && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 10002,
+          padding: '20px',
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <div style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '16px',
+            width: '100%',
+            maxWidth: '850px',
+            maxHeight: '92vh',
+            display: 'flex',
+            flexDirection: 'column',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+            overflow: 'hidden',
+            border: '1px solid #e2e8f0'
+          }}>
+            {/* Modal Header */}
+            <div style={{
+              padding: '14px 20px',
+              borderBottom: '1px solid #e5e7eb',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: '#f8fafc'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 8,
+                  backgroundColor: '#dbeafe',
+                  color: '#2563eb',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <FileText size={16} />
+                </div>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
+                    Signed Document Preview
+                  </h4>
+                  <span style={{ fontSize: '11px', color: '#64748b' }}>
+                    {previewModalDoc.name || 'Signed Document Attachment'}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <a
+                  href={resolveMediaUrl(previewModalDoc.url, erpnextConfig?.url)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid #cbd5e1',
+                    backgroundColor: '#ffffff',
+                    color: '#334155',
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    textDecoration: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <ExternalLink size={13} />
+                  <span>Open in Tab</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewModalDoc(null)}
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 8,
+                    border: '1px solid #e2e8f0',
+                    backgroundColor: '#ffffff',
+                    color: '#64748b',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{
+              padding: '20px',
+              overflowY: 'auto',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: '#f1f5f9',
+              minHeight: '360px',
+              flex: 1
+            }}>
+              {isImageDoc(previewModalDoc.url) ? (
+                <img
+                  src={resolveMediaUrl(previewModalDoc.url, erpnextConfig?.url)}
+                  alt="Signed Document"
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '70vh',
+                    objectFit: 'contain',
+                    borderRadius: '8px',
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.1)'
+                  }}
+                />
+              ) : (
+                <iframe
+                  src={resolveMediaUrl(previewModalDoc.url, erpnextConfig?.url)}
+                  title="Signed Document Preview"
+                  style={{
+                    width: '100%',
+                    height: '70vh',
+                    border: 'none',
+                    borderRadius: '8px',
+                    backgroundColor: '#ffffff'
+                  }}
+                />
+              )}
             </div>
           </div>
         </div>

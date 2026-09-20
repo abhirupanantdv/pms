@@ -571,7 +571,7 @@
 // //                 {filteredBookings.length === 0 && (
 // //                   <tr>
 // //                     <td colSpan="8" style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-// //                       {loadingList ? 'Syncing with ERPNext Booking server...' : 'No booking records found.'}
+// //                       {loadingList ? 'Waiting for response' : 'No booking records found.'}
 // //                     </td>
 // //                   </tr>
 // //                 )}
@@ -1659,7 +1659,7 @@
 //                 {filteredBookings.length === 0 && (
 //                   <tr>
 //                     <td colSpan="8" style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-//                       {loadingList ? 'Syncing with ERPNext Booking server...' : 'No booking records found.'}
+//                       {loadingList ? 'Waiting for response' : 'No booking records found.'}
 //                     </td>
 //                   </tr>
 //                 )}
@@ -2178,7 +2178,7 @@
 
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Calendar, User, Building, DollarSign, Plus, X, Search, Filter, Loader, Eye, RefreshCw, CheckCircle2, FileText, PenLine, ChevronDown, AlertCircle, CheckCircle, XCircle, Printer, Mail, Phone, Tag, Settings } from 'lucide-react';
+import { Calendar, User, Building, DollarSign, Plus, X, Search, Filter, Loader, Eye, RefreshCw, CheckCircle2, FileText, PenLine, ChevronDown, AlertCircle, CheckCircle, XCircle, Printer, Mail, Phone, Tag, Settings, AlertTriangle, Info } from 'lucide-react';
 import homeImg from '../assets/home.png';
 import houseImg from '../assets/new-house.png';
 import billingSummaryImg from '../assets/Billing-summary.png';
@@ -2227,15 +2227,63 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [signedByName, setSignedByName] = useState('');
   const [approving, setApproving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [workflowTransitions, setWorkflowTransitions] = useState([]);
   const [approveError, setApproveError] = useState('');
   const previewRef = useRef(null);
   const fetchedDetailsRef = useRef(new Set());
-  // Alert / Validation Error Modal state
+  // Alert / Confirmation Modal state
   const [alertModal, setAlertModal] = useState({
     show: false,
     title: '',
-    message: ''
+    message: '',
+    type: 'info', // 'error' | 'success' | 'warning' | 'info'
+    confirmText: 'Got It',
+    cancelText: 'Cancel',
+    showCancel: false,
+    isDestructive: false,
+    onConfirm: null,
+    onCancel: null
   });
+
+  const showAlertModal = useCallback((title, message, type = 'info', confirmText = 'Got It') => {
+    setAlertModal({
+      show: true,
+      title,
+      message,
+      type,
+      confirmText,
+      cancelText: 'Cancel',
+      showCancel: false,
+      isDestructive: false,
+      onConfirm: null,
+      onCancel: null
+    });
+  }, []);
+
+  const showConfirmModal = useCallback(({
+    title,
+    message,
+    confirmText = 'Confirm',
+    cancelText = 'Cancel',
+    isDestructive = false,
+    onConfirm,
+    onCancel = null
+  }) => {
+    setAlertModal({
+      show: true,
+      title,
+      message,
+      type: isDestructive ? 'warning' : 'info',
+      confirmText,
+      cancelText,
+      showCancel: true,
+      isDestructive,
+      onConfirm,
+      onCancel
+    });
+  }, []);
 
   // Extract clean backend validation error messages from Frappe/ERPNext
   const extractBackendErrorMessage = (errData, rawText = '') => {
@@ -2315,7 +2363,15 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4500);
-  }, []);
+
+    // Also display in modal as requested: "every alert message show in modal"
+    showAlertModal(
+      type === 'error' ? 'Notice / Error' : type === 'success' ? 'Success' : 'Notification',
+      message,
+      type === 'error' ? 'error' : type === 'success' ? 'success' : 'info',
+      'OK'
+    );
+  }, [showAlertModal]);
 
   const dismissToast = (id) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -2549,11 +2605,43 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     }
   };
 
+  // Fetch available workflow transitions dynamically for the booking document
+  const fetchWorkflowTransitions = async (doc) => {
+    if (!erpnextConfig?.url || !doc?.name) {
+      setWorkflowTransitions([]);
+      return;
+    }
+    try {
+      const res = await fetch(`${erpnextConfig.url}/api/method/frappe.model.workflow.get_transitions`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          doc: {
+            doctype: 'Booking',
+            name: doc.name,
+            workflow_state: doc.workflow_state || '',
+            docstatus: doc.docstatus || 0
+          }
+        })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json.message)) {
+          setWorkflowTransitions(json.message);
+          return;
+        }
+      }
+    } catch (_) { }
+    setWorkflowTransitions([]);
+  };
+
   // Fetch detailed booking record
   const fetchBookingDetails = async (id) => {
     if (!id) return;
     setLoadingDetails(true);
     setSelectedBookingDetails(null);
+    setWorkflowTransitions([]);
     try {
       let details = null;
       if (erpnextConfig && erpnextConfig.url) {
@@ -2596,6 +2684,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
 
         const normalizedItems = normalizeBookingItems(details);
         setSelectedBookingDetails({ ...details, booking_item: normalizedItems });
+        fetchWorkflowTransitions(details);
         setBookings(prev => prev.map(b => {
           const bookingId = b.name || b.id;
           return bookingId === id ? { ...b, ...details, booking_item: normalizedItems } : b;
@@ -2604,6 +2693,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
         const mockDetail = bookings.find(b => b.name === id || b.id === id);
         const normalizedItems = normalizeBookingItems(mockDetail || {});
         setSelectedBookingDetails(mockDetail ? { ...mockDetail, booking_item: normalizedItems } : null);
+        fetchWorkflowTransitions(mockDetail);
         setBookings(prev => prev.map(b => {
           const bookingId = b.name || b.id;
           return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
@@ -2614,6 +2704,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
       const mockDetail = bookings.find(b => b.name === id || b.id === id);
       const normalizedItems = normalizeBookingItems(mockDetail || {});
       setSelectedBookingDetails(mockDetail ? { ...mockDetail, booking_item: normalizedItems } : null);
+      fetchWorkflowTransitions(mockDetail);
       setBookings(prev => prev.map(b => {
         const bookingId = b.name || b.id;
         return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
@@ -3021,24 +3112,27 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
         // Update the list in place so the table reflects the new status instantly
         setBookings(prev => prev.map(b =>
           (b.name === selectedBookingId || b.id === selectedBookingId)
-            ? { ...b, status: newStatus, workflow_state: 'Approved' }
+            ? { ...b, status: newStatus, workflow_state: 'Approved', docstatus: 1 }
             : b
         ));
         setSelectedBookingDetails(prev => prev
-          ? { ...prev, status: newStatus, workflow_state: 'Approved' }
+          ? { ...prev, status: newStatus, workflow_state: 'Approved', docstatus: 1 }
           : prev
         );
 
         showToast('success', approvedPayload.message || `Booking ${selectedBookingId} approved successfully.`);
         setShowApproveModal(false);
+        if (selectedBookingId) {
+          fetchBookingDetails(selectedBookingId);
+        }
       } else {
         // Offline fallback: reflect the approval locally
         setBookings(prev => prev.map(b =>
           (b.name === selectedBookingId || b.id === selectedBookingId)
-            ? { ...b, status: 'Confirmed', workflow_state: 'Approved' }
+            ? { ...b, status: 'Confirmed', workflow_state: 'Approved', docstatus: 1 }
             : b
         ));
-        setSelectedBookingDetails(prev => prev ? { ...prev, status: 'Confirmed', workflow_state: 'Approved' } : prev);
+        setSelectedBookingDetails(prev => prev ? { ...prev, status: 'Confirmed', workflow_state: 'Approved', docstatus: 1 } : prev);
         showToast('success', 'Booking approved locally (Offline mode)');
         setShowApproveModal(false);
       }
@@ -3050,6 +3144,536 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
       setApproving(false);
     }
   };
+
+  // Cancel the booking and related documents (Contract & Subscription)
+  // 1. Cancels linked contract first to avoid Frappe foreign key LinkExistsError
+  // 2. Applies Frappe workflow 'Cancel' action (docstatus: 2) with fallbacks
+  // 3. Displays all confirmations and results in the styled modal
+  const promptCancelBooking = () => {
+    if (!selectedBookingDetails) return;
+    const bookingId = selectedBookingDetails.name || selectedBookingDetails.id || selectedBookingId;
+    if (!bookingId) return;
+
+    showConfirmModal({
+      title: 'Cancel Booking',
+      message: `Are you sure you want to cancel booking ${bookingId} and its associated contract and subscription?\n\nThis will transition the document state to Cancelled (State 2). This action cannot be undone.`,
+      confirmText: 'Yes, Cancel Booking',
+      cancelText: 'Keep Booking',
+      isDestructive: true,
+      onConfirm: () => executeCancelBooking(bookingId)
+    });
+  };
+
+  const executeCancelBooking = async (bookingId) => {
+    setCancelling(true);
+    try {
+      let cancelled = false;
+      const errorMessages = [];
+
+      if (erpnextConfig && erpnextConfig.url) {
+        // Step 1: Find and Cancel Linked Contract FIRST
+        // Frappe prevents cancelling a booking if a submitted Contract (docstatus: 1) links to it
+        try {
+          let contractId = null;
+          let contractDocstatus = 0;
+
+          // Check by {"booking": bookingId}
+          try {
+            const cRes = await fetch(`${erpnextConfig.url}/api/resource/Contract?filters=[["booking","=","${encodeURIComponent(bookingId)}"]]&fields=["name","docstatus","status"]&limit=1`, {
+              credentials: 'include',
+              headers: getAuthHeaders()
+            });
+            if (cRes.ok) {
+              const cJson = await cRes.json();
+              if (cJson.data && cJson.data.length > 0) {
+                contractId = cJson.data[0].name;
+                contractDocstatus = cJson.data[0].docstatus ?? 0;
+              }
+            }
+          } catch (_) { }
+
+          // Fallback check by document_name or direct fields
+          if (!contractId) {
+            contractId = selectedBookingDetails?.custom_contract || selectedBookingDetails?.contract;
+            if (!contractId) {
+              const matched = bookings.find(b => (b.name === bookingId || b.id === bookingId));
+              if (matched) contractId = matched.custom_contract || matched.contract;
+            }
+            if (!contractId) {
+              try {
+                const cRes2 = await fetch(`${erpnextConfig.url}/api/resource/Contract?filters=[["document_name","=","${encodeURIComponent(bookingId)}"]]&fields=["name","docstatus","status"]&limit=1`, {
+                  credentials: 'include',
+                  headers: getAuthHeaders()
+                });
+                if (cRes2.ok) {
+                  const cJson2 = await cRes2.json();
+                  if (cJson2.data && cJson2.data.length > 0) {
+                    contractId = cJson2.data[0].name;
+                    contractDocstatus = cJson2.data[0].docstatus ?? 0;
+                  }
+                }
+              } catch (_) { }
+            } else {
+              try {
+                const cDocRes = await fetch(`${erpnextConfig.url}/api/resource/Contract/${encodeURIComponent(contractId)}?fields=["name","docstatus","status"]`, {
+                  credentials: 'include',
+                  headers: getAuthHeaders()
+                });
+                if (cDocRes.ok) {
+                  const cDocJson = await cDocRes.json();
+                  contractDocstatus = (cDocJson.data || cDocJson).docstatus ?? 0;
+                }
+              } catch (_) { }
+            }
+          }
+
+          if (contractId) {
+            console.log(`Cancelling linked contract ${contractId} (docstatus: ${contractDocstatus}) before booking...`);
+            if (contractDocstatus === 1) {
+              // Try contract workflow Cancel action
+              try {
+                await fetch(`${erpnextConfig.url}/api/method/frappe.model.workflow.apply_workflow`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders(),
+                  body: JSON.stringify({
+                    doc: { doctype: 'Contract', name: contractId, docstatus: 1 },
+                    action: 'Cancel'
+                  })
+                });
+              } catch (_) { }
+
+              // Try frappe.client.cancel
+              try {
+                await fetch(`${erpnextConfig.url}/api/method/frappe.client.cancel`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders(),
+                  body: JSON.stringify({
+                    doctype: 'Contract',
+                    name: contractId
+                  })
+                });
+              } catch (_) { }
+
+              // Set status to Cancelled
+              try {
+                await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders(),
+                  body: JSON.stringify({
+                    doctype: 'Contract',
+                    name: contractId,
+                    fieldname: { status: 'Cancelled' }
+                  })
+                });
+              } catch (_) { }
+            } else {
+              // Draft contract
+              try {
+                await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders(),
+                  body: JSON.stringify({
+                    doctype: 'Contract',
+                    name: contractId,
+                    fieldname: { status: 'Cancelled' }
+                  })
+                });
+              } catch (_) { }
+            }
+          }
+        } catch (contractErr) {
+          console.warn('Contract cancellation warning:', contractErr);
+        }
+
+        // Step 2: Cancel Related Subscription (if any)
+        try {
+          let subscriptionId = null;
+          try {
+            const subRes = await fetch(`${erpnextConfig.url}/api/resource/Subscription?filters=[["booking_id","=","${encodeURIComponent(bookingId)}"]]&fields=["name","status"]&limit=1`, {
+              credentials: 'include',
+              headers: getAuthHeaders()
+            });
+            if (subRes.ok) {
+              const subJson = await subRes.json();
+              if (subJson.data && subJson.data.length > 0) {
+                subscriptionId = subJson.data[0].name;
+              }
+            }
+          } catch (_) { }
+
+          if (!subscriptionId) {
+            try {
+              const subRes2 = await fetch(`${erpnextConfig.url}/api/resource/Subscription?filters=[["booking","=","${encodeURIComponent(bookingId)}"]]&fields=["name","status"]&limit=1`, {
+                credentials: 'include',
+                headers: getAuthHeaders()
+              });
+              if (subRes2.ok) {
+                const subJson2 = await subRes2.json();
+                if (subJson2.data && subJson2.data.length > 0) {
+                  subscriptionId = subJson2.data[0].name;
+                }
+              }
+            } catch (_) { }
+          }
+
+          if (subscriptionId) {
+            await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({
+                doctype: 'Subscription',
+                name: subscriptionId,
+                fieldname: { status: 'Cancelled' }
+              })
+            }).catch(() => {});
+          }
+        } catch (subErr) {
+          console.warn('Subscription cancellation warning:', subErr);
+        }
+
+        // Step 3: Cancel Booking DocType
+        // Find cancel action name from workflow transitions if available
+        let cancelActionName = 'Cancel';
+        if (Array.isArray(workflowTransitions) && workflowTransitions.length > 0) {
+          const match = workflowTransitions.find(t =>
+            (t.action && t.action.toLowerCase() === 'cancel') ||
+            (t.next_state && t.next_state.toLowerCase() === 'cancelled')
+          );
+          if (match && match.action) {
+            cancelActionName = match.action;
+          }
+        }
+
+        // 3a. Try workflow transition with action (dynamic cancelActionName or 'Cancel')
+        try {
+          const wfRes = await fetch(`${erpnextConfig.url}/api/method/frappe.model.workflow.apply_workflow`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              doc: {
+                doctype: 'Booking',
+                name: bookingId,
+                workflow_state: selectedBookingDetails.workflow_state || 'Approved',
+                docstatus: selectedBookingDetails.docstatus ?? 1
+              },
+              action: cancelActionName
+            })
+          });
+          if (wfRes.ok) {
+            const wfJson = await wfRes.json();
+            if (wfJson.message) {
+              cancelled = true;
+            }
+          } else {
+            let errJson = null;
+            let rawText = '';
+            try {
+              rawText = await wfRes.text();
+              errJson = JSON.parse(rawText);
+            } catch (_) { }
+            const msg = extractBackendErrorMessage(errJson, rawText);
+            if (msg) errorMessages.push(msg);
+          }
+        } catch (wfErr) {
+          console.warn('Booking workflow Cancel attempt warning:', wfErr);
+        }
+
+        // 3b. Try custom server method if present
+        if (!cancelled) {
+          try {
+            const pmRes = await fetch(`${erpnextConfig.url}/api/method/property_management.api.cancel_booking`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ booking_id: bookingId })
+            });
+            if (pmRes.ok) {
+              cancelled = true;
+            }
+          } catch (_) { }
+        }
+
+        // 3c. Try frappe.client.cancel
+        if (!cancelled) {
+          try {
+            const cancelRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.cancel`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({
+                doctype: 'Booking',
+                name: bookingId
+              })
+            });
+            if (cancelRes.ok) {
+              cancelled = true;
+            } else {
+              let errJson = null;
+              let rawText = '';
+              try {
+                rawText = await cancelRes.text();
+                errJson = JSON.parse(rawText);
+              } catch (_) { }
+              const msg = extractBackendErrorMessage(errJson, rawText);
+              if (msg && !errorMessages.includes(msg)) errorMessages.push(msg);
+            }
+          } catch (cErr) {
+            console.warn('Booking frappe.client.cancel warning:', cErr);
+          }
+        }
+
+        // 3c. Try frappe.client.set_value
+        if (!cancelled) {
+          try {
+            const svRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({
+                doctype: 'Booking',
+                name: bookingId,
+                fieldname: {
+                  status: 'Cancelled',
+                  workflow_state: 'Cancelled',
+                  docstatus: 2
+                }
+              })
+            });
+            if (svRes.ok) {
+              cancelled = true;
+            } else {
+              let errJson = null;
+              let rawText = '';
+              try {
+                rawText = await svRes.text();
+                errJson = JSON.parse(rawText);
+              } catch (_) { }
+              const msg = extractBackendErrorMessage(errJson, rawText);
+              if (msg && !errorMessages.includes(msg)) errorMessages.push(msg);
+            }
+          } catch (_) { }
+        }
+
+        // 3d. Direct Resource PUT fallback if draft docstatus 0
+        if (!cancelled && selectedBookingDetails?.docstatus === 0) {
+          try {
+            const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(bookingId)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({
+                status: 'Cancelled',
+                workflow_state: 'Cancelled'
+              })
+            });
+            if (res.ok) {
+              cancelled = true;
+            }
+          } catch (_) { }
+        }
+      } else {
+        // Offline / mock mode
+        cancelled = true;
+      }
+
+      if (cancelled) {
+        setBookings(prev => prev.map(b =>
+          (b.name === bookingId || b.id === bookingId)
+            ? { ...b, status: 'Cancelled', workflow_state: 'Cancelled', docstatus: 2 }
+            : b
+        ));
+        setSelectedBookingDetails(prev => prev
+          ? { ...prev, status: 'Cancelled', workflow_state: 'Cancelled', docstatus: 2 }
+          : prev
+        );
+        setWorkflowTransitions([]);
+        showAlertModal(
+          'Booking Cancelled',
+          `Booking ${bookingId} and its associated contract and subscription have been cancelled successfully (State 2).`,
+          'success',
+          'OK'
+        );
+        fetchBookingDetails(bookingId);
+      } else {
+        const errorDetail = errorMessages.filter(Boolean).join('\n') || `Failed to cancel booking ${bookingId}. Please ensure linked records or permissions allow cancellation.`;
+        showAlertModal('Cancellation Failed', errorDetail, 'error', 'Close');
+      }
+    } catch (e) {
+      showAlertModal('Cancellation Error', e.message || 'Error cancelling booking.', 'error', 'Close');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const handleCancelBooking = promptCancelBooking;
+
+  // Reject the booking before approval (State 0 / docstatus 0)
+  // Used when workflow_state is "Waiting For Contract Submit" or "Request For Approval"
+  const promptRejectBooking = () => {
+    if (!selectedBookingDetails) return;
+    const bookingId = selectedBookingDetails.name || selectedBookingDetails.id || selectedBookingId;
+    if (!bookingId) return;
+
+    showConfirmModal({
+      title: 'Reject Booking',
+      message: `Are you sure you want to reject booking ${bookingId}?\n\nThis will transition the document state to Rejected (State 0).`,
+      confirmText: 'Yes, Reject Booking',
+      cancelText: 'Keep Booking',
+      isDestructive: true,
+      onConfirm: () => executeRejectBooking(bookingId)
+    });
+  };
+
+  const executeRejectBooking = async (bookingId) => {
+    setRejecting(true);
+    try {
+      let rejected = false;
+      const errorMessages = [];
+
+      if (erpnextConfig && erpnextConfig.url) {
+        // 1. Try applying workflow action "Reject" via Frappe workflow API
+        try {
+          const wfRes = await fetch(`${erpnextConfig.url}/api/method/frappe.model.workflow.apply_workflow`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              doc: {
+                doctype: 'Booking',
+                name: bookingId,
+                workflow_state: selectedBookingDetails.workflow_state || 'Request For Approval',
+                docstatus: 0
+              },
+              action: 'Reject'
+            })
+          });
+          if (wfRes.ok) {
+            const wfJson = await wfRes.json();
+            if (wfJson.message) {
+              rejected = true;
+            }
+          } else {
+            let errJson = null;
+            let rawText = '';
+            try {
+              rawText = await wfRes.text();
+              errJson = JSON.parse(rawText);
+            } catch (_) { }
+            const msg = extractBackendErrorMessage(errJson, rawText);
+            if (msg) errorMessages.push(msg);
+          }
+        } catch (_) { }
+
+        // 2. If workflow RPC didn't succeed, update status & workflow_state to 'Rejected' (docstatus 0)
+        if (!rejected) {
+          try {
+            const res = await fetch(`${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(bookingId)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({
+                workflow_state: 'Rejected',
+                status: 'Rejected',
+                docstatus: 0
+              })
+            });
+
+            if (res.ok) {
+              rejected = true;
+            } else {
+              const svRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({
+                  doctype: 'Booking',
+                  name: bookingId,
+                  fieldname: {
+                    workflow_state: 'Rejected',
+                    status: 'Rejected'
+                  }
+                })
+              });
+              if (svRes.ok) {
+                rejected = true;
+              } else {
+                let errJson = null;
+                let rawText = '';
+                try {
+                  rawText = await svRes.text();
+                  errJson = JSON.parse(rawText);
+                } catch (_) { }
+                const msg = extractBackendErrorMessage(errJson, rawText);
+                if (msg && !errorMessages.includes(msg)) errorMessages.push(msg);
+              }
+            }
+          } catch (apiErr) {
+            errorMessages.push(apiErr.message);
+          }
+        }
+
+        // 3. Set linked draft contract to Rejected/Cancelled if exists
+        try {
+          let contractId = selectedBookingDetails?.custom_contract || selectedBookingDetails?.contract;
+          if (contractId) {
+            await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({
+                doctype: 'Contract',
+                name: contractId,
+                fieldname: { status: 'Cancelled' }
+              })
+            }).catch(() => {});
+          }
+        } catch (_) { }
+      } else {
+        // Offline / mock mode
+        rejected = true;
+      }
+
+      if (rejected) {
+        setBookings(prev => prev.map(b =>
+          (b.name === bookingId || b.id === bookingId)
+            ? { ...b, status: 'Rejected', workflow_state: 'Rejected', docstatus: 0 }
+            : b
+        ));
+        setSelectedBookingDetails(prev => prev
+          ? { ...prev, status: 'Rejected', workflow_state: 'Rejected', docstatus: 0 }
+          : prev
+        );
+        showAlertModal(
+          'Booking Rejected',
+          `Booking ${bookingId} has been rejected (State 0).`,
+          'success',
+          'OK'
+        );
+        fetchWorkflowTransitions({
+          ...selectedBookingDetails,
+          name: bookingId,
+          status: 'Rejected',
+          workflow_state: 'Rejected',
+          docstatus: 0
+        });
+      } else {
+        const errorDetail = errorMessages.filter(Boolean).join('\n') || `Failed to reject booking ${bookingId}`;
+        showAlertModal('Rejection Failed', errorDetail, 'error', 'Close');
+      }
+    } catch (e) {
+      showAlertModal('Rejection Error', e.message || 'Error rejecting booking.', 'error', 'Close');
+    } finally {
+      setRejecting(false);
+    }
+  };
+
+  const handleRejectBooking = promptRejectBooking;
 
   useEffect(() => {
     fetchBookings();
@@ -3285,9 +3909,63 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     });
   }, [currentItems]);
 
-  const isBookingApproved = selectedBookingDetails && (
-    selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.workflow_state === 'Approved'
+  const stateStr = (selectedBookingDetails?.workflow_state || '').trim().toLowerCase();
+  const statusStr = (selectedBookingDetails?.status || '').trim().toLowerCase();
+  const docstatusNum = Number(selectedBookingDetails?.docstatus ?? 0);
+
+  // Dynamic workflow transitions check from ERPNext
+  const hasWorkflowCancel = workflowTransitions.some(t =>
+    (t.action && t.action.toLowerCase() === 'cancel') ||
+    (t.next_state && t.next_state.toLowerCase() === 'cancelled')
   );
+  const hasWorkflowReject = workflowTransitions.some(t =>
+    (t.action && t.action.toLowerCase() === 'reject') ||
+    (t.next_state && t.next_state.toLowerCase() === 'rejected')
+  );
+
+  const isBookingCancelled = Boolean(selectedBookingDetails && (
+    stateStr === 'cancelled' ||
+    stateStr === 'cancel' ||
+    statusStr === 'cancelled' ||
+    statusStr === 'cancel' ||
+    docstatusNum === 2
+  ));
+
+  const isBookingRejected = Boolean(selectedBookingDetails && (
+    stateStr === 'rejected' ||
+    stateStr === 'reject' ||
+    statusStr === 'rejected' ||
+    statusStr === 'reject'
+  ));
+
+  // Approved state: matches 'approved', 'approve', 'approval', 'confirmed', docstatus 1, or workflow transition to Cancel
+  const isBookingApproved = Boolean(selectedBookingDetails && (
+    stateStr === 'approved' ||
+    stateStr === 'approve' ||
+    stateStr === 'approval' ||
+    statusStr === 'confirmed' ||
+    statusStr === 'approved' ||
+    statusStr === 'approve' ||
+    docstatusNum === 1 ||
+    hasWorkflowCancel
+  ) && !isBookingCancelled && !isBookingRejected);
+
+  // Pre-approval states: Waiting For Contract Submit, Request For Approval, draft (docstatus 0)
+  const isPreApproval = Boolean(selectedBookingDetails && !isBookingApproved && !isBookingCancelled && !isBookingRejected && (
+    hasWorkflowReject ||
+    stateStr.includes('waiting') ||
+    stateStr.includes('request') ||
+    statusStr.includes('waiting') ||
+    statusStr.includes('request') ||
+    docstatusNum === 0 ||
+    !selectedBookingDetails.workflow_state
+  ));
+
+  // After Approved State: Show Cancel Button to cancel the booking doctype (state 2)
+  const showCancelButton = Boolean(selectedBookingDetails && (isBookingApproved || hasWorkflowCancel || docstatusNum === 1) && !isBookingCancelled && !isBookingRejected);
+
+  // Before Approved: Show Reject Button in place of Cancel Button (state 0)
+  const showRejectButton = Boolean(selectedBookingDetails && isPreApproval && !isBookingApproved && !isBookingCancelled && !isBookingRejected);
 
   const canApproveNow = !approving && !!selectedTemplateId && hasReadToBottom && agreedToTerms && !!signedByName.trim();
 
@@ -3493,6 +4171,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
             <option value="Request For Approval">Request For Approval</option>
             <option value="Waiting For Contract Submit">Waiting For Contract</option>
             <option value="Pending">Draft / Pending</option>
+            <option value="Rejected">Rejected</option>
             <option value="Cancelled">Cancelled</option>
             <option value="Paid">Payment: Paid</option>
             <option value="Partially Paid">Payment: Partial</option>
@@ -3601,7 +4280,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     </td>
                     <td>
                       <span className={`badge ${(b.workflow_state === 'Approved' || b.status === 'Confirmed' || (b.docstatus === 1 && !b.workflow_state)) ? 'badge-success' :
-                        (b.workflow_state === 'Cancelled' || b.status === 'Cancelled' || b.docstatus === 2) ? 'badge-danger' :
+                        (b.workflow_state === 'Cancelled' || b.status === 'Cancelled' || b.docstatus === 2 || b.workflow_state === 'Rejected' || b.status === 'Rejected') ? 'badge-danger' :
                           (b.workflow_state === 'Request For Approval' || b.workflow_state === 'Waiting For Contract Submit') ? 'badge-warning' :
                             'badge-info'
                         }`}>
@@ -3622,7 +4301,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                 {filteredBookings.length === 0 && (
                   <tr>
                     <td colSpan="8" style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                      {loadingList ? 'Syncing with ERPNext Booking server...' : 'No booking records found.'}
+                      {loadingList ? 'Waiting for response' : 'No booking records found.'}
                     </td>
                   </tr>
                 )}
@@ -3752,9 +4431,21 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                           fontWeight: 700,
                           padding: '2px 8px',
                           borderRadius: '12px',
-                          background: (selectedBookingDetails.workflow_state === 'Approved' || selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.docstatus === 1) ? '#e6f4ea' : '#fffbeb',
-                          color: (selectedBookingDetails.workflow_state === 'Approved' || selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.docstatus === 1) ? '#137333' : '#b45309',
-                          border: (selectedBookingDetails.workflow_state === 'Approved' || selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.docstatus === 1) ? '1px solid rgba(19, 115, 51, 0.15)' : '1px solid rgba(180, 83, 9, 0.15)'
+                          background: (selectedBookingDetails.workflow_state === 'Approved' || selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.docstatus === 1)
+                            ? '#e6f4ea'
+                            : (selectedBookingDetails.workflow_state === 'Cancelled' || selectedBookingDetails.status === 'Cancelled' || selectedBookingDetails.docstatus === 2 || selectedBookingDetails.workflow_state === 'Rejected' || selectedBookingDetails.status === 'Rejected')
+                              ? '#fee2e2'
+                              : '#fffbeb',
+                          color: (selectedBookingDetails.workflow_state === 'Approved' || selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.docstatus === 1)
+                            ? '#137333'
+                            : (selectedBookingDetails.workflow_state === 'Cancelled' || selectedBookingDetails.status === 'Cancelled' || selectedBookingDetails.docstatus === 2 || selectedBookingDetails.workflow_state === 'Rejected' || selectedBookingDetails.status === 'Rejected')
+                              ? '#dc2626'
+                              : '#b45309',
+                          border: (selectedBookingDetails.workflow_state === 'Approved' || selectedBookingDetails.status === 'Confirmed' || selectedBookingDetails.docstatus === 1)
+                            ? '1px solid rgba(19, 115, 51, 0.15)'
+                            : (selectedBookingDetails.workflow_state === 'Cancelled' || selectedBookingDetails.status === 'Cancelled' || selectedBookingDetails.docstatus === 2 || selectedBookingDetails.workflow_state === 'Rejected' || selectedBookingDetails.status === 'Rejected')
+                              ? '1px solid rgba(220, 38, 38, 0.15)'
+                              : '1px solid rgba(180, 83, 9, 0.15)'
                         }}>
                           Status: {selectedBookingDetails.workflow_state || selectedBookingDetails.status || (selectedBookingDetails.docstatus === 1 ? 'Approved' : 'Draft')}
                         </span>
@@ -4328,27 +5019,49 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     display: 'flex',
                     gap: 8,
                     alignItems: 'center',
-                    background: '#f0f9ff',
-                    border: '1px solid #b3e0ff',
+                    background: (selectedBookingDetails.workflow_state === 'Approved')
+                      ? '#f0fdf4'
+                      : (selectedBookingDetails.workflow_state === 'Cancelled' || selectedBookingDetails.workflow_state === 'Rejected')
+                        ? '#fef2f2'
+                        : '#f0f9ff',
+                    border: (selectedBookingDetails.workflow_state === 'Approved')
+                      ? '1px solid #bbf7d0'
+                      : (selectedBookingDetails.workflow_state === 'Cancelled' || selectedBookingDetails.workflow_state === 'Rejected')
+                        ? '1px solid #fecaca'
+                        : '1px solid #b3e0ff',
                     padding: '10px 14px',
                     borderRadius: '8px',
                     fontSize: '12px',
-                    color: '#0369a1',
+                    color: (selectedBookingDetails.workflow_state === 'Approved')
+                      ? '#166534'
+                      : (selectedBookingDetails.workflow_state === 'Cancelled' || selectedBookingDetails.workflow_state === 'Rejected')
+                        ? '#dc2626'
+                        : '#0369a1',
                     marginTop: 4,
                     fontWeight: 500
                   }}>
-                    <AlertCircle size={15} style={{ color: '#0369a1' }} />
+                    <AlertCircle size={15} style={{
+                      color: (selectedBookingDetails.workflow_state === 'Approved')
+                        ? '#166534'
+                        : (selectedBookingDetails.workflow_state === 'Cancelled' || selectedBookingDetails.workflow_state === 'Rejected')
+                          ? '#dc2626'
+                          : '#0369a1'
+                    }} />
                     <span>Current Document State: <strong>{selectedBookingDetails.workflow_state}</strong></span>
                   </div>
                 )}
 
-                <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                <div style={{ display: 'flex', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
                   {/* Print Lease Agreement Action */}
                   <button
                     className="btn btn-primary"
                     onClick={() => {
                       if (selectedBookingDetails?.status === 'Cancelled' || selectedBookingDetails?.workflow_state === 'Cancelled') {
-                        showToast('error', 'Not allowed to print cancelled documents');
+                        showAlertModal('Cannot Print Document', 'Printing is not allowed for cancelled documents.', 'warning');
+                        return;
+                      }
+                      if (selectedBookingDetails?.status === 'Rejected' || selectedBookingDetails?.workflow_state === 'Rejected') {
+                        showAlertModal('Cannot Print Document', 'Printing is not allowed for rejected documents.', 'warning');
                         return;
                       }
                       let contractId = selectedBookingDetails?.custom_contract || selectedBookingDetails?.contract;
@@ -4359,7 +5072,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                         }
                       }
                       if (!contractId) {
-                        showToast('error', 'No linked contract found for this booking');
+                        showAlertModal('No Contract Found', 'No linked contract found for this booking to print.', 'warning');
                         return;
                       }
                       if (erpnextConfig?.url) {
@@ -4424,7 +5137,8 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                       fontSize: '13px',
                       fontWeight: 700,
                       cursor: 'pointer',
-                      transition: 'all 0.2s'
+                      transition: 'all 0.2s',
+                      minWidth: '160px'
                     }}
                     onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#085450'}
                     onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#0a6c66'}
@@ -4433,8 +5147,8 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     <span>Print Lease Agreement</span>
                   </button>
 
-                  {/* Approve Booking Action */}
-                  {!isBookingApproved && (
+                  {/* Approve Booking Action - unchanged */}
+                  {!isBookingApproved && !isBookingCancelled && !isBookingRejected && (
                     <button
                       onClick={openApproveModal}
                       style={{
@@ -4443,21 +5157,84 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                         justifyContent: 'center',
                         gap: 8,
                         flex: 1,
-                        backgroundColor: '#0a6c66',
-                        borderColor: '#0a6c66',
+                        backgroundColor: '#10b981',
+                        borderColor: '#10b981',
                         color: '#ffffff',
                         padding: '10px 16px',
                         borderRadius: '8px',
                         fontSize: '13px',
                         fontWeight: 700,
                         cursor: 'pointer',
-                        transition: 'all 0.2s'
+                        transition: 'all 0.2s',
+                        minWidth: '150px'
                       }}
-                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#085450'}
-                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#0a6c66'}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#059669'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#10b981'}
                     >
                       <CheckCircle2 size={14} />
                       <span>Approve Booking</span>
+                    </button>
+                  )}
+
+                  {/* Cancel Booking Action - shown after booking workflow is approved (state 2) */}
+                  {showCancelButton && (
+                    <button
+                      onClick={handleCancelBooking}
+                      disabled={cancelling}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        flex: 1,
+                        backgroundColor: '#ef4444',
+                        borderColor: '#ef4444',
+                        color: '#ffffff',
+                        padding: '10px 16px',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        cursor: cancelling ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s',
+                        minWidth: '150px',
+                        opacity: cancelling ? 0.7 : 1
+                      }}
+                      onMouseEnter={(e) => { if (!cancelling) e.currentTarget.style.backgroundColor = '#dc2626'; }}
+                      onMouseLeave={(e) => { if (!cancelling) e.currentTarget.style.backgroundColor = '#ef4444'; }}
+                    >
+                      <XCircle size={14} />
+                      <span>{cancelling ? 'Cancelling...' : 'Cancel Booking'}</span>
+                    </button>
+                  )}
+
+                  {/* Reject Booking Action - shown before booking workflow is approved (Waiting For Contract Submit, Request For Approval) in place of Cancel button (state 0) */}
+                  {showRejectButton && (
+                    <button
+                      onClick={handleRejectBooking}
+                      disabled={rejecting}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        flex: 1,
+                        backgroundColor: '#ef4444',
+                        borderColor: '#ef4444',
+                        color: '#ffffff',
+                        padding: '10px 16px',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        cursor: rejecting ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.2s',
+                        minWidth: '150px',
+                        opacity: rejecting ? 0.7 : 1
+                      }}
+                      onMouseEnter={(e) => { if (!rejecting) e.currentTarget.style.backgroundColor = '#dc2626'; }}
+                      onMouseLeave={(e) => { if (!rejecting) e.currentTarget.style.backgroundColor = '#ef4444'; }}
+                    >
+                      <XCircle size={14} />
+                      <span>{rejecting ? 'Rejecting...' : 'Reject Booking'}</span>
                     </button>
                   )}
                 </div>
@@ -4853,130 +5630,253 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
         </div>
       )}
 
-      {/* Backend Validation / Notice Modal */}
-      {alertModal.show && (
-        <div
-          className="modal-overlay"
-          style={{ zIndex: 10000 }}
-          onClick={() => setAlertModal({ show: false, title: '', message: '' })}
-        >
+      {/* Backend Validation / Notice / Confirmation Modal */}
+      {alertModal.show && (() => {
+        const type = alertModal.type || 'info';
+        const isError = type === 'error';
+        const isSuccess = type === 'success';
+        const isWarning = type === 'warning';
+
+        const theme = isError
+          ? {
+              headerBg: '#fff1f2',
+              headerBorder: '#fecdd3',
+              titleColor: '#9f1239',
+              subtitleColor: '#be123c',
+              subtitle: 'Validation Notice / Action Error',
+              iconContainerBg: '#ffe4e6',
+              icon: <AlertCircle size={22} style={{ color: '#e11d48' }} />,
+              boxBg: '#fff5f5',
+              boxBorder: '#fed7d7',
+              boxLeftBorder: '#e11d48',
+              btnBg: '#e11d48',
+              btnHover: '#be123c'
+            }
+          : isSuccess
+          ? {
+              headerBg: '#ecfdf5',
+              headerBorder: '#a7f3d0',
+              titleColor: '#065f46',
+              subtitleColor: '#047857',
+              subtitle: 'Success Notification',
+              iconContainerBg: '#d1fae5',
+              icon: <CheckCircle2 size={22} style={{ color: '#059669' }} />,
+              boxBg: '#f0fdf4',
+              boxBorder: '#bbf7d0',
+              boxLeftBorder: '#059669',
+              btnBg: '#059669',
+              btnHover: '#047857'
+            }
+          : isWarning
+          ? {
+              headerBg: '#fffbeb',
+              headerBorder: '#fde68a',
+              titleColor: '#92400e',
+              subtitleColor: '#b45309',
+              subtitle: 'Confirmation Required / Caution',
+              iconContainerBg: '#fef3c7',
+              icon: <AlertTriangle size={22} style={{ color: '#d97706' }} />,
+              boxBg: '#fffdf5',
+              boxBorder: '#fde68a',
+              boxLeftBorder: '#d97706',
+              btnBg: alertModal.isDestructive ? '#dc2626' : '#d97706',
+              btnHover: alertModal.isDestructive ? '#b91c1c' : '#b45309'
+            }
+          : {
+              headerBg: '#f0fdfa',
+              headerBorder: '#99f6e4',
+              titleColor: '#115e59',
+              subtitleColor: '#0f766e',
+              subtitle: 'Information Notice',
+              iconContainerBg: '#ccfbf1',
+              icon: <Info size={22} style={{ color: '#0d9488' }} />,
+              boxBg: '#f0fdfa',
+              boxBorder: '#99f6e4',
+              boxLeftBorder: '#0d9488',
+              btnBg: '#0a6c66',
+              btnHover: '#085450'
+            };
+
+        const handleClose = () => {
+          const cancelCb = alertModal.onCancel;
+          setAlertModal(prev => ({ ...prev, show: false }));
+          if (cancelCb) {
+            try { cancelCb(); } catch (err) { console.error(err); }
+          }
+        };
+
+        const handleConfirm = () => {
+          const confirmCb = alertModal.onConfirm;
+          setAlertModal(prev => ({ ...prev, show: false }));
+          if (confirmCb) {
+            try { confirmCb(); } catch (err) { console.error(err); }
+          }
+        };
+
+        return (
           <div
-            className="modal-content"
-            onClick={(e) => e.stopPropagation()}
+            className="modal-overlay"
             style={{
-              maxWidth: 520,
-              borderRadius: '14px',
-              overflow: 'hidden',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.25), 0 10px 10px -5px rgba(0, 0, 0, 0.1)',
-              border: '1px solid #fecdd3'
+              zIndex: 10001,
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: 'rgba(15, 23, 42, 0.55)',
+              backdropFilter: 'blur(3px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
             }}
+            onClick={handleClose}
           >
-            {/* Modal Header */}
             <div
-              className="modal-header"
+              className="modal-content"
+              onClick={(e) => e.stopPropagation()}
               style={{
-                background: '#fff1f2',
-                borderBottom: '1px solid #fecdd3',
-                padding: '16px 20px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between'
+                maxWidth: 520,
+                width: '100%',
+                borderRadius: '16px',
+                overflow: 'hidden',
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+                border: `1px solid ${theme.headerBorder}`,
+                background: '#ffffff',
+                animation: 'bookingToastIn 0.2s ease-out'
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div
+              {/* Modal Header */}
+              <div
+                className="modal-header"
+                style={{
+                  background: theme.headerBg,
+                  borderBottom: `1px solid ${theme.headerBorder}`,
+                  padding: '16px 20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: '50%',
+                      background: theme.iconContainerBg,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}
+                  >
+                    {theme.icon}
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: theme.titleColor }}>
+                      {alertModal.title || 'Notice'}
+                    </h3>
+                    <span style={{ fontSize: '11px', color: theme.subtitleColor, fontWeight: 500 }}>
+                      {theme.subtitle}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClose}
                   style={{
-                    width: 38,
-                    height: 38,
-                    borderRadius: '50%',
-                    background: '#ffe4e6',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0
+                    background: 'none',
+                    border: 'none',
+                    color: theme.titleColor,
+                    cursor: 'pointer',
+                    fontSize: 24,
+                    lineHeight: 1,
+                    padding: 4
                   }}
                 >
-                  <AlertCircle size={22} style={{ color: '#e11d48' }} />
-                </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#9f1239' }}>
-                    {alertModal.title || 'Validation Error'}
-                  </h3>
-                  <span style={{ fontSize: '11px', color: '#be123c', fontWeight: 500 }}>
-                    ERPNext Backend Validation Notice
-                  </span>
+                  ×
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="modal-body" style={{ padding: '20px', background: '#ffffff' }}>
+                <div
+                  style={{
+                    background: theme.boxBg,
+                    border: `1px solid ${theme.boxBorder}`,
+                    borderLeft: `4px solid ${theme.boxLeftBorder}`,
+                    borderRadius: '8px',
+                    padding: '14px 16px',
+                    color: '#1f2937',
+                    fontSize: '13px',
+                    lineHeight: '1.6',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontWeight: 500
+                  }}
+                >
+                  {alertModal.message}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setAlertModal({ show: false, title: '', message: '' })}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#9f1239',
-                  cursor: 'pointer',
-                  fontSize: 24,
-                  lineHeight: 1,
-                  padding: 4
-                }}
-              >
-                ×
-              </button>
-            </div>
 
-            {/* Modal Body */}
-            <div className="modal-body" style={{ padding: '20px', background: '#ffffff' }}>
+              {/* Modal Footer */}
               <div
+                className="modal-footer"
                 style={{
-                  background: '#fff5f5',
-                  border: '1px solid #fed7d7',
-                  borderLeft: '4px solid #e11d48',
-                  borderRadius: '8px',
-                  padding: '14px 16px',
-                  color: '#1f2937',
-                  fontSize: '13px',
-                  lineHeight: '1.6',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  fontWeight: 500
+                  padding: '14px 20px',
+                  background: '#f8fafc',
+                  borderTop: '1px solid #f1f5f9',
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: 10
                 }}
               >
-                {alertModal.message}
+                {alertModal.showCancel && (
+                  <button
+                    type="button"
+                    onClick={handleClose}
+                    style={{
+                      background: '#ffffff',
+                      border: '1px solid #cbd5e1',
+                      color: '#475569',
+                      padding: '8px 18px',
+                      borderRadius: '8px',
+                      fontWeight: 600,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f1f5f9'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#ffffff'}
+                  >
+                    {alertModal.cancelText || 'Cancel'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={alertModal.showCancel ? handleConfirm : handleClose}
+                  style={{
+                    background: theme.btnBg,
+                    border: `1px solid ${theme.btnBg}`,
+                    color: '#ffffff',
+                    padding: '8px 22px',
+                    borderRadius: '8px',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.btnHover}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = theme.btnBg}
+                >
+                  {alertModal.confirmText || (alertModal.showCancel ? 'Confirm' : 'Got It')}
+                </button>
               </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div
-              className="modal-footer"
-              style={{
-                padding: '12px 20px',
-                background: '#f8fafc',
-                borderTop: '1px solid #f1f5f9',
-                display: 'flex',
-                justifyContent: 'flex-end'
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setAlertModal({ show: false, title: '', message: '' })}
-                className="btn btn-primary"
-                style={{
-                  background: '#e11d48',
-                  borderColor: '#e11d48',
-                  color: '#ffffff',
-                  padding: '8px 22px',
-                  borderRadius: '8px',
-                  fontWeight: 600,
-                  fontSize: '13px',
-                  cursor: 'pointer'
-                }}
-              >
-                Got It
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
