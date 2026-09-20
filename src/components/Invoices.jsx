@@ -140,6 +140,18 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
   const [linkOptionsCache, setLinkOptionsCache] = useState({});
   const [submittingInvoice, setSubmittingInvoice] = useState(false);
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+  const [customerAddresses, setCustomerAddresses] = useState([]);
+  const [loadingCustomerAddresses, setLoadingCustomerAddresses] = useState(false);
+  const [showCreateAddressModal, setShowCreateAddressModal] = useState(false);
+  const [creatingAddress, setCreatingAddress] = useState(false);
+  const [newAddressForm, setNewAddressForm] = useState({
+    address_line1: '',
+    address_line2: '',
+    city: 'Suva',
+    country: 'Fiji',
+    pincode: '',
+    address_type: 'Billing'
+  });
 
   const showToast = (message, type = 'success') => {
     setToast({ show: true, message, type });
@@ -153,6 +165,8 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     customer_name: '',
     customer_address: '',
     booking_id: '',
+    start_date: getTodayStr(),
+    end_date: getDefaultDueDate(),
     posting_date: getTodayStr(),
     due_date: getDefaultDueDate(),
     company: 'CARPENTERS PROPERTIES PTE LIMITED',
@@ -161,10 +175,11 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     debit_to: 'Debtors - CFPL',
     against_income_account: 'Sales - CFPL',
     selling_price_list: 'Standard Selling For Property Management',
-    taxes_and_charges: 'Fiji Tax',
+    taxes_and_charges: 'Fiji Tax - CFPL',
     additional_discount_percentage: 0,
     discount_amount: 0,
-    po_no: ''
+    po_no: '',
+    create_manual_invoice: 1
   };
 
   const [formValues, setFormValues] = useState(initialFormValues);
@@ -182,21 +197,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
 
   const [taxes, setTaxes] = useState(initialTaxes);
 
-  const initialItems = [
-    {
-      item_code: 'Gb009',
-      item_name: 'Gb009',
-      description: 'Gb009 - Commercial Space Rent',
-      qty: 1,
-      rate: 10000,
-      amount: 10000,
-      stock_uom: 'Sq Ft',
-      uom: 'Sq Ft',
-      income_account: 'Sales - CFPL',
-      expense_account: 'Cost of Goods Sold - CFPL',
-      cost_center: 'Main - CFPL'
-    }
-  ];
+  const initialItems = [];
 
   const [items, setItems] = useState(initialItems);
   const [activeReceipt, setActiveReceipt] = useState(null);
@@ -387,7 +388,8 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
 
   // Dynamic Link Options fetching from ERPNext
   const fetchLinkOptions = async (doctype) => {
-    if (!doctype || !erpnextConfig?.url || linkOptionsCache[doctype]) return;
+    if (!doctype || !erpnextConfig?.url) return [];
+    if (linkOptionsCache[doctype]) return linkOptionsCache[doctype];
     try {
       const res = await fetch(`${erpnextConfig.url}/api/resource/${encodeURIComponent(doctype)}?fields=["name"]&limit_page_length=500`, {
         credentials: 'include',
@@ -397,14 +399,146 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
         const json = await res.json();
         const list = json.data || json || [];
         if (Array.isArray(list)) {
+          const names = list.map(it => it.name).filter(Boolean);
           setLinkOptionsCache(prev => ({
             ...prev,
-            [doctype]: list.map(it => it.name).filter(Boolean)
+            [doctype]: names
           }));
+          return names;
         }
       }
     } catch (err) {
       console.warn(`Could not fetch link options for ${doctype}:`, err);
+    }
+    return [];
+  };
+
+  // Fetch ERPNext Address documents linked to this customer via Dynamic Link
+  const fetchCustomerAddresses = async (customerId) => {
+    if (!customerId || !erpnextConfig?.url) {
+      setCustomerAddresses([]);
+      setFormValues(prev => ({ ...prev, customer_address: '' }));
+      return [];
+    }
+
+    setLoadingCustomerAddresses(true);
+    try {
+      const filters = JSON.stringify([
+        ['Dynamic Link', 'link_doctype', '=', 'Customer'],
+        ['Dynamic Link', 'link_name', '=', customerId]
+      ]);
+      const fields = JSON.stringify([
+        'name', 'address_title', 'address_type', 'address_line1', 'address_line2',
+        'city', 'state', 'country', 'pincode', 'is_primary_address', 'is_shipping_address'
+      ]);
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Address?filters=${encodeURIComponent(filters)}&fields=${encodeURIComponent(fields)}&limit_page_length=50`, {
+        credentials: 'include',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const addrs = json.data || [];
+        setCustomerAddresses(addrs);
+        if (addrs.length > 0) {
+          const preferred = addrs.find(a => a.is_primary_address && a.address_type === 'Billing')
+            || addrs.find(a => a.is_primary_address)
+            || addrs.find(a => a.address_type === 'Billing')
+            || addrs[0];
+          setFormValues(prev => ({ ...prev, customer_address: preferred.name }));
+        } else {
+          setFormValues(prev => ({ ...prev, customer_address: '' }));
+        }
+        return addrs;
+      } else {
+        setCustomerAddresses([]);
+        setFormValues(prev => ({ ...prev, customer_address: '' }));
+      }
+    } catch (err) {
+      console.warn('Failed fetching customer addresses:', err);
+      setCustomerAddresses([]);
+      setFormValues(prev => ({ ...prev, customer_address: '' }));
+    } finally {
+      setLoadingCustomerAddresses(false);
+    }
+    return [];
+  };
+
+  // Quick-create an Address in ERPNext linked to the selected Customer
+  const handleCreateCustomerAddress = async (e) => {
+    if (e) e.preventDefault();
+    if (!formValues.customer) {
+      alert('Please select a customer first.');
+      return;
+    }
+    if (!newAddressForm.address_line1.trim()) {
+      alert('Please enter Address Line 1.');
+      return;
+    }
+
+    setCreatingAddress(true);
+    try {
+      const payload = {
+        doctype: 'Address',
+        address_title: formValues.customer_name || formValues.customer,
+        address_type: newAddressForm.address_type || 'Billing',
+        address_line1: newAddressForm.address_line1.trim(),
+        address_line2: newAddressForm.address_line2.trim() || undefined,
+        city: newAddressForm.city.trim() || 'Suva',
+        country: newAddressForm.country.trim() || 'Fiji',
+        pincode: newAddressForm.pincode.trim() || undefined,
+        is_primary_address: 1,
+        links: [
+          {
+            doctype: 'Dynamic Link',
+            link_doctype: 'Customer',
+            link_name: formValues.customer
+          }
+        ]
+      };
+
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Address`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        const createdAddr = json.data || json;
+        const newAddrName = createdAddr.name;
+        showToast(`Address ${newAddrName} created and linked successfully!`, 'success');
+        setShowCreateAddressModal(false);
+        setNewAddressForm({
+          address_line1: '',
+          address_line2: '',
+          city: 'Suva',
+          country: 'Fiji',
+          pincode: '',
+          address_type: 'Billing'
+        });
+        await fetchCustomerAddresses(formValues.customer);
+        setFormValues(prev => ({ ...prev, customer_address: newAddrName }));
+      } else {
+        let errMsg = `Failed to create address (HTTP ${res.status})`;
+        try {
+          const errJson = await res.json();
+          if (errJson._server_messages) {
+            const msgs = JSON.parse(errJson._server_messages);
+            errMsg = msgs.map(m => {
+              try { return JSON.parse(m).message; } catch { return m; }
+            }).join('; ');
+          } else if (errJson.exception || errJson.message) {
+            errMsg = errJson.exception || errJson.message;
+          }
+        } catch { }
+        showToast(`Could not create address: ${errMsg}`, 'error');
+      }
+    } catch (err) {
+      console.error('Error creating address:', err);
+      showToast(`Error creating address: ${err.message}`, 'error');
+    } finally {
+      setCreatingAddress(false);
     }
   };
 
@@ -417,7 +551,26 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       fetchLinkOptions('Cost Center');
       fetchLinkOptions('Account');
       fetchLinkOptions('Price List');
-      fetchLinkOptions('Sales Taxes and Charges Template');
+      fetchLinkOptions('Sales Taxes and Charges Template').then((templates) => {
+        if (Array.isArray(templates) && templates.length > 0) {
+          setFormValues(prev => {
+            if (!prev.taxes_and_charges || prev.taxes_and_charges === 'Fiji Tax' || !templates.includes(prev.taxes_and_charges)) {
+              const preferred = templates.find(t => t.includes('CFPL') && t.toLowerCase().includes('fiji'))
+                || templates.find(t => t.toLowerCase().includes('fiji'))
+                || templates.find(t => t.includes('CFPL'))
+                || templates[0];
+              if (preferred) {
+                handleTaxTemplateChange(preferred);
+                return { ...prev, taxes_and_charges: preferred };
+              }
+            }
+            return prev;
+          });
+        }
+      });
+      if (formValues.customer) {
+        fetchCustomerAddresses(formValues.customer);
+      }
     }
   }, [showAddModal]);
 
@@ -484,12 +637,14 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       ...prev,
       customer: custObj.customerId,
       customer_name: custObj.customerName || custObj.customerId,
-      customer_address: `${custObj.customerId}-Billing`,
+      customer_address: '',
       booking_id: bookingId
     }));
 
+    fetchCustomerAddresses(custObj.customerId);
+
     if (bookingId) {
-      handleBookingSelect(bookingId);
+      handleBookingSelect(bookingId, custObj.customerId);
     } else {
       setItems([]);
     }
@@ -499,7 +654,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
   };
 
   // Handle smart selection of Booking ID using ERPNext Booking child table logic
-  const handleBookingSelect = async (bookingId) => {
+  const handleBookingSelect = async (bookingId, passedCustomerId = null) => {
     if (!bookingId) {
       setFormValues(prev => ({ ...prev, booking_id: '' }));
       setItems([]);
@@ -509,15 +664,24 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     setFormValues(prev => ({ ...prev, booking_id: bookingId }));
 
     const matchedBooking = mergedBookings.find(b => b.name === bookingId || b.id === bookingId);
+    let resolvedCust = passedCustomerId || '';
     if (matchedBooking) {
       const custVal = matchedBooking.customer || matchedBooking.tenantName || '';
+      resolvedCust = resolvedCust || custVal;
       const custName = matchedBooking.customer_name || custVal;
+      const bStart = matchedBooking.starting_date || matchedBooking.start_date || '';
+      const bEnd = matchedBooking.ending_date || matchedBooking.end_date || '';
       setFormValues(prev => ({
         ...prev,
         customer: custVal || prev.customer,
         customer_name: custName || prev.customer_name,
-        customer_address: custVal ? `${custVal}-Billing` : prev.customer_address
+        customer_address: '',
+        ...(bStart ? { start_date: bStart } : {}),
+        ...(bEnd ? { end_date: bEnd } : {})
       }));
+      if (custVal && !passedCustomerId) {
+        fetchCustomerAddresses(custVal);
+      }
     }
 
     setLoadingBookingItems(true);
@@ -545,13 +709,21 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
 
       console.log('Booking Data:', response);
 
-      if (response.customer) {
+      const bStartRes = response.starting_date || response.start_date || '';
+      const bEndRes = response.ending_date || response.end_date || '';
+      if (response.customer || bStartRes || bEndRes) {
         setFormValues(prev => ({
           ...prev,
-          customer: response.customer,
-          customer_name: response.customer_name || response.customer || prev.customer_name,
-          customer_address: `${response.customer}-Billing`
+          ...(response.customer ? {
+            customer: response.customer,
+            customer_name: response.customer_name || response.customer || prev.customer_name
+          } : {}),
+          ...(bStartRes ? { start_date: bStartRes } : {}),
+          ...(bEndRes ? { end_date: bEndRes } : {})
         }));
+        if (response.customer && response.customer !== resolvedCust) {
+          fetchCustomerAddresses(response.customer);
+        }
       }
 
       const bookingItems = response.booking_item || response.items || [];
@@ -612,18 +784,25 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       ...prev,
       customer: custVal,
       customer_name: custName,
-      customer_address: custVal ? `${custVal}-Billing` : prev.customer_address
+      customer_address: ''
     }));
+    if (custVal) {
+      fetchCustomerAddresses(custVal);
+    }
   };
 
   // Handle tax template selection with automatic ERPNext taxes population
   const handleTaxTemplateChange = async (templateName) => {
-    setFormValues(prev => ({ ...prev, taxes_and_charges: templateName }));
-    if (!templateName) return;
+    let resolvedName = templateName;
+    if (resolvedName === 'Fiji Tax') {
+      resolvedName = 'Fiji Tax - CFPL';
+    }
+    setFormValues(prev => ({ ...prev, taxes_and_charges: resolvedName }));
+    if (!resolvedName) return;
 
     if (erpnextConfig?.url) {
       try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Taxes%20and%20Charges%20Template/${encodeURIComponent(templateName)}`, {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Taxes%20and%20Charges%20Template/${encodeURIComponent(resolvedName)}`, {
           credentials: 'include',
           headers: getAuthHeaders({ 'Content-Type': 'application/json' })
         });
@@ -647,7 +826,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       }
     }
 
-    if (templateName.toLowerCase().includes('fiji')) {
+    if (resolvedName.toLowerCase().includes('fiji')) {
       setTaxes([
         {
           charge_type: 'On Net Total',
@@ -781,22 +960,6 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
   };
 
   const handleRemoveItemRow = (index) => {
-    if (items.length <= 1) {
-      setItems([{
-        item_code: '',
-        item_name: '',
-        description: '',
-        qty: 1,
-        rate: 0,
-        amount: 0,
-        stock_uom: 'Sq Ft',
-        uom: 'Sq Ft',
-        income_account: formValues.against_income_account || 'Sales - CFPL',
-        expense_account: 'Cost of Goods Sold - CFPL',
-        cost_center: formValues.cost_center || 'Main - CFPL'
-      }]);
-      return;
-    }
     setItems(prev => prev.filter((_, i) => i !== index));
   };
 
@@ -808,20 +971,34 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       return;
     }
     if (items.length === 0 || !items.some(it => it.item_code)) {
-      alert('Please add at least one line item with an Item Code.');
+      alert('Please select an Approved Booking ID to load unit items.');
       return;
     }
 
     setSubmittingInvoice(true);
     const { subtotal, netTotal, computedTaxes, totalTaxesAndCharges, grandTotal } = calculateTotals();
 
+    // Resolve valid taxes_and_charges link
+    let resolvedTaxTemplate = formValues.taxes_and_charges ? formValues.taxes_and_charges.trim() : undefined;
+    if (resolvedTaxTemplate === 'Fiji Tax') {
+      resolvedTaxTemplate = 'Fiji Tax - CFPL';
+    }
+
+    // Resolve valid customer_address link (must be undefined if empty string to avoid link validation failure)
+    const resolvedCustomerAddress = formValues.customer_address && formValues.customer_address.trim()
+      ? formValues.customer_address.trim()
+      : undefined;
+
     const payload = {
       doctype: 'Sales Invoice',
       customer: formValues.customer,
       customer_name: formValues.customer_name || formValues.customer,
-      customer_address: formValues.customer_address || undefined,
+      customer_address: resolvedCustomerAddress,
       company: 'CARPENTERS PROPERTIES PTE LIMITED',
       booking_id: formValues.booking_id || undefined,
+      start_date: formValues.start_date || undefined,
+      end_date: formValues.end_date || undefined,
+      create_manual_invoice: 1,
       posting_date: formValues.posting_date || getTodayStr(),
       due_date: formValues.due_date || getTodayStr(),
       currency: 'FJD',
@@ -829,7 +1006,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       debit_to: 'Debtors - CFPL',
       against_income_account: 'Sales - CFPL',
       selling_price_list: 'Standard Selling For Property Management',
-      taxes_and_charges: formValues.taxes_and_charges || 'Fiji Tax',
+      taxes_and_charges: resolvedTaxTemplate,
       taxes: computedTaxes.map((tax, idx) => ({
         doctype: 'Sales Taxes and Charges',
         idx: idx + 1,
@@ -849,8 +1026,8 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       items: items.map((it, idx) => ({
         doctype: 'Sales Invoice Item',
         idx: idx + 1,
-        item_code: it.item_code || 'Gb009',
-        item_name: it.item_name || it.item_code || 'Gb009',
+        item_code: it.item_code || '',
+        item_name: it.item_name || it.item_code || '',
         description: it.description || it.item_name || it.item_code || 'Rent Item',
         qty: Number(it.qty) || 1,
         rate: Number(it.rate) || 0,
@@ -903,11 +1080,16 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
               errorMsg = errJson.exception || errJson.message;
             }
           } catch { }
-          console.warn('ERPNext Sales Invoice POST notice:', errorMsg);
-          showToast(`ERPNext Note: ${errorMsg}`, 'info');
+          console.error('ERPNext Sales Invoice POST error:', errorMsg);
+          showToast(`ERPNext Error: ${errorMsg}`, 'error');
+          setSubmittingInvoice(false);
+          return;
         }
       } catch (err) {
         console.warn('Network error posting Sales Invoice:', err);
+        showToast(`Network Error: ${err.message}`, 'error');
+        setSubmittingInvoice(false);
+        return;
       }
     }
 
@@ -921,6 +1103,9 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       outstandingAmount: grandTotal,
       issuedDate: formValues.posting_date,
       dueDate: formValues.due_date,
+      startDate: formValues.start_date,
+      endDate: formValues.end_date,
+      create_manual_invoice: 1,
       status: 'pending'
     };
 
@@ -929,6 +1114,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     setShowAddModal(false);
     setFormValues(initialFormValues);
     setTaxes(initialTaxes);
+    setItems([]);
     setSubmittingInvoice(false);
     showToast(`Sales Invoice ${finalName} successfully created!`, 'success');
   };
@@ -953,7 +1139,16 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
           <button className="btn btn-secondary" onClick={() => setShowGLModal(true)}>
             <Calculator size={16} /> GL & TB Ledger View
           </button>
-          <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              setFormValues(initialFormValues);
+              setItems([]);
+              setCustomerDropdownOpen(false);
+              setCustomerSearchQuery('');
+              setShowAddModal(true);
+            }}
+          >
             <Plus size={16} /> Generate Invoice
           </button>
         </div>
@@ -1410,10 +1605,10 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
           ...properties.map(p => p.id || p.name).filter(Boolean),
           'Gb009', 'Pb4', 'Office Space', 'Retail Shop'
         ]));
+        const rawTaxTemplates = linkOptionsCache['Sales Taxes and Charges Template'] || [];
         const taxTemplateOptions = Array.from(new Set([
-          ...(linkOptionsCache['Sales Taxes and Charges Template'] || []),
-          'Fiji Tax',
-          'Fiji Tax - CFPL'
+          ...rawTaxTemplates.filter(t => t !== 'Fiji Tax'),
+          ...(rawTaxTemplates.length === 0 ? ['Fiji Tax - CFPL'] : [])
         ]));
         const accountHeadOptions = Array.from(new Set([
           ...(linkOptionsCache['Account'] || []),
@@ -1438,6 +1633,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                   type="button"
                   onClick={() => {
                     setShowAddModal(false);
+                    setItems([]);
                     setCustomerDropdownOpen(false);
                     setCustomerSearchQuery('');
                   }}
@@ -1677,12 +1873,88 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                         </div>
 
                         <div className="form-group">
-                          <label className="form-label">Customer Address</label>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <label className="form-label" style={{ margin: 0 }}>
+                              Customer Address
+                            </label>
+                            {formValues.customer && (
+                              <button
+                                type="button"
+                                onClick={() => setShowCreateAddressModal(true)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--brand-color, #0a6c66)',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  textDecoration: 'underline'
+                                }}
+                              >
+                                + New Address
+                              </button>
+                            )}
+                          </div>
+
+                          {loadingCustomerAddresses ? (
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: '6px' }}>
+                              Loading addresses from ERPNext...
+                            </div>
+                          ) : customerAddresses.length > 0 ? (
+                            <select
+                              value={formValues.customer_address}
+                              onChange={(e) => setFormValues(prev => ({ ...prev, customer_address: e.target.value }))}
+                              className="form-select"
+                              style={{ width: '100%', fontSize: '12.5px' }}
+                            >
+                              <option value="">-- No Address / Leave Blank --</option>
+                              {customerAddresses.map(addr => (
+                                <option key={addr.name} value={addr.name}>
+                                  {addr.name} {addr.address_type ? `(${addr.address_type})` : ''} {addr.address_line1 ? `- ${addr.address_line1}` : ''} {addr.city ? `, ${addr.city}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <div>
+                              <input
+                                type="text"
+                                value={formValues.customer_address}
+                                onChange={(e) => setFormValues(prev => ({ ...prev, customer_address: e.target.value }))}
+                                placeholder={formValues.customer ? "No linked address in ERPNext (left blank to prevent link error)" : "Select a customer first"}
+                                className="form-input"
+                                style={{
+                                  fontSize: '12.5px',
+                                  background: !formValues.customer_address ? 'var(--bg-secondary)' : 'var(--bg-primary)'
+                                }}
+                              />
+                              {formValues.customer && !formValues.customer_address && (
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px', display: 'block' }}>
+                                  ℹ️ No address linked in ERPNext for {formValues.customer}. Field is optional and left blank.
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid-2col" style={{ gap: 16, gridTemplateColumns: '1fr 1fr' }}>
+                        <div className="form-group">
+                          <label className="form-label">Start Date</label>
                           <input
-                            type="text"
-                            value={formValues.customer_address}
-                            onChange={(e) => setFormValues(prev => ({ ...prev, customer_address: e.target.value }))}
-                            placeholder="e.g. Arijit-Billing"
+                            type="date"
+                            value={formValues.start_date}
+                            onChange={(e) => setFormValues(prev => ({ ...prev, start_date: e.target.value }))}
+                            className="form-input"
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label className="form-label">End Date</label>
+                          <input
+                            type="date"
+                            value={formValues.end_date}
+                            onChange={(e) => setFormValues(prev => ({ ...prev, end_date: e.target.value }))}
                             className="form-input"
                           />
                         </div>
@@ -1772,7 +2044,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                               ) : items.length === 0 ? (
                                 <tr>
                                   <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12.5px' }}>
-                                    No items found in selected booking. Please select an approved booking above to load items.
+                                    No unit items selected. Please select a Customer and Booking ID above to load units.
                                   </td>
                                 </tr>
                               ) : (
@@ -1888,31 +2160,35 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
 
                       // Sales Taxes and Charges Template Field
                       <div className="form-group" style={{ maxWidth: '420px' }}>
-                        <label className="form-label" style={{ fontWeight: 600, color: 'var(--text-secondary)', fontSize: '12.5px', marginBottom: '6px' }}>
-                          Sales Taxes and Charges Template
-                        </label>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                          <label className="form-label" style={{ fontWeight: 600, color: 'var(--text-secondary)', fontSize: '12.5px', margin: 0 }}>
+                            Sales Taxes and Charges Template
+                          </label>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Link to Template</span>
+                        </div>
                         <div style={{ position: 'relative' }}>
-                          <input
-                            type="text"
-                            list="tax-template-options"
+                          <select
                             value={formValues.taxes_and_charges}
                             onChange={(e) => handleTaxTemplateChange(e.target.value)}
-                            placeholder="e.g. Fiji Tax"
-                            className="form-input"
+                            className="form-select"
                             style={{
+                              width: '100%',
                               background: 'var(--bg-primary)',
                               borderRadius: '6px',
                               fontWeight: 600,
                               fontSize: '13px',
                               padding: '8px 12px'
                             }}
-                          />
-                          <datalist id="tax-template-options">
+                          >
+                            <option value="">-- None / Custom Taxes --</option>
                             {taxTemplateOptions.map(t => (
-                              <option key={t} value={t} />
+                              <option key={t} value={t}>{t}</option>
                             ))}
-                          </datalist>
+                          </select>
                         </div>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+                          Selecting a valid template automatically configures tax rules from ERPNext.
+                        </span>
                       </div>
 
                       // Sales Taxes and Charges Child Table
@@ -2171,6 +2447,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                       className="btn btn-secondary"
                       onClick={() => {
                         setShowAddModal(false);
+                        setItems([]);
                         setCustomerDropdownOpen(false);
                         setCustomerSearchQuery('');
                       }}
@@ -2203,6 +2480,152 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
           </div>
         );
       })()}
+
+      {/* Create Customer Address in ERPNext Modal */}
+      {showCreateAddressModal && (
+        <div className="modal-overlay" style={{ zIndex: 1200 }}>
+          <div className="modal-content" style={{ maxWidth: '480px', width: '92%', borderRadius: '12px', overflow: 'hidden', padding: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-primary)' }}>
+              <div>
+                <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>Create Customer Address</h4>
+                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                  Linking to Customer: <strong style={{ color: 'var(--brand-color, #0a6c66)' }}>{formValues.customer_name || formValues.customer}</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateAddressModal(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 4 }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateCustomerAddress} style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div className="form-group">
+                <label className="form-label" style={{ fontSize: '12px', fontWeight: 600 }}>
+                  Address Type <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <select
+                  value={newAddressForm.address_type}
+                  onChange={(e) => setNewAddressForm(prev => ({ ...prev, address_type: e.target.value }))}
+                  className="form-select"
+                  style={{ width: '100%', fontSize: '12.5px' }}
+                >
+                  <option value="Billing">Billing</option>
+                  <option value="Shipping">Shipping</option>
+                  <option value="Office">Office</option>
+                  <option value="Personal">Personal</option>
+                  <option value="Postal">Postal</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" style={{ fontSize: '12px', fontWeight: 600 }}>
+                  Address Line 1 <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. 123 Victoria Parade"
+                  value={newAddressForm.address_line1}
+                  onChange={(e) => setNewAddressForm(prev => ({ ...prev, address_line1: e.target.value }))}
+                  className="form-input"
+                  style={{ fontSize: '12.5px' }}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" style={{ fontSize: '12px', fontWeight: 600 }}>
+                  Address Line 2 (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Floor 2, Suite 204"
+                  value={newAddressForm.address_line2}
+                  onChange={(e) => setNewAddressForm(prev => ({ ...prev, address_line2: e.target.value }))}
+                  className="form-input"
+                  style={{ fontSize: '12.5px' }}
+                />
+              </div>
+
+              <div className="grid-2col" style={{ gap: 12, gridTemplateColumns: '1fr 1fr' }}>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: '12px', fontWeight: 600 }}>
+                    City <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newAddressForm.city}
+                    onChange={(e) => setNewAddressForm(prev => ({ ...prev, city: e.target.value }))}
+                    className="form-input"
+                    style={{ fontSize: '12.5px' }}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: '12px', fontWeight: 600 }}>
+                    Country <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newAddressForm.country}
+                    onChange={(e) => setNewAddressForm(prev => ({ ...prev, country: e.target.value }))}
+                    className="form-input"
+                    style={{ fontSize: '12.5px' }}
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" style={{ fontSize: '12px', fontWeight: 600 }}>
+                  Postal Code / Pincode
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 0000"
+                  value={newAddressForm.pincode}
+                  onChange={(e) => setNewAddressForm(prev => ({ ...prev, pincode: e.target.value }))}
+                  className="form-input"
+                  style={{ fontSize: '12.5px' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px', paddingTop: '14px', borderTop: '1px solid var(--border-color)' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowCreateAddressModal(false)}
+                  disabled={creatingAddress}
+                  style={{ fontSize: '12px' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={creatingAddress}
+                  style={{ fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#0a6c66', borderColor: '#0a6c66' }}
+                >
+                  {creatingAddress ? (
+                    <>
+                      <Loader2 size={13} className="spin" />
+                      <span>Saving to ERPNext...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={13} />
+                      <span>Create & Link Address</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Print Receipt Modal */}
       {activeReceipt && (
