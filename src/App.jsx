@@ -3330,7 +3330,8 @@ export default function App() {
         // 8. Fetch Sales Invoice for Billing Ledger
         let finalInvoices = [];
         try {
-          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Sales%20Invoice?fields=%5B%22name%22%2C%22customer%22%2C%22customer_name%22%2C%22posting_date%22%2C%22due_date%22%2C%22grand_total%22%2C%22outstanding_amount%22%2C%22status%22%5D&limit_page_length=500`, {
+          const invFields = JSON.stringify(["name", "customer", "customer_name", "posting_date", "due_date", "grand_total", "rounded_total", "outstanding_amount", "status", "creation", "booking_id", "currency"]);
+          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Sales%20Invoice?fields=${encodeURIComponent(invFields)}&order_by=creation%20desc&limit_page_length=500`, {
             credentials: 'include',
             headers: {
               'Content-Type': 'application/json'
@@ -3350,14 +3351,18 @@ export default function App() {
                 }
                 return {
                   id: inv.name,
+                  name: inv.name,
                   tenantName: inv.customer_name || 'ERPNext Tenant',
                   customer: inv.customer,
-                  propertyId: 'PROP-2041',
-                  amount: inv.grand_total || 2500,
+                  propertyId: inv.booking_id || 'PROP-2041',
+                  booking_id: inv.booking_id,
+                  amount: inv.rounded_total || inv.grand_total || 2500,
                   outstandingAmount: inv.outstanding_amount !== undefined ? inv.outstanding_amount : (statusLower === 'paid' ? 0 : inv.grand_total || 2500),
                   issuedDate: inv.posting_date || '2026-06-01',
                   dueDate: inv.due_date || '2026-06-10',
-                  status: mappedStatus
+                  creation: inv.creation,
+                  currency: inv.currency || 'FJD',
+                  status: inv.status || mappedStatus
                 };
               }));
             }
@@ -4778,7 +4783,7 @@ export default function App() {
   };
 
   const handleAddInvoice = (newInvoice) => {
-    setInvoices([...invoices, newInvoice]);
+    setInvoices(prev => [newInvoice, ...prev]);
   };
 
   const handleRecordPayment = async (invId) => {

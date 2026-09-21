@@ -60,15 +60,38 @@ const numberToWords = (num, currency = 'FJD') => {
   return `${currency} ${words} only.`;
 };
 
+const renderAddressDisplay = (addrHtml, fallbackStr) => {
+  if (addrHtml && typeof addrHtml === 'string') {
+    const lines = addrHtml
+      .replace(/<br\s*\/?>/gi, '\n')
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (lines.length > 0) {
+      return lines.map((line, idx) => (
+        <span key={idx} style={{ display: 'block' }}>{line}</span>
+      ));
+    }
+  }
+  return <span style={{ display: 'block' }}>{fallbackStr || 'Suva, Fiji'}</span>;
+};
+
+const formatInvoiceDate = (dateStr) => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
 export default function Invoices({ invoices, accounts = [], glEntries = [], onAddInvoice, onRecordPayment, erpnextConfig, tenants = [], properties = [], bookings = [] }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showGLModal, setShowGLModal] = useState(false); // General Ledger & Trial Balance modal
-  const [selectedInvoice, setSelectedInvoice] = useState(invoices[0] || null); // Default select first invoice
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [showTerms, setShowTerms] = useState(false);
   const [companyDetails, setCompanyDetails] = useState({
-    name: 'CARPENTERS PROPERTIES PTE LTD',
-    address: '123 Cecil Street, #08-01, Singapore 069537',
-    phone: '+65 6123 4567',
+    name: 'CARPENTERS PROPERTIES PTE LIMITED',
+    address: '40 Robertson Road, Suva, Fiji',
+    phone: '+679-2341897',
     email: 'info@carpentersproperties.com',
     website: 'www.carpentersproperties.com',
     currency: 'FJD'
@@ -263,7 +286,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     const fetchExtra = async () => {
       setLoadingExtra(true);
       try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice/${targetInvoice.id}`, {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice/${encodeURIComponent(targetInvoice.id)}`, {
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json'
@@ -274,15 +297,24 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
           const doc = json.data || json;
           const itemCode = (doc.items && doc.items.length > 0) ? doc.items[0].item_code : null;
 
-          let unitAddressStr = '10 Anson Road, #15-02, International Plaza, Singapore 079903';
+          let unitAddressStr = '40 Robertson Road, Suva, Fiji';
           let unitNameStr = targetInvoice.propertyId || 'Unit-N/A';
-          let customerAddressStr = '10 Anson Road, #15-02, International Plaza, Singapore 079903';
+          let customerAddressStr = '';
 
-          // 1. Fetch Customer address
+          // 1. Process Customer address from doc.address_display or fallback
+          if (doc.address_display) {
+            customerAddressStr = doc.address_display
+              .replace(/<br\s*\/?>/gi, '\n')
+              .split('\n')
+              .map(s => s.trim())
+              .filter(Boolean)
+              .join(', ');
+          }
+
           const customerId = doc.customer || targetInvoice.tenantName;
-          if (customerId) {
+          if (!customerAddressStr && customerId) {
             try {
-              const custRes = await fetch(`${erpnextConfig.url}/api/resource/Address?filters=[["Dynamic Link", "link_doctype", "=", "Customer"], ["Dynamic Link", "link_name", "=", "${customerId}"]]&fields=["address_line1","address_line2","city","state","country","pincode"]`, {
+              const custRes = await fetch(`${erpnextConfig.url}/api/resource/Address?filters=[["Dynamic Link", "link_doctype", "=", "Customer"], ["Dynamic Link", "link_name", "=", "${encodeURIComponent(customerId)}"]]&fields=["address_line1","address_line2","city","state","country","pincode"]`, {
                 credentials: 'include',
                 headers: {
                   'Content-Type': 'application/json'
@@ -324,11 +356,13 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
 
           if (isMounted) {
             setInvoiceDetailsExtra({
+              rawDoc: doc,
               unitName: unitNameStr,
               unitAddress: unitAddressStr,
-              customerAddress: customerAddressStr,
-              currency: doc.currency || 'SGD',
-              billingItems: doc.items || []
+              customerAddress: customerAddressStr || 'Suva, Fiji',
+              currency: doc.currency || 'FJD',
+              billingItems: doc.items || [],
+              taxes: doc.taxes || []
             });
           }
         }
@@ -342,7 +376,43 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     return () => {
       isMounted = false;
     };
-  }, [selectedInvoice, activeReceipt, erpnextConfig]);
+  }, [selectedInvoice?.id, activeReceipt?.id, erpnextConfig]);
+
+  // Sort invoices so that latest created invoice is ALWAYS on top (descending by creation / id)
+  const sortedInvoices = useMemo(() => {
+    if (!invoices || !Array.isArray(invoices)) return [];
+    return [...invoices].sort((a, b) => {
+      // 1. Sort by creation timestamp descending if present
+      const parseTime = (inv) => {
+        if (inv.creation) {
+          const t = new Date(String(inv.creation).replace(' ', 'T')).getTime();
+          if (!isNaN(t) && t > 0) return t;
+        }
+        if (inv.issuedDate) {
+          const t = new Date(String(inv.issuedDate).replace(' ', 'T')).getTime();
+          if (!isNaN(t) && t > 0) return t;
+        }
+        return 0;
+      };
+      const timeA = parseTime(a);
+      const timeB = parseTime(b);
+      if (timeB !== timeA) return timeB - timeA;
+
+      // 2. Fall back to natural numeric sort on ID / name descending (e.g. ACC-SINV-2026-00105 > ACC-SINV-2026-00104)
+      const idA = String(a.id || a.name || '');
+      const idB = String(b.id || b.name || '');
+      return idB.localeCompare(idA, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }, [invoices]);
+
+  // Keep first/latest invoice selected when list loads or changes
+  useEffect(() => {
+    if (sortedInvoices.length > 0) {
+      if (!selectedInvoice || !sortedInvoices.some(inv => inv.id === selectedInvoice.id)) {
+        setSelectedInvoice(sortedInvoices[0]);
+      }
+    }
+  }, [sortedInvoices]);
 
   // Pagination states & calculations
   const [currentPage, setCurrentPage] = useState(1);
@@ -350,12 +420,12 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [invoices.length]);
+  }, [sortedInvoices.length]);
 
-  const totalPages = Math.ceil(invoices.length / itemsPerPage);
+  const totalPages = Math.ceil(sortedInvoices.length / itemsPerPage);
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = invoices.slice(indexOfFirstItem, indexOfLastItem);
+  const currentItems = sortedInvoices.slice(indexOfFirstItem, indexOfLastItem);
 
   const renderPaginationControls = () => {
     if (totalPages <= 1) return null;
@@ -1096,9 +1166,11 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     const finalName = createdDoc?.name || fallbackId;
     const newInv = {
       id: finalName,
+      name: finalName,
       tenantName: formValues.customer_name || formValues.customer,
       customer: formValues.customer,
       propertyId: formValues.booking_id || (items[0]?.item_code) || 'Unit-N/A',
+      booking_id: formValues.booking_id,
       amount: grandTotal,
       outstandingAmount: grandTotal,
       issuedDate: formValues.posting_date,
@@ -1106,11 +1178,14 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       startDate: formValues.start_date,
       endDate: formValues.end_date,
       create_manual_invoice: 1,
-      status: 'pending'
+      status: 'pending',
+      creation: createdDoc?.creation || new Date().toISOString(),
+      rawDoc: createdDoc
     };
 
     onAddInvoice(newInv);
     setSelectedInvoice(newInv);
+    setCurrentPage(1);
     setShowAddModal(false);
     setFormValues(initialFormValues);
     setTaxes(initialTaxes);
@@ -1120,7 +1195,59 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
   };
 
   const handlePrint = (invoice) => {
-    setActiveReceipt(invoice);
+    const target = invoice || selectedInvoice;
+    const invId = target?.id || target?.name;
+
+    if (!invId) {
+      showToast('No invoice selected to print', 'error');
+      return;
+    }
+
+    if (erpnextConfig?.url) {
+      // Open ERPNext Sales Invoice DocType print format
+      const printUrl = `${erpnextConfig.url}/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(invId)}&format=Sales%20Invoice&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+      const printWindow = window.open(printUrl, '_blank');
+
+      if (printWindow) {
+        const injectAndPrint = () => {
+          try {
+            const doc = printWindow.document;
+            if (doc) {
+              doc.title = `Sales_Invoice_${invId}`;
+              if (doc.head) {
+                if (doc.getElementById('pms-custom-print-style')) return;
+                const style = doc.createElement('style');
+                style.id = 'pms-custom-print-style';
+                style.innerHTML = `
+                  .action-banner { display: none !important; }
+                  @page { size: auto; margin: 0mm; }
+                  @media print {
+                    @page { size: auto; margin: 0mm; }
+                    body { margin: 15mm !important; padding: 0px !important; }
+                    .action-banner, .action-bar, header, footer { display: none !important; }
+                  }
+                `;
+                doc.head.appendChild(style);
+                setTimeout(() => {
+                  try {
+                    printWindow.print();
+                  } catch (e) { }
+                }, 500);
+              }
+            }
+          } catch (e) {
+            // Handled cross-origin
+          }
+        };
+
+        if (printWindow.addEventListener) {
+          printWindow.addEventListener('load', injectAndPrint, true);
+        }
+        setTimeout(injectAndPrint, 1200);
+      }
+    } else {
+      setActiveReceipt(target);
+    }
   };
 
   // GL and Trial Balance Calculation from existing invoices
@@ -1195,31 +1322,46 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                 </tr>
               </thead>
               <tbody>
-                {currentItems.map(inv => (
-                  <tr
-                    key={inv.id}
-                    onClick={() => setSelectedInvoice(inv)}
-                    style={{
-                      cursor: 'pointer',
-                      backgroundColor: selectedInvoice?.id === inv.id ? 'var(--bg-accent-alpha)' : '',
-                      borderLeft: selectedInvoice?.id === inv.id ? '3px solid var(--brand-color)' : ''
-                    }}
-                  >
-                    <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{inv.id}</td>
-                    <td style={{ fontWeight: 600 }}>{inv.tenantName}</td>
-                    <td style={{ color: 'var(--text-secondary)' }}>
-                      {selectedInvoice?.id === inv.id && invoiceDetailsExtra?.unitName
-                        ? invoiceDetailsExtra.unitName
-                        : (inv.propertyId || 'Unit-N/A')}
-                    </td>
-                    <td style={{ fontWeight: 600 }}>${inv.amount.toLocaleString()}</td>
-                    <td>
-                      <span className={`badge ${inv.status === 'paid' ? 'badge-success' : 'badge-warning'}`}>
-                        {inv.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {currentItems.map(inv => {
+                  const s = String(inv.status || '').toLowerCase();
+                  const badgeColor = s === 'paid' ? { bg: '#d1fae5', color: '#065f46', text: 'PAID' }
+                    : s === 'draft' ? { bg: '#e0f2fe', color: '#0369a1', text: 'DRAFT' }
+                      : (s === 'overdue' || s === 'cancelled') ? { bg: '#fee2e2', color: '#991b1b', text: s.toUpperCase() }
+                        : { bg: '#fef3c7', color: '#92400e', text: 'PENDING' };
+
+                  return (
+                    <tr
+                      key={inv.id}
+                      onClick={() => setSelectedInvoice(inv)}
+                      style={{
+                        cursor: 'pointer',
+                        backgroundColor: selectedInvoice?.id === inv.id ? 'var(--bg-accent-alpha)' : '',
+                        borderLeft: selectedInvoice?.id === inv.id ? '3px solid var(--brand-color)' : ''
+                      }}
+                    >
+                      <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{inv.id}</td>
+                      <td style={{ fontWeight: 600 }}>{inv.tenantName}</td>
+                      <td style={{ color: 'var(--text-secondary)' }}>
+                        {selectedInvoice?.id === inv.id && invoiceDetailsExtra?.unitName
+                          ? invoiceDetailsExtra.unitName
+                          : (inv.propertyId || 'Unit-N/A')}
+                      </td>
+                      <td style={{ fontWeight: 600 }}>${Number(inv.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td>
+                        <span style={{
+                          padding: '2px 8px',
+                          borderRadius: 10,
+                          fontSize: 9,
+                          fontWeight: 700,
+                          backgroundColor: badgeColor.bg,
+                          color: badgeColor.color
+                        }}>
+                          {badgeColor.text}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1227,229 +1369,365 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
         </div>
 
         {/* Selected Invoice PRINT FORMAT Panel (at right side) */}
-        {selectedInvoice && (
-          <div className="card-panel" style={{ padding: 24, background: '#ffffff', color: '#111827', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 16, animation: 'fadeIn 0.2s ease-out', position: 'relative' }}>
+        {selectedInvoice && (() => {
+          const doc = (invoiceDetailsExtra?.rawDoc?.name === selectedInvoice.id)
+            ? invoiceDetailsExtra.rawDoc
+            : (selectedInvoice?.rawDoc || null);
 
-            {/* Close details button */}
-            <button
-              onClick={() => setSelectedInvoice(null)}
-              style={{ position: 'absolute', top: 12, right: 12, background: '#f3f4f6', border: 'none', borderRadius: '50%', color: '#374151', cursor: 'pointer', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            >
-              ×
-            </button>
-            {/* TOP HEADER SECTION */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e5e7eb', paddingBottom: 14 }}>
-              {/* Top Left: Logo & Owner Details */}
-              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                <svg viewBox="0 0 100 100" style={{ width: 42, height: 42, minWidth: 42, borderRadius: 6, display: 'inline-block' }}>
-                  <rect width="100" height="100" fill="#000000" rx="12" />
-                  <circle cx="50" cy="50" r="36" fill="#FFDD00" />
-                  <polygon points="50,50 86,14 100,14 100,86 86,86" fill="#000000" />
-                  <line x1="24" y1="76" x2="50" y2="50" stroke="#000000" strokeWidth="5.5" strokeLinecap="round" />
-                </svg>
-                <div style={{ fontSize: 10, color: '#4b5563', lineHeight: 1.3 }}>
-                  <h4 style={{ color: '#111827', fontWeight: 800, fontSize: 13, marginBottom: 4, letterSpacing: '0.02em' }}>{companyDetails.name}</h4>
-                  <p>{companyDetails.address}</p>
-                  <p>Tel: {companyDetails.phone || '+65 6123 4567'}</p>
-                  <p>Email: {companyDetails.email || 'info@carpentersproperties.com'}</p>
-                  <p>{companyDetails.website}</p>
+          const activeCurrency = doc?.currency || invoiceDetailsExtra?.currency || companyDetails.currency || 'FJD';
+
+          const itemsList = (doc?.items && doc.items.length > 0)
+            ? doc.items
+            : (invoiceDetailsExtra?.billingItems && invoiceDetailsExtra.billingItems.length > 0)
+              ? invoiceDetailsExtra.billingItems
+              : [
+                {
+                  item_code: selectedInvoice.propertyId || 'Rent',
+                  item_name: 'Property Rent / Lease Space',
+                  qty: 1,
+                  rate: selectedInvoice.amount,
+                  amount: selectedInvoice.amount
+                }
+              ];
+
+          const taxesList = (doc?.taxes && doc.taxes.length > 0)
+            ? doc.taxes
+            : (invoiceDetailsExtra?.taxes && invoiceDetailsExtra.taxes.length > 0)
+              ? invoiceDetailsExtra.taxes
+              : [];
+
+          const netTotal = doc?.net_total ?? doc?.total ?? selectedInvoice.amount;
+          const totalTaxes = doc?.total_taxes_and_charges ?? (taxesList.reduce((sum, t) => sum + (Number(t.tax_amount) || 0), 0));
+          const roundingAdjustment = doc?.rounding_adjustment != null ? Number(doc.rounding_adjustment) : 0;
+          const grandTotal = doc?.rounded_total ?? doc?.grand_total ?? (Number(netTotal) + Number(totalTaxes) + roundingAdjustment);
+          const outstandingAmount = doc?.outstanding_amount !== undefined ? Number(doc.outstanding_amount) : (selectedInvoice.status === 'paid' ? 0 : grandTotal);
+
+          const words = doc?.in_words || selectedInvoice?.in_words || numberToWords(Math.round(grandTotal), activeCurrency);
+
+          const displayStatus = (doc?.status || selectedInvoice.status || 'Draft').toUpperCase();
+
+          const getBillingPeriod = () => {
+            if (doc?.start_date && doc?.end_date) {
+              return `${formatInvoiceDate(doc.start_date)} - ${formatInvoiceDate(doc.end_date)}`;
+            }
+            if (selectedInvoice.startDate && selectedInvoice.endDate) {
+              return `${formatInvoiceDate(selectedInvoice.startDate)} - ${formatInvoiceDate(selectedInvoice.endDate)}`;
+            }
+            if (selectedInvoice.issuedDate) {
+              const d = new Date(selectedInvoice.issuedDate);
+              if (!isNaN(d.getTime())) {
+                const year = d.getFullYear();
+                const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                const month = monthNames[d.getMonth()];
+                const lastDay = new Date(year, d.getMonth() + 1, 0).getDate();
+                return `01 ${month} ${year} - ${lastDay} ${month} ${year}`;
+              }
+            }
+            return 'N/A';
+          };
+
+          return (
+            <div className="card-panel" style={{ padding: 24, background: '#ffffff', color: '#111827', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 16, animation: 'fadeIn 0.2s ease-out', position: 'relative' }}>
+
+              {/* Close details button */}
+              <button
+                onClick={() => setSelectedInvoice(null)}
+                style={{ position: 'absolute', top: 12, right: 12, background: '#f3f4f6', border: 'none', borderRadius: '50%', color: '#374151', cursor: 'pointer', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                title="Close details"
+              >
+                ×
+              </button>
+
+              {/* TOP HEADER SECTION */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e5e7eb', paddingBottom: 14 }}>
+                {/* Top Left: Logo & Owner Details */}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <svg viewBox="0 0 100 100" style={{ width: 42, height: 42, minWidth: 42, borderRadius: 6, display: 'inline-block' }}>
+                    <rect width="100" height="100" fill="#000000" rx="12" />
+                    <circle cx="50" cy="50" r="36" fill="#FFDD00" />
+                    <polygon points="50,50 86,14 100,14 100,86 86,86" fill="#000000" />
+                    <line x1="24" y1="76" x2="50" y2="50" stroke="#000000" strokeWidth="5.5" strokeLinecap="round" />
+                  </svg>
+                  <div style={{ fontSize: 10, color: '#4b5563', lineHeight: 1.3 }}>
+                    <h4 style={{ color: '#111827', fontWeight: 800, fontSize: 13, marginBottom: 4, letterSpacing: '0.02em' }}>
+                      {doc?.company || companyDetails.name || 'CARPENTERS PROPERTIES PTE LIMITED'}
+                    </h4>
+                    {renderAddressDisplay(doc?.company_address_display, companyDetails.address || '40 Robertson Road, Suva, Fiji')}
+                    <p style={{ marginTop: 2 }}>Tel: {companyDetails.phone || '+679-2341897'}</p>
+                    <p>Email: {companyDetails.email || 'info@carpentersproperties.com'}</p>
+                    <p>{companyDetails.website || 'www.carpentersproperties.com'}</p>
+                  </div>
+                </div>
+
+                {/* Top Right: Invoice Details */}
+                <div style={{ textAlign: 'right', fontSize: 11, color: '#4b5563', lineHeight: 1.4 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginBottom: 4 }}>
+                    <h3 style={{ color: '#111827', fontWeight: 800, fontSize: 16, margin: 0, letterSpacing: '0.03em' }}>TAX INVOICE</h3>
+                    {loadingExtra && <Loader2 size={13} className="animate-spin" style={{ color: 'var(--brand-color)' }} />}
+                  </div>
+                  <p><span style={{ color: '#6b7280' }}>Invoice No:</span> &nbsp;<strong>{doc?.name || selectedInvoice.id}</strong></p>
+                  <p><span style={{ color: '#6b7280' }}>Posting Date:</span> &nbsp;{formatInvoiceDate(doc?.posting_date || selectedInvoice.issuedDate)}</p>
+                  <p><span style={{ color: '#6b7280' }}>Due Date:</span> &nbsp;{formatInvoiceDate(doc?.due_date || selectedInvoice.dueDate)}</p>
+                  <p style={{ marginTop: 6 }}>
+                    <span style={{
+                      padding: '2px 8px',
+                      borderRadius: 10,
+                      fontSize: 9,
+                      fontWeight: 700,
+                      backgroundColor: displayStatus === 'PAID' ? '#d1fae5' : displayStatus === 'DRAFT' ? '#e0f2fe' : '#fef3c7',
+                      color: displayStatus === 'PAID' ? '#065f46' : displayStatus === 'DRAFT' ? '#0369a1' : '#92400e'
+                    }}>
+                      {displayStatus}
+                    </span>
+                  </p>
                 </div>
               </div>
 
-              {/* Top Right: Invoice Details */}
-              <div style={{ textAlign: 'right', fontSize: 11, color: '#4b5563', lineHeight: 1.4 }}>
-                <h3 style={{ color: '#111827', fontWeight: 800, fontSize: 16, margin: '0 0 6px 0', letterSpacing: '0.03em' }}>TAX INVOICE</h3>
-                <p><span style={{ color: '#6b7280' }}>Invoice Number</span> &nbsp;&nbsp; {selectedInvoice.id}</p>
-                <p><span style={{ color: '#6b7280' }}>Date</span> &nbsp;&nbsp; {selectedInvoice.issuedDate}</p>
-                <p style={{ marginTop: 6 }}>
-                  <span style={{
-                    padding: '2px 8px',
-                    borderRadius: 10,
-                    fontSize: 9,
-                    fontWeight: 700,
-                    backgroundColor: selectedInvoice.status === 'paid' ? '#d1fae5' : '#fef3c7',
-                    color: selectedInvoice.status === 'paid' ? '#065f46' : '#92400e'
-                  }}>
-                    {selectedInvoice.status.toUpperCase()}
+              {/* BILL TO & PROPERTY ADDRESS */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, fontSize: 10, paddingBottom: 10 }}>
+                <div>
+                  <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>BILL TO</span>
+                  <span style={{ display: 'block', color: '#111827', fontWeight: 700, fontSize: 12, marginBottom: 2 }}>
+                    {doc?.customer_name || selectedInvoice.tenantName || 'Tenant'}
                   </span>
-                </p>
-              </div>
-            </div>
+                  {(doc?.customer || selectedInvoice.customer) && (
+                    <div style={{ fontSize: 9, color: '#6b7280', marginBottom: 4 }}>
+                      Customer Code: <strong>{doc?.customer || selectedInvoice.customer}</strong>
+                    </div>
+                  )}
+                  <div style={{ color: '#4b5563', lineHeight: 1.35 }}>
+                    {renderAddressDisplay(doc?.address_display, invoiceDetailsExtra?.customerAddress || 'Suva, Fiji')}
+                  </div>
+                </div>
 
-            {/* BILL TO & PROPERTY ADDRESS */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, fontSize: 10, paddingBottom: 10 }}>
-              <div>
-                <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>BILL TO</span>
-                <strong style={{ fontSize: 11, color: '#111827', display: 'block' }}>Tenant Name</strong>
-                <span style={{ display: 'block', color: '#111827', fontWeight: 600, marginBottom: 4 }}>{selectedInvoice.tenantName}</span>
-                <p style={{ color: '#4b5563', lineHeight: 1.3 }}>{invoiceDetailsExtra?.customerAddress || '10 Anson Road, #15-02, International Plaza, Singapore 079903'}</p>
+                <div>
+                  <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>PROPERTY & LEASE DETAILS</span>
+                  <strong style={{ fontSize: 11, color: '#111827', display: 'block', marginBottom: 2 }}>
+                    {invoiceDetailsExtra?.unitName || (doc?.items && doc.items[0]?.item_code) || selectedInvoice.propertyId}
+                  </strong>
+                  <p style={{ color: '#4b5563', lineHeight: 1.3, marginBottom: 4 }}>
+                    {invoiceDetailsExtra?.unitAddress || 'Carpenters Properties, Suva, Fiji'}
+                  </p>
+                  {(doc?.booking_id || selectedInvoice.booking_id) && (
+                    <div style={{ fontSize: 9, color: '#374151', marginBottom: 2 }}>
+                      <span style={{ color: '#6b7280' }}>Booking Ref:</span> &nbsp;
+                      <strong style={{ color: 'var(--brand-color, #111827)' }}>{doc?.booking_id || selectedInvoice.booking_id}</strong>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 9, color: '#374151' }}>
+                    <span style={{ color: '#6b7280' }}>Billing Period:</span> &nbsp;
+                    <strong>{getBillingPeriod()}</strong>
+                  </div>
+                </div>
               </div>
-              <div>
-                <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>PROPERTY ADDRESS</span>
-                <strong style={{ fontSize: 11, color: '#111827', display: 'block', marginBottom: 2 }}>{invoiceDetailsExtra?.unitName || selectedInvoice.propertyId}</strong>
-                <p style={{ color: '#4b5563', lineHeight: 1.3 }}>{invoiceDetailsExtra?.unitAddress || '10 Anson Road, #15-02, International Plaza, Singapore 079903'}</p>
-              </div>
-            </div>
 
-            {/* MIDDLE: LINE ITEMS TABLE */}
-            <div style={{ border: '1px solid #e5e7eb', borderRadius: 4, overflow: 'hidden' }}>
-              {(() => {
-                const getBillingPeriod = (dateStr) => {
-                  if (!dateStr) return '01 Jun 2024 - 30 Jun 2024';
-                  const d = new Date(dateStr);
-                  if (isNaN(d.getTime())) return '01 Jun 2024 - 30 Jun 2024';
-                  const year = d.getFullYear();
-                  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                  const month = monthNames[d.getMonth()];
-                  const lastDay = new Date(year, d.getMonth() + 1, 0).getDate();
-                  return `01 ${month} ${year} - ${lastDay} ${month} ${year}`;
-                };
-                const activeCurrency = invoiceDetailsExtra?.currency || companyDetails.currency || 'SGD';
-                const baseRent = Math.round(selectedInvoice.amount * 0.8);
-                const serviceCharge = Math.round(selectedInvoice.amount * 0.12);
-                const propertyTax = Math.round(selectedInvoice.amount * 0.08);
-                const vatVal = Math.round(selectedInvoice.amount * 0.125);
-                const periodStr = getBillingPeriod(selectedInvoice.issuedDate);
-
-                return (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
-                    <thead>
-                      <tr style={{ background: '#1f2937', color: '#ffffff', borderBottom: '1px solid #374151' }}>
-                        <th style={{ padding: '8px 10px', color: '#ffffff' }}>Description</th>
-                        <th style={{ padding: '8px 10px', color: '#ffffff' }}>Period</th>
-                        <th style={{ padding: '8px 10px', textAlign: 'right', color: '#ffffff' }}>Amount ({activeCurrency})</th>
+              {/* MIDDLE: LINE ITEMS TABLE */}
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ background: '#1f2937', color: '#ffffff', borderBottom: '1px solid #374151' }}>
+                      <th style={{ padding: '8px 10px', color: '#ffffff' }}>Item & Description</th>
+                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'center', width: 50 }}>Qty</th>
+                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'right', width: 90 }}>Rate</th>
+                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'right', width: 100 }}>Amount ({activeCurrency})</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemsList.map((item, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                        <td style={{ padding: '8px 10px', color: '#111827' }}>
+                          <div style={{ fontWeight: 600 }}>{item.item_name || item.item_code}</div>
+                          {item.description && item.description !== item.item_name && item.description !== item.item_code && (
+                            <div style={{ fontSize: 9, color: '#6b7280', marginTop: 1 }}>{item.description}</div>
+                          )}
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'center', color: '#4b5563' }}>
+                          {item.qty || 1}
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', color: '#4b5563' }}>
+                          $ {(Number(item.rate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#111827' }}>
+                          $ {(Number(item.amount != null ? item.amount : ((item.qty || 1) * (item.rate || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
+                    ))}
+
+                    {/* Subtotal (Net Total) */}
+                    <tr style={{ borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
+                      <td colSpan="3" style={{ padding: '8px 10px', color: '#374151', fontWeight: 600, textAlign: 'right' }}>
+                        Net Total / Subtotal
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#374151' }}>
+                        $ {Number(netTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+
+                    {/* Taxes Breakdown */}
+                    {taxesList.length > 0 ? (
+                      taxesList.map((tax, tIdx) => (
+                        <tr key={tIdx} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                          <td colSpan="3" style={{ padding: '6px 10px', color: '#4b5563', fontWeight: 500, textAlign: 'right' }}>
+                            {tax.description || tax.account_head || 'VAT / Tax'} {tax.rate ? `(${tax.rate}%)` : ''}
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#4b5563' }}>
+                            $ {(Number(tax.tax_amount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      ))
+                    ) : totalTaxes > 0 ? (
                       <tr style={{ borderBottom: '1px solid #f3f4f6' }}>
-                        <td style={{ padding: '8px 10px', color: '#111827', fontWeight: 500 }}>Rent</td>
-                        <td style={{ padding: '8px 10px', color: '#4b5563' }}>{periodStr}</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{baseRent.toLocaleString()}.00</td>
+                        <td colSpan="3" style={{ padding: '6px 10px', color: '#4b5563', fontWeight: 500, textAlign: 'right' }}>
+                          Taxes & Charges (12.5%)
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#4b5563' }}>
+                          $ {Number(totalTaxes).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
                       </tr>
+                    ) : null}
+
+                    {/* Rounding Adjustment if any */}
+                    {roundingAdjustment !== 0 && (
                       <tr style={{ borderBottom: '1px solid #f3f4f6' }}>
-                        <td style={{ padding: '8px 10px', color: '#111827', fontWeight: 500 }}>Service Charge</td>
-                        <td style={{ padding: '8px 10px', color: '#4b5563' }}>{periodStr}</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{serviceCharge.toLocaleString()}.00</td>
+                        <td colSpan="3" style={{ padding: '4px 10px', color: '#6b7280', fontSize: 9, textAlign: 'right' }}>
+                          Rounding Adjustment
+                        </td>
+                        <td style={{ padding: '4px 10px', textAlign: 'right', fontSize: 9, color: '#6b7280' }}>
+                          $ {roundingAdjustment.toFixed(2)}
+                        </td>
                       </tr>
-                      <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                        <td style={{ padding: '8px 10px', color: '#111827', fontWeight: 500 }}>Property Tax</td>
-                        <td style={{ padding: '8px 10px', color: '#4b5563' }}>{periodStr}</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{propertyTax.toLocaleString()}.00</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
-                        <td colSpan="2" style={{ padding: '8px 10px', color: '#374151', fontWeight: 600, textAlign: 'right' }}>Subtotal</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#374151' }}>{selectedInvoice.amount.toLocaleString()}.00</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                        <td colSpan="2" style={{ padding: '8px 10px', color: '#4b5563', fontWeight: 600, textAlign: 'right' }}>VAT (12.5%)</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{vatVal.toLocaleString()}.00</td>
-                      </tr>
-                      <tr style={{ background: '#f3f4f6', borderTop: '2px solid #e5e7eb' }}>
-                        <td colSpan="2" style={{ padding: '8px 10px', fontWeight: 800, color: '#111827', textAlign: 'right' }}>Total Amount Due ({activeCurrency})</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: '#111827', fontSize: 11 }}>{(selectedInvoice.amount + vatVal).toLocaleString()}.00</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                );
-              })()}
-            </div>
+                    )}
 
-            {/* AMOUNT IN WORDS */}
-            <div style={{ background: '#f9fafb', padding: '10px 12px', borderRadius: 4, fontSize: 10, color: '#374151', borderLeft: '3px solid #1f2937' }}>
-              <span style={{ fontWeight: 700, textTransform: 'uppercase', display: 'block', fontSize: 8, color: '#6b7280', marginBottom: 2 }}>Amount in Words:</span>
-              <strong>{numberToWords(Math.round(selectedInvoice.amount * 1.125))}</strong>
-            </div>
+                    {/* Total Amount Due */}
+                    <tr style={{ background: '#f3f4f6', borderTop: '2px solid #e5e7eb' }}>
+                      <td colSpan="3" style={{ padding: '8px 10px', fontWeight: 800, color: '#111827', textAlign: 'right' }}>
+                        Total Amount Due ({activeCurrency})
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: '#111827', fontSize: 11 }}>
+                        $ {Number(grandTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
 
-            {/* BOTTOM SECTION: BANK & TERMS & QR */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20, borderTop: '1px solid #e5e7eb', paddingTop: 14, fontSize: 9, color: '#4b5563', lineHeight: 1.4 }}>
-              {/* Payment Info & Bank Details */}
-              <div>
-                <strong style={{ color: '#111827', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>PAYMENT INFORMATION</strong>
-                <p style={{ marginBottom: 6 }}>Please make payment by {selectedInvoice.dueDate} to the following account:</p>
-                <p><span style={{ color: '#6b7280' }}>Bank Name:</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>DBS Bank Ltd</strong></p>
-                <p><span style={{ color: '#6b7280' }}>Account Name:</span> &nbsp;&nbsp; <strong>{companyDetails.name}</strong></p>
-                <p><span style={{ color: '#6b7280' }}>Account Number:</span> <strong>123-456789-0</strong></p>
-                <p><span style={{ color: '#6b7280' }}>Swift Code:</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>DBSSGSGXXX</strong></p>
-
-                <p style={{ marginTop: 12, fontStyle: 'italic', fontSize: 8, color: '#6b7280' }}>
-                  Thank you for your business.<br />
-                  This is a computer-generated invoice. No signature is required.
-                </p>
+                    {/* Outstanding Balance if different or paid */}
+                    {displayStatus === 'PAID' || outstandingAmount === 0 ? (
+                      <tr style={{ background: '#ecfdf5', borderTop: '1px solid #d1fae5' }}>
+                        <td colSpan="3" style={{ padding: '6px 10px', fontWeight: 700, color: '#065f46', textAlign: 'right' }}>
+                          Balance Outstanding (Paid)
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#065f46', fontSize: 10 }}>
+                          $ 0.00
+                        </td>
+                      </tr>
+                    ) : outstandingAmount > 0 && outstandingAmount !== grandTotal ? (
+                      <tr style={{ background: '#fffbeb', borderTop: '1px solid #fef3c7' }}>
+                        <td colSpan="3" style={{ padding: '6px 10px', fontWeight: 700, color: '#92400e', textAlign: 'right' }}>
+                          Outstanding Balance Due
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#92400e', fontSize: 10 }}>
+                          $ {Number(outstandingAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </div>
 
-              {/* Scan to Pay QR */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderLeft: '1px solid #e5e7eb', paddingLeft: 20 }}>
-                <span style={{ fontSize: 9, color: '#111827', marginBottom: 6, textTransform: 'uppercase', fontWeight: 700 }}>SCAN TO PAY</span>
-                <svg viewBox="0 0 100 100" style={{ width: 64, height: 64 }}>
-                  <rect width="100" height="100" fill="#ffffff" />
-                  <rect x="5" y="5" width="25" height="25" fill="#000000" />
-                  <rect x="8" y="8" width="19" height="19" fill="#ffffff" />
-                  <rect x="11" y="11" width="13" height="13" fill="#000000" />
-                  <rect x="70" y="5" width="25" height="25" fill="#000000" />
-                  <rect x="73" y="8" width="19" height="19" fill="#ffffff" />
-                  <rect x="76" y="11" width="13" height="13" fill="#000000" />
-                  <rect x="5" y="70" width="25" height="25" fill="#000000" />
-                  <rect x="8" y="73" width="19" height="19" fill="#ffffff" />
-                  <rect x="11" y="76" width="13" height="13" fill="#000000" />
-                  <rect x="35" y="10" width="5" height="5" fill="#000000" />
-                  <rect x="45" y="15" width="10" height="5" fill="#000000" />
-                  <rect x="35" y="25" width="15" height="5" fill="#000000" />
-                  <rect x="55" y="25" width="5" height="10" fill="#000000" />
-                  <rect x="25" y="35" width="10" height="10" fill="#000000" />
-                  <rect x="50" y="35" width="10" height="5" fill="#000000" />
-                  <rect x="15" y="45" width="5" height="15" fill="#000000" />
-                  <rect x="35" y="50" width="15" height="5" fill="#000000" />
-                  <rect x="65" y="40" width="15" height="10" fill="#000000" />
-                  <rect x="45" y="65" width="10" height="5" fill="#000000" />
-                  <rect x="60" y="60" width="20" height="5" fill="#000000" />
-                  <rect x="80" y="70" width="10" height="15" fill="#000000" />
-                </svg>
+              {/* AMOUNT IN WORDS */}
+              <div style={{ background: '#f9fafb', padding: '10px 12px', borderRadius: 4, fontSize: 10, color: '#374151', borderLeft: '3px solid #1f2937' }}>
+                <span style={{ fontWeight: 700, textTransform: 'uppercase', display: 'block', fontSize: 8, color: '#6b7280', marginBottom: 2 }}>Amount in Words:</span>
+                <strong>{words}</strong>
               </div>
-            </div>
 
-            {/* Terms and Conditions Collapsible - Statically Rendered */}
-            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 'var(--radius-md)', padding: 12, fontSize: 9, color: '#4b5563' }}>
-              <strong style={{ color: '#111827', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>Terms & Conditions</strong>
-              <p>1. Settle all invoice amounts within 10 days of the date of issue.</p>
-              <p>2. Overdue payments will be charged interest at a rate of 1.5% per month.</p>
-              <p>3. Payments are subject to standard Singapore Carpenters commercial tenant policies.</p>
-              <p>4. Billing disputes must be raised in writing within 5 business days of receipt.</p>
-            </div>
+              {/* BOTTOM SECTION: BANK & TERMS & QR */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20, borderTop: '1px solid #e5e7eb', paddingTop: 14, fontSize: 9, color: '#4b5563', lineHeight: 1.4 }}>
+                {/* Payment Info & Bank Details */}
+                <div>
+                  <strong style={{ color: '#111827', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>PAYMENT INFORMATION</strong>
+                  <p style={{ marginBottom: 6 }}>Please make payment by {formatInvoiceDate(doc?.due_date || selectedInvoice.dueDate)} to the following account:</p>
+                  <p><span style={{ color: '#6b7280' }}>Bank Name:</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>Bank of South Pacific (BSP) / ANZ Fiji</strong></p>
+                  <p><span style={{ color: '#6b7280' }}>Account Name:</span> &nbsp;&nbsp; <strong>{doc?.company || companyDetails.name || 'Carpenters Properties Pte Limited'}</strong></p>
+                  <p><span style={{ color: '#6b7280' }}>Account Number:</span> <strong>9801234567</strong></p>
+                  <p><span style={{ color: '#6b7280' }}>Swift Code:</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>BOSPFJ22</strong></p>
 
-            {/* Action buttons */}
-            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              {selectedInvoice.status === 'pending' && (
+                  <p style={{ marginTop: 12, fontStyle: 'italic', fontSize: 8, color: '#6b7280' }}>
+                    Thank you for your business.<br />
+                    This is a computer-generated invoice. No signature is required.
+                  </p>
+                </div>
+
+                {/* Scan to Pay QR */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderLeft: '1px solid #e5e7eb', paddingLeft: 20 }}>
+                  <span style={{ fontSize: 9, color: '#111827', marginBottom: 6, textTransform: 'uppercase', fontWeight: 700 }}>SCAN TO PAY</span>
+                  <svg viewBox="0 0 100 100" style={{ width: 64, height: 64 }}>
+                    <rect width="100" height="100" fill="#ffffff" />
+                    <rect x="5" y="5" width="25" height="25" fill="#000000" />
+                    <rect x="8" y="8" width="19" height="19" fill="#ffffff" />
+                    <rect x="11" y="11" width="13" height="13" fill="#000000" />
+                    <rect x="70" y="5" width="25" height="25" fill="#000000" />
+                    <rect x="73" y="8" width="19" height="19" fill="#ffffff" />
+                    <rect x="76" y="11" width="13" height="13" fill="#000000" />
+                    <rect x="5" y="70" width="25" height="25" fill="#000000" />
+                    <rect x="8" y="73" width="19" height="19" fill="#ffffff" />
+                    <rect x="11" y="76" width="13" height="13" fill="#000000" />
+                    <rect x="35" y="10" width="5" height="5" fill="#000000" />
+                    <rect x="45" y="15" width="10" height="5" fill="#000000" />
+                    <rect x="35" y="25" width="15" height="5" fill="#000000" />
+                    <rect x="55" y="25" width="5" height="10" fill="#000000" />
+                    <rect x="25" y="35" width="10" height="10" fill="#000000" />
+                    <rect x="50" y="35" width="10" height="5" fill="#000000" />
+                    <rect x="15" y="45" width="5" height="15" fill="#000000" />
+                    <rect x="35" y="50" width="15" height="5" fill="#000000" />
+                    <rect x="65" y="40" width="15" height="10" fill="#000000" />
+                    <rect x="45" y="65" width="10" height="5" fill="#000000" />
+                    <rect x="60" y="60" width="20" height="5" fill="#000000" />
+                    <rect x="80" y="70" width="10" height="15" fill="#000000" />
+                  </svg>
+                </div>
+              </div>
+
+              {/* Terms and Conditions */}
+              <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 'var(--radius-md)', padding: 12, fontSize: 9, color: '#4b5563' }}>
+                <strong style={{ color: '#111827', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>Terms & Conditions</strong>
+                <p>1. Settle all invoice amounts on or before the specified due date.</p>
+                <p>2. Overdue payments will incur interest as per commercial tenancy agreement.</p>
+                <p>3. Payments are subject to Carpenters Properties commercial leasing terms.</p>
+                <p>4. Billing disputes must be raised in writing within 5 business days of receipt.</p>
+              </div>
+
+              {/* Action buttons */}
+              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {(selectedInvoice.status === 'pending' || displayStatus === 'DRAFT' || displayStatus === 'UNPAID') && (
+                  <button
+                    className="btn btn-primary"
+                    style={{ flex: 1, minWidth: 140, fontSize: 11, gap: 6, background: '#ffdd00', color: '#000' }}
+                    onClick={() => {
+                      onRecordPayment(selectedInvoice.id);
+                      setSelectedInvoice({ ...selectedInvoice, status: 'paid' });
+                    }}
+                  >
+                    <CheckCircle2 size={13} /> Record Payment Received
+                  </button>
+                )}
                 <button
-                  className="btn btn-primary"
-                  style={{ flex: 1, minWidth: 140, fontSize: 11, gap: 6, background: '#ffdd00', color: '#000' }}
+                  className="btn btn-secondary"
+                  style={{ flex: 1, minWidth: 100, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
+                  onClick={() => handlePrint(selectedInvoice)}
+                >
+                  <Printer size={13} /> Print Invoice
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ flex: 1, minWidth: 120, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
                   onClick={() => {
-                    onRecordPayment(selectedInvoice.id);
-                    setSelectedInvoice({ ...selectedInvoice, status: 'paid' });
+                    alert(`Emailing Tax Invoice ${selectedInvoice.id} to tenant address: ${invoiceDetailsExtra?.customerAddress || 'Customer registered address'}`);
                   }}
                 >
-                  <CheckCircle2 size={13} /> Record Payment Received
+                  <Mail size={13} /> Send Email
                 </button>
-              )}
-              {/* Hidden: Print button preserved per request */}
-              {/* <button 
-                className="btn btn-secondary" 
-                style={{ flex: 1, minWidth: 100, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
-                onClick={() => handlePrint(selectedInvoice)}
-              >
-                <Printer size={13} /> Print Official PDF
-              </button> */}
-              <button
-                className="btn btn-secondary"
-                style={{ flex: 1, minWidth: 120, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
-                onClick={() => {
-                  alert(`Emailing Tax Invoice ${selectedInvoice.id} to tenant address: ${invoiceDetailsExtra?.customerAddress || 'Customer registered address'}`);
-                }}
-              >
-                <Mail size={13} /> Send Email
-              </button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* GENERAL LEDGER & TRIAL BALANCE MODAL */}
@@ -2628,207 +2906,338 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       )}
 
       {/* Print Receipt Modal */}
-      {activeReceipt && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ position: 'relative', maxWidth: 650, padding: 30, background: '#ffffff', color: '#111827', borderRadius: 'var(--radius-lg)' }}>
+      {activeReceipt && (() => {
+        const doc = (invoiceDetailsExtra?.rawDoc?.name === activeReceipt.id)
+          ? invoiceDetailsExtra.rawDoc
+          : (activeReceipt?.rawDoc || null);
 
-            <button
-              onClick={() => setActiveReceipt(null)}
-              style={{ position: 'absolute', top: 12, right: 12, background: '#f3f4f6', border: 'none', borderRadius: '50%', color: '#374151', cursor: 'pointer', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 16 }}
-            >
-              ×
-            </button>
+        const activeCurrency = doc?.currency || invoiceDetailsExtra?.currency || companyDetails.currency || 'FJD';
 
-            {/* TOP HEADER SECTION */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e5e7eb', paddingBottom: 14, marginBottom: 16 }}>
-              {/* Top Left: Logo & Owner Details */}
-              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                <svg viewBox="0 0 100 100" style={{ width: 42, height: 42, minWidth: 42, borderRadius: 6, display: 'inline-block' }}>
-                  <rect width="100" height="100" fill="#000000" rx="12" />
-                  <circle cx="50" cy="50" r="36" fill="#FFDD00" />
-                  <polygon points="50,50 86,14 100,14 100,86 86,86" fill="#000000" />
-                  <line x1="24" y1="76" x2="50" y2="50" stroke="#000000" strokeWidth="5.5" strokeLinecap="round" />
-                </svg>
-                <div style={{ fontSize: 10, color: '#4b5563', lineHeight: 1.3 }}>
-                  <h4 style={{ color: '#111827', fontWeight: 800, fontSize: 14, marginBottom: 4, letterSpacing: '0.02em' }}>{companyDetails.name}</h4>
-                  <p>{companyDetails.address}</p>
-                  <p>Tel: {companyDetails.phone || '+65 6123 4567'}</p>
-                  <p>Email: {companyDetails.email || 'info@carpentersproperties.com'}</p>
-                  <p>{companyDetails.website}</p>
+        const itemsList = (doc?.items && doc.items.length > 0)
+          ? doc.items
+          : (invoiceDetailsExtra?.billingItems && invoiceDetailsExtra.billingItems.length > 0)
+            ? invoiceDetailsExtra.billingItems
+            : [
+              {
+                item_code: activeReceipt.propertyId || 'Rent',
+                item_name: 'Property Rent / Lease Space',
+                qty: 1,
+                rate: activeReceipt.amount,
+                amount: activeReceipt.amount
+              }
+            ];
+
+        const taxesList = (doc?.taxes && doc.taxes.length > 0)
+          ? doc.taxes
+          : (invoiceDetailsExtra?.taxes && invoiceDetailsExtra.taxes.length > 0)
+            ? invoiceDetailsExtra.taxes
+            : [];
+
+        const netTotal = doc?.net_total ?? doc?.total ?? activeReceipt.amount;
+        const totalTaxes = doc?.total_taxes_and_charges ?? (taxesList.reduce((sum, t) => sum + (Number(t.tax_amount) || 0), 0));
+        const roundingAdjustment = doc?.rounding_adjustment != null ? Number(doc.rounding_adjustment) : 0;
+        const grandTotal = doc?.rounded_total ?? doc?.grand_total ?? (Number(netTotal) + Number(totalTaxes) + roundingAdjustment);
+        const outstandingAmount = doc?.outstanding_amount !== undefined ? Number(doc.outstanding_amount) : (activeReceipt.status === 'paid' ? 0 : grandTotal);
+
+        const words = doc?.in_words || activeReceipt?.in_words || numberToWords(Math.round(grandTotal), activeCurrency);
+        const displayStatus = (doc?.status || activeReceipt.status || 'Draft').toUpperCase();
+
+        const getBillingPeriod = () => {
+          if (doc?.start_date && doc?.end_date) {
+            return `${formatInvoiceDate(doc.start_date)} - ${formatInvoiceDate(doc.end_date)}`;
+          }
+          if (activeReceipt.startDate && activeReceipt.endDate) {
+            return `${formatInvoiceDate(activeReceipt.startDate)} - ${formatInvoiceDate(activeReceipt.endDate)}`;
+          }
+          if (activeReceipt.issuedDate) {
+            const d = new Date(activeReceipt.issuedDate);
+            if (!isNaN(d.getTime())) {
+              const year = d.getFullYear();
+              const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+              const month = monthNames[d.getMonth()];
+              const lastDay = new Date(year, d.getMonth() + 1, 0).getDate();
+              return `01 ${month} ${year} - ${lastDay} ${month} ${year}`;
+            }
+          }
+          return 'N/A';
+        };
+
+        return (
+          <div className="modal-overlay">
+            <div className="modal-content" style={{ position: 'relative', maxWidth: 650, padding: 30, background: '#ffffff', color: '#111827', borderRadius: 'var(--radius-lg)' }}>
+
+              <button
+                onClick={() => setActiveReceipt(null)}
+                style={{ position: 'absolute', top: 12, right: 12, background: '#f3f4f6', border: 'none', borderRadius: '50%', color: '#374151', cursor: 'pointer', width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 16 }}
+                title="Close"
+              >
+                ×
+              </button>
+
+              {/* TOP HEADER SECTION */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e5e7eb', paddingBottom: 14, marginBottom: 16 }}>
+                {/* Top Left: Logo & Owner Details */}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <svg viewBox="0 0 100 100" style={{ width: 42, height: 42, minWidth: 42, borderRadius: 6, display: 'inline-block' }}>
+                    <rect width="100" height="100" fill="#000000" rx="12" />
+                    <circle cx="50" cy="50" r="36" fill="#FFDD00" />
+                    <polygon points="50,50 86,14 100,14 100,86 86,86" fill="#000000" />
+                    <line x1="24" y1="76" x2="50" y2="50" stroke="#000000" strokeWidth="5.5" strokeLinecap="round" />
+                  </svg>
+                  <div style={{ fontSize: 10, color: '#4b5563', lineHeight: 1.3 }}>
+                    <h4 style={{ color: '#111827', fontWeight: 800, fontSize: 14, marginBottom: 4, letterSpacing: '0.02em' }}>
+                      {doc?.company || companyDetails.name || 'CARPENTERS PROPERTIES PTE LIMITED'}
+                    </h4>
+                    {renderAddressDisplay(doc?.company_address_display, companyDetails.address || '40 Robertson Road, Suva, Fiji')}
+                    <p style={{ marginTop: 2 }}>Tel: {companyDetails.phone || '+679-2341897'}</p>
+                    <p>Email: {companyDetails.email || 'info@carpentersproperties.com'}</p>
+                    <p>{companyDetails.website || 'www.carpentersproperties.com'}</p>
+                  </div>
+                </div>
+
+                {/* Top Right: Invoice Details */}
+                <div style={{ textAlign: 'right', fontSize: 11, color: '#4b5563', lineHeight: 1.4 }}>
+                  <h3 style={{ color: '#111827', fontWeight: 800, fontSize: 18, margin: '0 0 8px 0', letterSpacing: '0.03em' }}>TAX INVOICE</h3>
+                  <p><span style={{ color: '#6b7280' }}>Invoice No:</span> &nbsp;<strong>{doc?.name || activeReceipt.id}</strong></p>
+                  <p><span style={{ color: '#6b7280' }}>Date:</span> &nbsp;{formatInvoiceDate(doc?.posting_date || activeReceipt.issuedDate)}</p>
+                  <p><span style={{ color: '#6b7280' }}>Due Date:</span> &nbsp;{formatInvoiceDate(doc?.due_date || activeReceipt.dueDate)}</p>
+                  <p style={{ marginTop: 6 }}>
+                    <span style={{
+                      padding: '2px 8px',
+                      borderRadius: 10,
+                      fontSize: 8,
+                      fontWeight: 700,
+                      backgroundColor: displayStatus === 'PAID' ? '#d1fae5' : displayStatus === 'DRAFT' ? '#e0f2fe' : '#fef3c7',
+                      color: displayStatus === 'PAID' ? '#065f46' : displayStatus === 'DRAFT' ? '#0369a1' : '#92400e'
+                    }}>
+                      {displayStatus}
+                    </span>
+                  </p>
                 </div>
               </div>
 
-              {/* Top Right: Invoice Details */}
-              <div style={{ textAlign: 'right', fontSize: 11, color: '#4b5563', lineHeight: 1.4 }}>
-                <h3 style={{ color: '#111827', fontWeight: 800, fontSize: 18, margin: '0 0 8px 0', letterSpacing: '0.03em' }}>TAX INVOICE</h3>
-                <p><span style={{ color: '#6b7280' }}>Invoice Number</span> &nbsp;&nbsp; {activeReceipt.id}</p>
-                <p><span style={{ color: '#6b7280' }}>Date</span> &nbsp;&nbsp; {activeReceipt.issuedDate}</p>
-                <p style={{ marginTop: 6 }}>
-                  <span style={{
-                    padding: '2px 8px',
-                    borderRadius: 10,
-                    fontSize: 8,
-                    fontWeight: 700,
-                    backgroundColor: activeReceipt.status === 'paid' ? '#d1fae5' : '#fef3c7',
-                    color: activeReceipt.status === 'paid' ? '#065f46' : '#92400e'
-                  }}>
-                    {activeReceipt.status.toUpperCase()}
+              {/* BILL TO & PROPERTY ADDRESS */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, fontSize: 10, paddingBottom: 14, marginBottom: 14 }}>
+                <div>
+                  <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>BILL TO</span>
+                  <span style={{ display: 'block', color: '#111827', fontWeight: 700, fontSize: 12, marginBottom: 2 }}>
+                    {doc?.customer_name || activeReceipt.tenantName || 'Tenant'}
                   </span>
-                </p>
-              </div>
-            </div>
+                  {(doc?.customer || activeReceipt.customer) && (
+                    <div style={{ fontSize: 9, color: '#6b7280', marginBottom: 4 }}>
+                      Customer Code: <strong>{doc?.customer || activeReceipt.customer}</strong>
+                    </div>
+                  )}
+                  <div style={{ color: '#4b5563', lineHeight: 1.35 }}>
+                    {renderAddressDisplay(doc?.address_display, invoiceDetailsExtra?.customerAddress || 'Suva, Fiji')}
+                  </div>
+                </div>
 
-            {/* BILL TO & PROPERTY ADDRESS */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, fontSize: 10, paddingBottom: 14, marginBottom: 14 }}>
-              <div>
-                <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>BILL TO</span>
-                <strong style={{ fontSize: 11, color: '#111827', display: 'block' }}>Tenant Name</strong>
-                <span style={{ display: 'block', color: '#111827', fontWeight: 600, marginBottom: 4 }}>{activeReceipt.tenantName}</span>
-                <p style={{ color: '#4b5563', lineHeight: 1.3 }}>{invoiceDetailsExtra?.customerAddress || '10 Anson Road, #15-02, International Plaza, Singapore 079903'}</p>
+                <div>
+                  <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>PROPERTY & LEASE DETAILS</span>
+                  <strong style={{ fontSize: 11, color: '#111827', display: 'block', marginBottom: 2 }}>
+                    {invoiceDetailsExtra?.unitName || (doc?.items && doc.items[0]?.item_code) || activeReceipt.propertyId}
+                  </strong>
+                  <p style={{ color: '#4b5563', lineHeight: 1.3, marginBottom: 4 }}>
+                    {invoiceDetailsExtra?.unitAddress || 'Carpenters Properties, Suva, Fiji'}
+                  </p>
+                  {(doc?.booking_id || activeReceipt.booking_id) && (
+                    <div style={{ fontSize: 9, color: '#374151', marginBottom: 2 }}>
+                      <span style={{ color: '#6b7280' }}>Booking Ref:</span> &nbsp;
+                      <strong style={{ color: 'var(--brand-color, #111827)' }}>{doc?.booking_id || activeReceipt.booking_id}</strong>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 9, color: '#374151' }}>
+                    <span style={{ color: '#6b7280' }}>Billing Period:</span> &nbsp;
+                    <strong>{getBillingPeriod()}</strong>
+                  </div>
+                </div>
               </div>
-              <div>
-                <span style={{ color: '#6b7280', textTransform: 'uppercase', display: 'block', fontWeight: 700, fontSize: 9, marginBottom: 4 }}>PROPERTY ADDRESS</span>
-                <strong style={{ fontSize: 11, color: '#111827', display: 'block', marginBottom: 2 }}>{invoiceDetailsExtra?.unitName || activeReceipt.propertyId}</strong>
-                <p style={{ color: '#4b5563', lineHeight: 1.3 }}>{invoiceDetailsExtra?.unitAddress || '10 Anson Road, #15-02, International Plaza, Singapore 079903'}</p>
-              </div>
-            </div>
 
-            {/* MIDDLE: LINE ITEMS TABLE */}
-            <div style={{ border: '1px solid #e5e7eb', borderRadius: 4, overflow: 'hidden', marginBottom: 16 }}>
-              {(() => {
-                const getBillingPeriod = (dateStr) => {
-                  if (!dateStr) return '01 Jun 2024 - 30 Jun 2024';
-                  const d = new Date(dateStr);
-                  if (isNaN(d.getTime())) return '01 Jun 2024 - 30 Jun 2024';
-                  const year = d.getFullYear();
-                  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                  const month = monthNames[d.getMonth()];
-                  const lastDay = new Date(year, d.getMonth() + 1, 0).getDate();
-                  return `01 ${month} ${year} - ${lastDay} ${month} ${year}`;
-                };
-                const activeCurrency = invoiceDetailsExtra?.currency || companyDetails.currency || 'SGD';
-                const baseRent = Math.round(activeReceipt.amount * 0.8);
-                const serviceCharge = Math.round(activeReceipt.amount * 0.12);
-                const propertyTax = Math.round(activeReceipt.amount * 0.08);
-                const gstVal = Math.round(activeReceipt.amount * 0.09);
-                const periodStr = getBillingPeriod(activeReceipt.issuedDate);
-
-                return (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
-                    <thead>
-                      <tr style={{ background: '#1f2937', color: '#ffffff', borderBottom: '1px solid #374151' }}>
-                        <th style={{ padding: '8px 10px', color: '#ffffff' }}>Description</th>
-                        <th style={{ padding: '8px 10px', color: '#ffffff' }}>Period</th>
-                        <th style={{ padding: '8px 10px', textAlign: 'right', color: '#ffffff' }}>Amount ({activeCurrency})</th>
+              {/* MIDDLE: LINE ITEMS TABLE */}
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 4, overflow: 'hidden', marginBottom: 16 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ background: '#1f2937', color: '#ffffff', borderBottom: '1px solid #374151' }}>
+                      <th style={{ padding: '8px 10px', color: '#ffffff' }}>Item & Description</th>
+                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'center', width: 50 }}>Qty</th>
+                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'right', width: 90 }}>Rate</th>
+                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'right', width: 100 }}>Amount ({activeCurrency})</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemsList.map((item, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                        <td style={{ padding: '8px 10px', color: '#111827' }}>
+                          <div style={{ fontWeight: 600 }}>{item.item_name || item.item_code}</div>
+                          {item.description && item.description !== item.item_name && item.description !== item.item_code && (
+                            <div style={{ fontSize: 9, color: '#6b7280', marginTop: 1 }}>{item.description}</div>
+                          )}
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'center', color: '#4b5563' }}>
+                          {item.qty || 1}
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', color: '#4b5563' }}>
+                          $ {(Number(item.rate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#111827' }}>
+                          $ {(Number(item.amount != null ? item.amount : ((item.qty || 1) * (item.rate || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
+                    ))}
+
+                    {/* Subtotal */}
+                    <tr style={{ borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
+                      <td colSpan="3" style={{ padding: '8px 10px', color: '#374151', fontWeight: 600, textAlign: 'right' }}>
+                        Net Total / Subtotal
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#374151' }}>
+                        $ {Number(netTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+
+                    {/* Taxes Breakdown */}
+                    {taxesList.length > 0 ? (
+                      taxesList.map((tax, tIdx) => (
+                        <tr key={tIdx} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                          <td colSpan="3" style={{ padding: '6px 10px', color: '#4b5563', fontWeight: 500, textAlign: 'right' }}>
+                            {tax.description || tax.account_head || 'VAT / Tax'} {tax.rate ? `(${tax.rate}%)` : ''}
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#4b5563' }}>
+                            $ {(Number(tax.tax_amount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      ))
+                    ) : totalTaxes > 0 ? (
                       <tr style={{ borderBottom: '1px solid #f3f4f6' }}>
-                        <td style={{ padding: '8px 10px', color: '#111827', fontWeight: 500 }}>Rent</td>
-                        <td style={{ padding: '8px 10px', color: '#4b5563' }}>{periodStr}</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{baseRent.toLocaleString()}.00</td>
+                        <td colSpan="3" style={{ padding: '6px 10px', color: '#4b5563', fontWeight: 500, textAlign: 'right' }}>
+                          Taxes & Charges (12.5%)
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#4b5563' }}>
+                          $ {Number(totalTaxes).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
                       </tr>
+                    ) : null}
+
+                    {/* Rounding Adjustment */}
+                    {roundingAdjustment !== 0 && (
                       <tr style={{ borderBottom: '1px solid #f3f4f6' }}>
-                        <td style={{ padding: '8px 10px', color: '#111827', fontWeight: 500 }}>Service Charge</td>
-                        <td style={{ padding: '8px 10px', color: '#4b5563' }}>{periodStr}</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{serviceCharge.toLocaleString()}.00</td>
+                        <td colSpan="3" style={{ padding: '4px 10px', color: '#6b7280', fontSize: 9, textAlign: 'right' }}>
+                          Rounding Adjustment
+                        </td>
+                        <td style={{ padding: '4px 10px', textAlign: 'right', fontSize: 9, color: '#6b7280' }}>
+                          $ {roundingAdjustment.toFixed(2)}
+                        </td>
                       </tr>
-                      <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                        <td style={{ padding: '8px 10px', color: '#111827', fontWeight: 500 }}>Property Tax</td>
-                        <td style={{ padding: '8px 10px', color: '#4b5563' }}>{periodStr}</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{propertyTax.toLocaleString()}.00</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
-                        <td colSpan="2" style={{ padding: '8px 10px', color: '#374151', fontWeight: 600, textAlign: 'right' }}>Subtotal</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#374151' }}>{activeReceipt.amount.toLocaleString()}.00</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                        <td colSpan="2" style={{ padding: '8px 10px', color: '#4b5563', fontWeight: 600, textAlign: 'right' }}>VAT (12.5%)</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>{vatVal.toLocaleString()}.00</td>
-                      </tr>
-                      <tr style={{ background: '#f3f4f6', borderTop: '2px solid #e5e7eb' }}>
-                        <td colSpan="2" style={{ padding: '8px 10px', fontWeight: 800, color: '#111827', textAlign: 'right' }}>Total Amount Due ({activeCurrency})</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: '#111827', fontSize: 11 }}>{(activeReceipt.amount + vatVal).toLocaleString()}.00</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                );
-              })()}
-            </div>
+                    )}
 
-            {/* AMOUNT IN WORDS */}
-            <div style={{ background: '#f9fafb', padding: '10px 12px', borderRadius: 4, fontSize: 10, color: '#374151', borderLeft: '3px solid #1f2937', marginBottom: 16 }}>
-              <span style={{ fontWeight: 700, textTransform: 'uppercase', display: 'block', fontSize: 8, color: '#6b7280', marginBottom: 2 }}>Amount in Words:</span>
-              <strong>{numberToWords(Math.round(activeReceipt.amount * 1.125))}</strong>
-            </div>
+                    {/* Total Amount Due */}
+                    <tr style={{ background: '#f3f4f6', borderTop: '2px solid #e5e7eb' }}>
+                      <td colSpan="3" style={{ padding: '8px 10px', fontWeight: 800, color: '#111827', textAlign: 'right' }}>
+                        Total Amount Due ({activeCurrency})
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: '#111827', fontSize: 11 }}>
+                        $ {Number(grandTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
 
-            {/* BOTTOM SECTION: BANK & TERMS & QR */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20, borderTop: '1px solid #e5e7eb', paddingTop: 14, fontSize: 9, color: '#4b5563', lineHeight: 1.4, marginBottom: 20 }}>
-              {/* Payment Info & Bank Details */}
-              <div>
-                <strong style={{ color: '#111827', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>PAYMENT INFORMATION</strong>
-                <p style={{ marginBottom: 6 }}>Please make payment by {activeReceipt.dueDate} to the following account:</p>
-                <p><span style={{ color: '#6b7280' }}>Bank Name:</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>DBS Bank Ltd</strong></p>
-                <p><span style={{ color: '#6b7280' }}>Account Name:</span> &nbsp;&nbsp; <strong>{companyDetails.name}</strong></p>
-                <p><span style={{ color: '#6b7280' }}>Account Number:</span> <strong>123-456789-0</strong></p>
-                <p><span style={{ color: '#6b7280' }}>Swift Code:</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>DBSSGSGXXX</strong></p>
-
-                <p style={{ marginTop: 12, fontStyle: 'italic', fontSize: 8, color: '#6b7280' }}>
-                  Thank you for your business.<br />
-                  This is a computer-generated invoice. No signature is required.
-                </p>
+                    {/* Outstanding Balance */}
+                    {displayStatus === 'PAID' || outstandingAmount === 0 ? (
+                      <tr style={{ background: '#ecfdf5', borderTop: '1px solid #d1fae5' }}>
+                        <td colSpan="3" style={{ padding: '6px 10px', fontWeight: 700, color: '#065f46', textAlign: 'right' }}>
+                          Balance Outstanding (Paid)
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#065f46', fontSize: 10 }}>
+                          $ 0.00
+                        </td>
+                      </tr>
+                    ) : outstandingAmount > 0 && outstandingAmount !== grandTotal ? (
+                      <tr style={{ background: '#fffbeb', borderTop: '1px solid #fef3c7' }}>
+                        <td colSpan="3" style={{ padding: '6px 10px', fontWeight: 700, color: '#92400e', textAlign: 'right' }}>
+                          Outstanding Balance Due
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#92400e', fontSize: 10 }}>
+                          $ {Number(outstandingAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </div>
 
-              {/* Scan to Pay QR */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderLeft: '1px solid #e5e7eb', paddingLeft: 20 }}>
-                <span style={{ fontSize: 9, color: '#111827', marginBottom: 6, textTransform: 'uppercase', fontWeight: 700 }}>SCAN TO PAY</span>
-                <svg viewBox="0 0 100 100" style={{ width: 64, height: 64 }}>
-                  <rect width="100" height="100" fill="#ffffff" />
-                  <rect x="5" y="5" width="25" height="25" fill="#000000" />
-                  <rect x="8" y="8" width="19" height="19" fill="#ffffff" />
-                  <rect x="11" y="11" width="13" height="13" fill="#000000" />
-                  <rect x="70" y="5" width="25" height="25" fill="#000000" />
-                  <rect x="73" y="8" width="19" height="19" fill="#ffffff" />
-                  <rect x="76" y="11" width="13" height="13" fill="#000000" />
-                  <rect x="5" y="70" width="25" height="25" fill="#000000" />
-                  <rect x="8" y="73" width="19" height="19" fill="#ffffff" />
-                  <rect x="11" y="76" width="13" height="13" fill="#000000" />
-                  <rect x="35" y="10" width="5" height="5" fill="#000000" />
-                  <rect x="45" y="15" width="10" height="5" fill="#000000" />
-                  <rect x="35" y="25" width="15" height="5" fill="#000000" />
-                  <rect x="55" y="25" width="5" height="10" fill="#000000" />
-                  <rect x="25" y="35" width="10" height="10" fill="#000000" />
-                  <rect x="50" y="35" width="10" height="5" fill="#000000" />
-                  <rect x="15" y="45" width="5" height="15" fill="#000000" />
-                  <rect x="35" y="50" width="15" height="5" fill="#000000" />
-                  <rect x="65" y="40" width="15" height="10" fill="#000000" />
-                  <rect x="45" y="65" width="10" height="5" fill="#000000" />
-                  <rect x="60" y="60" width="20" height="5" fill="#000000" />
-                  <rect x="80" y="70" width="10" height="15" fill="#000000" />
-                </svg>
+              {/* AMOUNT IN WORDS */}
+              <div style={{ background: '#f9fafb', padding: '10px 12px', borderRadius: 4, fontSize: 10, color: '#374151', borderLeft: '3px solid #1f2937', marginBottom: 16 }}>
+                <span style={{ fontWeight: 700, textTransform: 'uppercase', display: 'block', fontSize: 8, color: '#6b7280', marginBottom: 2 }}>Amount in Words:</span>
+                <strong>{words}</strong>
               </div>
-            </div>
 
-            <div style={{ display: 'flex', gap: 12 }}>
-              {/* Hidden: Print button preserved per request */}
-              {/* <button 
-                className="btn btn-secondary" 
-                style={{ width: '100%', borderColor: '#d1d5db', color: '#374151', background: '#f9fafb', fontSize: 11 }}
-                onClick={() => window.print()}
-              >
-                Download PDF / Print
-              </button> */}
-              <button
-                className="btn btn-primary"
-                style={{ width: '100%', background: '#ffdd00', color: '#000000', fontSize: 11 }}
-                onClick={() => setActiveReceipt(null)}
-              >
-                Close Receipt
-              </button>
+              {/* BOTTOM SECTION: BANK & TERMS & QR */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20, borderTop: '1px solid #e5e7eb', paddingTop: 14, fontSize: 9, color: '#4b5563', lineHeight: 1.4, marginBottom: 20 }}>
+                {/* Payment Info & Bank Details */}
+                <div>
+                  <strong style={{ color: '#111827', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>PAYMENT INFORMATION</strong>
+                  <p style={{ marginBottom: 6 }}>Please make payment by {formatInvoiceDate(doc?.due_date || activeReceipt.dueDate)} to the following account:</p>
+                  <p><span style={{ color: '#6b7280' }}>Bank Name:</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>Bank of South Pacific (BSP) / ANZ Fiji</strong></p>
+                  <p><span style={{ color: '#6b7280' }}>Account Name:</span> &nbsp;&nbsp; <strong>{doc?.company || companyDetails.name || 'Carpenters Properties Pte Limited'}</strong></p>
+                  <p><span style={{ color: '#6b7280' }}>Account Number:</span> <strong>9801234567</strong></p>
+                  <p><span style={{ color: '#6b7280' }}>Swift Code:</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <strong>BOSPFJ22</strong></p>
+
+                  <p style={{ marginTop: 12, fontStyle: 'italic', fontSize: 8, color: '#6b7280' }}>
+                    Thank you for your business.<br />
+                    This is a computer-generated invoice. No signature is required.
+                  </p>
+                </div>
+
+                {/* Scan to Pay QR */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderLeft: '1px solid #e5e7eb', paddingLeft: 20 }}>
+                  <span style={{ fontSize: 9, color: '#111827', marginBottom: 6, textTransform: 'uppercase', fontWeight: 700 }}>SCAN TO PAY</span>
+                  <svg viewBox="0 0 100 100" style={{ width: 64, height: 64 }}>
+                    <rect width="100" height="100" fill="#ffffff" />
+                    <rect x="5" y="5" width="25" height="25" fill="#000000" />
+                    <rect x="8" y="8" width="19" height="19" fill="#ffffff" />
+                    <rect x="11" y="11" width="13" height="13" fill="#000000" />
+                    <rect x="70" y="5" width="25" height="25" fill="#000000" />
+                    <rect x="73" y="8" width="19" height="19" fill="#ffffff" />
+                    <rect x="76" y="11" width="13" height="13" fill="#000000" />
+                    <rect x="5" y="70" width="25" height="25" fill="#000000" />
+                    <rect x="8" y="73" width="19" height="19" fill="#ffffff" />
+                    <rect x="11" y="76" width="13" height="13" fill="#000000" />
+                    <rect x="35" y="10" width="5" height="5" fill="#000000" />
+                    <rect x="45" y="15" width="10" height="5" fill="#000000" />
+                    <rect x="35" y="25" width="15" height="5" fill="#000000" />
+                    <rect x="55" y="25" width="5" height="10" fill="#000000" />
+                    <rect x="25" y="35" width="10" height="10" fill="#000000" />
+                    <rect x="50" y="35" width="10" height="5" fill="#000000" />
+                    <rect x="15" y="45" width="5" height="15" fill="#000000" />
+                    <rect x="35" y="50" width="15" height="5" fill="#000000" />
+                    <rect x="65" y="40" width="15" height="10" fill="#000000" />
+                    <rect x="45" y="65" width="10" height="5" fill="#000000" />
+                    <rect x="60" y="60" width="20" height="5" fill="#000000" />
+                    <rect x="80" y="70" width="10" height="15" fill="#000000" />
+                  </svg>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 12 }}>
+                <button
+                  className="btn btn-secondary"
+                  style={{ flex: 1, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb', fontSize: 11 }}
+                  onClick={() => handlePrint(activeReceipt)}
+                >
+                  Download PDF / Print
+                </button>
+                <button
+                  className="btn btn-primary"
+                  style={{ flex: 1, background: '#ffdd00', color: '#000000', fontSize: 11 }}
+                  onClick={() => setActiveReceipt(null)}
+                >
+                  Close Receipt
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
