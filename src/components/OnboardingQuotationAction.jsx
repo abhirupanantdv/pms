@@ -39,7 +39,8 @@ export default function OnboardingQuotationAction({ name, approved, baseUrl }) {
   };
   if (!approved) return null;
   const buttonStyle = { background: '#0a6c66', color: '#fff', border: 0, borderRadius: 20, padding: '6px 14px', fontSize: 11, fontWeight: 700, cursor: busy ? 'wait' : 'pointer', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' };
-  const quotationUrl = `${(baseUrl || '').replace(/\/$/, '')}/app/quotation/${encodeURIComponent(current.quotation)}`;
+  // const quotationUrl = `${(baseUrl || '').replace(/\/$/, '')}/app/quotation/${encodeURIComponent(current.quotation)}`;
+  const quotationUrl = `/assets/pms/app/quotation/${encodeURIComponent(current.quotation)}`;
   return <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, fontSize: 12 }}>
     <button type="button" disabled={busy || !baseUrl} onClick={create} style={buttonStyle} aria-busy={busy}>Create Quotation</button>
     {(current.quotation || current.error) && <div role={current.error ? 'alert' : 'status'} style={{ position: 'fixed', top: 24, right: 24, zIndex: 10000, maxWidth: 'min(420px, calc(100vw - 48px))', padding: '14px 18px', borderRadius: 10, background: current.error ? '#fef2f2' : '#f0fdf4', color: current.error ? '#b91c1c' : '#166534', border: '1px solid #cbd5e1', boxShadow: '0 8px 24px rgba(0,0,0,.15)', fontSize: 13 }}>

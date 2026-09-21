@@ -1800,88 +1800,258 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     }
   };
 
-  const handleWorkflowAction = async (actionName, nextState) => {
-    if (!selectedCase || !erpnextConfig?.url) return;
+  const handleWorkflowAction = async (
+    actionName,
+    nextState
+  ) => {
+    if (
+      !selectedCase ||
+      !erpnextConfig?.url
+    ) {
+      return;
+    }
 
-    const normalizedAction = (actionName || '').toLowerCase();
+    const normalizedAction = (
+      actionName || ''
+    ).toLowerCase();
+
+    // =====================================================
+    // Existing Signed Document business rule
+    // =====================================================
 
     const hasSignedDocument = Boolean(
-      selectedCase?.[signedDocumentFieldname] &&
-      String(selectedCase[signedDocumentFieldname]).trim()
+      selectedCase?.[
+      signedDocumentFieldname
+      ] &&
+      String(
+        selectedCase[
+        signedDocumentFieldname
+        ]
+      ).trim()
     );
 
-    // Approve / Reject buttons should work only after Signed Document is uploaded.
     if (
       !hasSignedDocument &&
       (
-        normalizedAction.includes('approve') ||
-        normalizedAction.includes('reject')
+        normalizedAction.includes(
+          'approve'
+        ) ||
+        normalizedAction.includes(
+          'reject'
+        )
       )
     ) {
       alert(
         'Please upload the signed document before approving or rejecting.',
         'error'
       );
+
       return;
     }
 
-    // If user selects No, nothing happens.
-    if (!(await confirm(`Are you sure you want to "${actionName}"?`))) {
+    // =====================================================
+    // Confirmation
+    // =====================================================
+
+    const confirmed = await confirm(
+      `Are you sure you want to "${actionName}"?`
+    );
+
+    if (!confirmed) {
       return;
     }
 
     setLoadingWorkflow(true);
 
     try {
-      // Approval maintains the customer/address; quotation creation is a separate action.
-      // See docs/tenant-onboarding-manual-quotation.md for the controller change.
+
       const res = await fetch(
         `${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.tenant_onboarding.tenant_onboarding.update_tenant_onboarding_workflow`,
         {
           method: 'POST',
+
           credentials: 'include',
+
           headers: getAuthHeaders({
-            'Content-Type': 'application/json'
+            'Content-Type':
+              'application/json'
           }),
+
           body: JSON.stringify({
-            tenant_onboarding: selectedCase.name,
-            action: actionName
+            tenant_onboarding:
+              selectedCase.name,
+
+            action:
+              actionName
           })
         }
       );
 
-      if (res.ok) {
-        const json = await res.json();
-        const error = json?.message?.error;
+      if (!res.ok) {
 
-        if (!error) {
-          alert(
-            `Action "${actionName}" applied successfully!`,
-            'success'
-          );
+        const errorMsg =
+          await extractErrorMessage(res);
 
-          // Refresh current record, workflow state/actions and master list.
-          await handleSelectCase({
-            ...selectedCase,
-            workflow_state: nextState || selectedCase.workflow_state
-          });
+        alert(
+          errorMsg,
+          'error'
+        );
 
-          await fetchWorkflowActions(selectedCase.name);
-          await fetchOnboardings();
-        } else {
-          alert(`Failed to apply action: ${error}`, 'error');
-        }
-      } else {
-        const errorMsg = await extractErrorMessage(res);
-        alert(`Failed to apply action: ${errorMsg}`, 'error');
+        return;
       }
+
+      const json =
+        await res.json();
+
+      const result =
+        json?.message;
+
+      // ===================================================
+      // Permission / Workflow error
+      // ===================================================
+
+      if (
+        !result?.success ||
+        result?.error
+      ) {
+
+        alert(
+          result?.error ||
+          `You do not have permission to perform "${actionName}".`,
+          'error'
+        );
+
+        return;
+      }
+
+      // ===================================================
+      // Success
+      // ===================================================
+
+      alert(
+        `Action "${actionName}" applied successfully!`,
+        'success'
+      );
+
+      // Reload current record
+      await handleSelectCase({
+        ...selectedCase,
+
+        workflow_state:
+          result.workflow_state ||
+          nextState ||
+          selectedCase.workflow_state
+      });
+
+      // Reload available workflow actions
+      await fetchWorkflowActions(
+        selectedCase.name
+      );
+
+      // Reload Tenant Onboarding list
+      await fetchOnboardings();
+
     } catch (err) {
-      console.error('Error applying workflow action:', err);
-      alert(`Error applying workflow action: ${err.message}`, 'error');
+
+      console.error(
+        'Workflow action error:',
+        err
+      );
+
+      alert(
+        err?.message ||
+        'Unable to perform workflow action.',
+        'error'
+      );
+
     } finally {
+
       setLoadingWorkflow(false);
     }
   };
+
+  // const handleWorkflowAction = async (actionName, nextState) => {
+  //   if (!selectedCase || !erpnextConfig?.url) return;
+
+  //   const normalizedAction = (actionName || '').toLowerCase();
+
+  //   const hasSignedDocument = Boolean(
+  //     selectedCase?.[signedDocumentFieldname] &&
+  //     String(selectedCase[signedDocumentFieldname]).trim()
+  //   );
+
+  //   // Approve / Reject buttons should work only after Signed Document is uploaded.
+  //   if (
+  //     !hasSignedDocument &&
+  //     (
+  //       normalizedAction.includes('approve') ||
+  //       normalizedAction.includes('reject')
+  //     )
+  //   ) {
+  //     alert(
+  //       'Please upload the signed document before approving or rejecting.',
+  //       'error'
+  //     );
+  //     return;
+  //   }
+
+  //   // If user selects No, nothing happens.
+  //   if (!(await confirm(`Are you sure you want to "${actionName}"?`))) {
+  //     return;
+  //   }
+
+  //   setLoadingWorkflow(true);
+
+  //   try {
+  //     // Approval maintains the customer/address; quotation creation is a separate action.
+  //     // See docs/tenant-onboarding-manual-quotation.md for the controller change.
+  //     const res = await fetch(
+  //       `${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.tenant_onboarding.tenant_onboarding.update_tenant_onboarding_workflow`,
+  //       {
+  //         method: 'POST',
+  //         credentials: 'include',
+  //         headers: getAuthHeaders({
+  //           'Content-Type': 'application/json'
+  //         }),
+  //         body: JSON.stringify({
+  //           tenant_onboarding: selectedCase.name,
+  //           action: actionName
+  //         })
+  //       }
+  //     );
+
+  //     if (res.ok) {
+  //       const json = await res.json();
+  //       const error = json?.message?.error;
+
+  //       if (!error) {
+  //         alert(
+  //           `Action "${actionName}" applied successfully!`,
+  //           'success'
+  //         );
+
+  //         // Refresh current record, workflow state/actions and master list.
+  //         await handleSelectCase({
+  //           ...selectedCase,
+  //           workflow_state: nextState || selectedCase.workflow_state
+  //         });
+
+  //         await fetchWorkflowActions(selectedCase.name);
+  //         await fetchOnboardings();
+  //       } else {
+  //         alert(`Failed to apply action: ${error}`, 'error');
+  //       }
+  //     } else {
+  //       const errorMsg = await extractErrorMessage(res);
+  //       alert(`Failed to apply action: ${errorMsg}`, 'error');
+  //     }
+  //   } catch (err) {
+  //     console.error('Error applying workflow action:', err);
+  //     alert(`Error applying workflow action: ${err.message}`, 'error');
+  //   } finally {
+  //     setLoadingWorkflow(false);
+  //   }
+  // };
 
   const handlePrintBookingForm = () => {
     if (selectedCase?.business_status === 'Cancelled' || selectedCase?.workflow_state === 'Cancelled' || selectedCase?.docstatus === 2) {
@@ -5889,12 +6059,40 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                         .filter(field => field.fieldname !== bookingPropertyGroupField?.fieldname)
                         .map(field => (
                           <React.Fragment key={field.fieldname}>
-                          {field.fieldname === 'shop_space_location' ? (
-                            <div style={{ gridColumn: 'span 2', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                            {field.fieldname === 'shop_space_location' ? (
+                              <div style={{ gridColumn: 'span 2', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <DynamicFormField
+                                  field={field}
+                                  value={dynamicFormValues[field.fieldname] || ''}
+                                  onChange={newVal => updateBookingSelection(field.fieldname, newVal)}
+                                  linkOptionsCache={linkOptionsCache}
+                                  fetchLinkOptions={fetchLinkOptions}
+                                  getDocTypeFields={getDocTypeFields}
+                                  erpnextConfig={erpnextConfig}
+                                  getCsrfToken={getCsrfToken}
+                                  formValues={dynamicFormValues}
+                                  isNew={true}
+                                />
+                                <BookingPropertyFinder
+                                  key={dynamicFormValues.shop_space_location || ''}
+                                  location={dynamicFormValues.shop_space_location || ''}
+                                  value={selectedBookingPropertyGroup}
+                                  onChange={newVal => updateBookingSelection(bookingPropertyGroupField?.fieldname, newVal)}
+                                  erpnextConfig={erpnextConfig}
+                                  disabled={!!bookingPropertyGroupField?.read_only}
+                                />
+                              </div>
+                            ) : (
                               <DynamicFormField
+                                key={field.fieldname}
                                 field={field}
-                                value={dynamicFormValues[field.fieldname] || ''}
-                                onChange={newVal => updateBookingSelection(field.fieldname, newVal)}
+                                bookingPropertyGroup={isOnboardingUnitTable(field) ? selectedBookingPropertyGroup : undefined}
+                                value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+                                onChange={(newVal, bookingCharges) => setDynamicFormValues(prev => ({
+                                  ...prev,
+                                  [field.fieldname]: newVal,
+                                  ...(isOnboardingUnitTable(field) && bookingCharges ? bookingCharges : {})
+                                }))}
                                 linkOptionsCache={linkOptionsCache}
                                 fetchLinkOptions={fetchLinkOptions}
                                 getDocTypeFields={getDocTypeFields}
@@ -5903,35 +6101,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                 formValues={dynamicFormValues}
                                 isNew={true}
                               />
-                              <BookingPropertyFinder
-                                key={dynamicFormValues.shop_space_location || ''}
-                                location={dynamicFormValues.shop_space_location || ''}
-                                value={selectedBookingPropertyGroup}
-                                onChange={newVal => updateBookingSelection(bookingPropertyGroupField?.fieldname, newVal)}
-                                erpnextConfig={erpnextConfig}
-                                disabled={!!bookingPropertyGroupField?.read_only}
-                              />
-                            </div>
-                          ) : (
-                          <DynamicFormField
-                            key={field.fieldname}
-                            field={field}
-                            bookingPropertyGroup={isOnboardingUnitTable(field) ? selectedBookingPropertyGroup : undefined}
-                            value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
-                            onChange={(newVal, bookingCharges) => setDynamicFormValues(prev => ({
-                              ...prev,
-                              [field.fieldname]: newVal,
-                              ...(isOnboardingUnitTable(field) && bookingCharges ? bookingCharges : {})
-                            }))}
-                            linkOptionsCache={linkOptionsCache}
-                            fetchLinkOptions={fetchLinkOptions}
-                            getDocTypeFields={getDocTypeFields}
-                            erpnextConfig={erpnextConfig}
-                            getCsrfToken={getCsrfToken}
-                            formValues={dynamicFormValues}
-                            isNew={true}
-                          />
-                          )}
+                            )}
                           </React.Fragment>
                         ))}
                     </div>
