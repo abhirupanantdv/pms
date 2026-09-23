@@ -3181,6 +3181,402 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     setModalExpandedDocs({});
   };
 
+  const syncDefaultServicesForPayload = async (payload) => {
+    if (!erpnextConfig?.url) {
+      return payload;
+    }
+
+    const rows = Array.isArray(payload.onboarding_unit)
+      ? payload.onboarding_unit.map(row => ({ ...row }))
+      : [];
+
+    // ---------------------------------------------------------
+    // Get all selected item codes
+    // ---------------------------------------------------------
+
+    const itemCodes = [
+      ...new Set(
+        rows
+          .map(row => row?.item_code)
+          .filter(Boolean)
+      )
+    ];
+
+    if (!itemCodes.length) {
+      return {
+        ...payload,
+        onboarding_unit: rows,
+        service_promotional_charges: 0
+      };
+    }
+
+    // ---------------------------------------------------------
+    // Fetch selected Items
+    // Same information used by ERPNext Client Script
+    // ---------------------------------------------------------
+
+    const itemFilters = encodeURIComponent(
+      JSON.stringify([
+        ["name", "in", itemCodes]
+      ])
+    );
+
+    const itemFields = encodeURIComponent(
+      JSON.stringify([
+        "name",
+        "item_name",
+        "item_group",
+        "custom_7average_carpet_area_of_units",
+        "stock_uom"
+      ])
+    );
+
+    const itemResponse = await fetch(
+      `${erpnextConfig.url}/api/resource/Item?filters=${itemFilters}&fields=${itemFields}&limit_page_length=0`,
+      {
+        credentials: "include",
+        headers: getAuthHeaders({
+          "Content-Type": "application/json"
+        })
+      }
+    );
+
+    if (!itemResponse.ok) {
+      throw new Error(
+        "Unable to fetch property Item details for service calculation."
+      );
+    }
+
+    const itemJson = await itemResponse.json();
+
+    const items = Array.isArray(itemJson?.data)
+      ? itemJson.data
+      : [];
+
+    const itemMap = {};
+
+    items.forEach(item => {
+      if (item?.name) {
+        itemMap[item.name] = item;
+      }
+    });
+
+    // ---------------------------------------------------------
+    // Calculate Commercial carpet area
+    //
+    // IMPORTANT:
+    // This intentionally matches your ERPNext Client Script.
+    // It DOES NOT multiply the carpet area by qty.
+    // ---------------------------------------------------------
+
+    let totalCarpetArea = 0;
+    let commercialCount = 0;
+
+    rows.forEach(row => {
+      if (!row?.item_code) {
+        return;
+      }
+
+      const item = itemMap[row.item_code];
+
+      if (item?.item_group === "Commercial") {
+        commercialCount += 1;
+
+        totalCarpetArea += Number(
+          item.custom_7average_carpet_area_of_units || 0
+        );
+      }
+    });
+
+    // ---------------------------------------------------------
+    // Fetch Default Service Items
+    // Equivalent to:
+    //
+    // item_group = Services
+    // custom_service_group = Default Service
+    // disabled = 0
+    // ---------------------------------------------------------
+
+    const serviceFilters = encodeURIComponent(
+      JSON.stringify([
+        ["item_group", "=", "Services"],
+        ["custom_service_group", "=", "Default Service"],
+        ["disabled", "=", 0]
+      ])
+    );
+
+    const serviceFields = encodeURIComponent(
+      JSON.stringify([
+        "name",
+        "item_name",
+        "charges",
+        "stock_uom"
+      ])
+    );
+
+    const serviceResponse = await fetch(
+      `${erpnextConfig.url}/api/resource/Item?filters=${serviceFilters}&fields=${serviceFields}&limit_page_length=0`,
+      {
+        credentials: "include",
+        headers: getAuthHeaders({
+          "Content-Type": "application/json"
+        })
+      }
+    );
+
+    if (!serviceResponse.ok) {
+      throw new Error(
+        "Unable to fetch Default Service Items."
+      );
+    }
+
+    const serviceJson = await serviceResponse.json();
+
+    const serviceItems = Array.isArray(serviceJson?.data)
+      ? serviceJson.data
+      : [];
+
+    // ---------------------------------------------------------
+    // Same validation as ERPNext Client Script
+    // ---------------------------------------------------------
+
+    if (
+      commercialCount > 0 &&
+      serviceItems.length === 0
+    ) {
+      throw new Error(
+        "No active Default Service Item found."
+      );
+    }
+
+    const serviceNames = new Set(
+      serviceItems.map(service => service.name)
+    );
+
+    // ---------------------------------------------------------
+    // No Commercial Unit
+    //
+    // Remove auto-generated Default Service rows
+    // ---------------------------------------------------------
+
+    if (commercialCount === 0) {
+      const remainingRows = rows
+        .filter(row => !serviceNames.has(row.item_code))
+        .map((row, index) => ({
+          ...row,
+          idx: index + 1
+        }));
+
+      return {
+        ...payload,
+        onboarding_unit: remainingRows,
+        service_promotional_charges: 0
+      };
+    }
+
+    // ---------------------------------------------------------
+    // Split manually-selected rows and default-service rows
+    // ---------------------------------------------------------
+
+    const serviceRowsByCode = {};
+
+    rows.forEach(row => {
+      if (
+        row?.item_code &&
+        serviceNames.has(row.item_code)
+      ) {
+        serviceRowsByCode[row.item_code] = {
+          ...row
+        };
+      }
+    });
+
+    const calculatedServiceRows = [];
+
+    let totalServicePromotionalCharges = 0;
+
+    // ---------------------------------------------------------
+    // Create / Update Default Services
+    // ---------------------------------------------------------
+
+    serviceItems.forEach(service => {
+      const rate =
+        totalCarpetArea *
+        Number(service.charges || 0);
+
+      const roundedRate =
+        Math.round(
+          (rate + Number.EPSILON) * 100
+        ) / 100;
+
+      totalServicePromotionalCharges +=
+        roundedRate;
+
+      const existing =
+        serviceRowsByCode[service.name] || {};
+
+      const uom =
+        existing.uom ||
+        service.stock_uom ||
+        "";
+
+      const serviceRow = {
+        ...existing,
+
+        item_code: service.name,
+
+        item_name:
+          service.item_name ||
+          service.name,
+
+        description:
+          existing.description ||
+          service.item_name ||
+          service.name,
+
+        qty: 1,
+
+        stock_qty: 1,
+
+        conversion_factor:
+          Number(
+            existing.conversion_factor || 1
+          ),
+
+        uom,
+
+        stock_uom:
+          existing.stock_uom ||
+          service.stock_uom ||
+          uom,
+
+        rate: roundedRate,
+
+        amount: roundedRate,
+
+        net_rate: roundedRate,
+
+        net_amount: roundedRate
+      };
+
+      calculatedServiceRows.push(
+        serviceRow
+      );
+    });
+
+    totalServicePromotionalCharges =
+      Math.round(
+        (totalServicePromotionalCharges +
+          Number.EPSILON) *
+        100
+      ) / 100;
+
+    // ---------------------------------------------------------
+    // Remove existing Default Services from normal rows
+    // ---------------------------------------------------------
+
+    const otherRows = rows.filter(
+      row =>
+        !serviceNames.has(row?.item_code)
+    );
+
+    // ---------------------------------------------------------
+    // Find last Commercial Unit
+    // ---------------------------------------------------------
+
+    let lastCommercialIndex = -1;
+
+    otherRows.forEach((row, index) => {
+      const item = itemMap[row?.item_code];
+
+      if (item?.item_group === "Commercial") {
+        lastCommercialIndex = index;
+      }
+    });
+
+    // ---------------------------------------------------------
+    // Put services immediately after last Commercial Item
+    // ---------------------------------------------------------
+
+    let finalRows;
+
+    if (lastCommercialIndex >= 0) {
+      finalRows = [
+        ...otherRows.slice(
+          0,
+          lastCommercialIndex + 1
+        ),
+
+        ...calculatedServiceRows,
+
+        ...otherRows.slice(
+          lastCommercialIndex + 1
+        )
+      ];
+    } else {
+      finalRows = [
+        ...otherRows,
+        ...calculatedServiceRows
+      ];
+    }
+
+    finalRows = finalRows.map(
+      (row, index) => ({
+        ...row,
+        idx: index + 1
+      })
+    );
+
+    // ---------------------------------------------------------
+    // Final payload
+    // ---------------------------------------------------------
+
+    return {
+      ...payload,
+
+      onboarding_unit: finalRows,
+
+      service_promotional_charges:
+        totalServicePromotionalCharges
+    };
+  };
+
+
+  // Synchronize Default Service child-row financial values AFTER the Tenant Onboarding
+  // document is created through the REST API. Frappe Client Scripts do not run for
+  // REST inserts, so the whitelisted backend method is the source of truth here.
+  const syncCreatedOnboardingServices = async (tenantOnboardingName) => {
+    if (!erpnextConfig?.url || !tenantOnboardingName) {
+      return null;
+    }
+
+    const res = await fetch(
+      `${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.tenant_onboarding.tenant_onboarding.sync_tenant_onboarding_default_services`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
+        body: JSON.stringify({
+          tenant_onboarding: tenantOnboardingName
+        })
+      }
+    );
+
+    if (!res.ok) {
+      const errorMessage = await extractErrorMessage(res);
+      throw new Error(
+        errorMessage ||
+        'Unable to synchronize Promotional Fees and Service Charges.'
+      );
+    }
+
+    const json = await res.json();
+    console.log('Default Service Sync Response:', json);
+    return json?.message || null;
+  };
+
   // Handle Starting Onboarding process (POST request to ERPNext)
   const handleStartOnboarding = async (e) => {
     e.preventDefault();
@@ -3435,6 +3831,12 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         };
       }
 
+      if (useDynamicForm) {
+        payload = await syncDefaultServicesForPayload(
+          payload
+        );
+      }
+
       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding`, {
         method: 'POST',
         credentials: 'include',
@@ -3449,6 +3851,12 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         console.log("Onboarding create response:", json);
         const freshDoc = json.data || json;
         const newDocName = freshDoc.name;
+
+        // REST creation does not execute the ERPNext Client Script that recalculates
+        // Promotional Fees / Service Charges. Sync them immediately after creation.
+        if (newDocName) {
+          await syncCreatedOnboardingServices(newDocName);
+        }
 
         // Initialize local fields in checklists
         if (newDocName) {
@@ -7716,16 +8124,6 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
 
 
-
-
-
-
-
-
-
-
-
-
 // import React, { useState, useEffect, useRef } from 'react';
 // import {
 //   UserCheck,
@@ -7757,10 +8155,15 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //   Edit,
 //   Printer,
 //   RefreshCw,
-//   Info
+//   Info,
+//   Home,
+//   MapPin,
+//   Layers,
+//   Tag
 // } from 'lucide-react';
 // import { getAuthHeaders, getCsrfToken as resolveCsrfToken } from '../config';
 // import { BookingPropertyFinder, BookingSelectedUnits } from './OnboardingBookingUnits';
+// import { getUnitFields, unitDetails } from './onboardingUnitFields';
 // import OnboardingSignedDocuments from './OnboardingSignedDocuments';
 // import OnboardingQuotationAction from './OnboardingQuotationAction';
 
@@ -8238,11 +8641,99 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //   return true;
 // };
 
-// const isOnboardingUnitTable = (field) => field.fieldtype === 'Table' &&
-//   /onboard.*unit/i.test(`${field.options || ''} ${field.label || ''} ${field.fieldname || ''}`);
+// const isOnboardingUnitTable = (field) => field && field.fieldtype === 'Table' && (
+//   field.fieldname === 'onboarding_unit' ||
+//   field.fieldname === 'onboarding_units' ||
+//   field.fieldname === 'items' ||
+//   field.options === 'onboarding_unit' ||
+//   field.options === 'Onboarding Unit' ||
+//   /onboard.*unit/i.test(`${field.options || ''} ${field.label || ''} ${field.fieldname || ''}`)
+// );
 
 // const isSignedDocumentField = field => field.fieldname === 'signed_document' ||
 //   (['Attach', 'Attach Image'].includes(field.fieldtype) && /^signed documents?$/i.test((field.label || '').trim()));
+
+// const getSelectedCaseUnits = (caseDoc, unitFieldsSchema = [], allFields = [], itemCache = {}) => {
+//   if (!caseDoc) return [];
+//   const map = getUnitFields(unitFieldsSchema);
+//   const unitTableField = allFields.find(isOnboardingUnitTable);
+
+//   let rawList = [];
+//   if (Array.isArray(caseDoc.onboarding_unit) && caseDoc.onboarding_unit.length > 0) {
+//     rawList = caseDoc.onboarding_unit;
+//   } else if (unitTableField && Array.isArray(caseDoc[unitTableField.fieldname]) && caseDoc[unitTableField.fieldname].length > 0) {
+//     rawList = caseDoc[unitTableField.fieldname];
+//   } else if (Array.isArray(caseDoc.items) && caseDoc.items.length > 0) {
+//     rawList = caseDoc.items;
+//   } else if (Array.isArray(caseDoc.onboarding_units) && caseDoc.onboarding_units.length > 0) {
+//     rawList = caseDoc.onboarding_units;
+//   } else if (Array.isArray(caseDoc.onboarding_unit_table) && caseDoc.onboarding_unit_table.length > 0) {
+//     rawList = caseDoc.onboarding_unit_table;
+//   } else if (Array.isArray(caseDoc.units) && caseDoc.units.length > 0) {
+//     rawList = caseDoc.units;
+//   } else if (Array.isArray(caseDoc.onboarding_unit)) {
+//     rawList = caseDoc.onboarding_unit;
+//   } else {
+//     for (const [key, val] of Object.entries(caseDoc)) {
+//       if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object' && val[0] !== null) {
+//         if (!/(document|search|attach|file)/i.test(key) && (val[0].unit || val[0].item_code || val[0].unit_name || val[0].item_name || val[0].offered_rate || val[0].rate || val[0].property_group || val[0].custom_property_group)) {
+//           rawList = val;
+//           break;
+//         }
+//       }
+//     }
+//   }
+
+//   return rawList.map((row, idx) => {
+//     const unitCode = (map.unit && row[map.unit]) || row.item_code || row.unit || row.unit_name || row.item_name || row.name || '';
+//     const cachedItem = (itemCache && itemCache[unitCode]) || {};
+//     const itemGroup = row.item_group || cachedItem.item_group || '';
+//     const isService = itemGroup === 'Services' ||
+//       /service/i.test(unitCode) ||
+//       (map.group && row[map.group] === 'Default Service') ||
+//       row.property_group === 'Default Service' ||
+//       row.custom_property_group === 'Default Service';
+
+//     const valRate = (map.valuation && row[map.valuation] !== undefined && row[map.valuation] !== '')
+//       ? row[map.valuation]
+//       : (row.valuation_rate ?? row.standard_rate ?? row.val_rate ?? cachedItem.valuation_rate ?? cachedItem.standard_rate ?? 0);
+
+//     const offeredRate = (map.rate && row[map.rate] !== undefined && row[map.rate] !== '')
+//       ? row[map.rate]
+//       : (row.offered_rate ?? row.rate ?? row.rental_rate ?? valRate);
+
+//     const propGroup = isService ? 'Default Service' :
+//       ((map.group && row[map.group]) || row.property_group || row.custom_property_group || row.group || row.custom_property_reference || row.property || cachedItem.custom_property_group || cachedItem.property_group || caseDoc.property_group || caseDoc.custom_property_group || '-');
+
+//     const district = isService ? '—' :
+//       ((map.district && row[map.district]) || row.district || row.custom_district || cachedItem.district || cachedItem.custom_district || caseDoc.shop_space_location || '-');
+
+//     const area = (map.area && row[map.area] !== undefined && row[map.area] !== '')
+//       ? row[map.area]
+//       : (row.total_area || row.total_area_sqft || row.carpet_area || row.area || row.total_areasqm || cachedItem.custom_7average_carpet_area_of_units || cachedItem.total_area || 0);
+
+//     const qty = (map.qty && row[map.qty] !== undefined && row[map.qty] !== '') ? row[map.qty] : (row.qty || 1);
+
+//     const amount = (map.amount && row[map.amount] !== undefined && row[map.amount] !== null && row[map.amount] !== '')
+//       ? Number(row[map.amount])
+//       : (Number(qty) * Number(offeredRate || 0));
+
+//     return {
+//       raw: row,
+//       unitCode: unitCode || `Unit ${idx + 1}`,
+//       isService,
+//       serviceLabel: row.item_name || row.unit_name || cachedItem.item_name || unitCode,
+//       serviceRateDesc: (row.charges || cachedItem.charges) ? `Rate: $${Number(row.charges || cachedItem.charges).toLocaleString()}/sqft × ${Number(area || 0).toLocaleString()} sqft` : '',
+//       valRate: Number(valRate) || 0,
+//       offeredRate: Number(offeredRate) || 0,
+//       propGroup,
+//       district,
+//       area: Number(area) || 0,
+//       amount: Number(amount) || 0,
+//       qty: Number(qty) || 1
+//     };
+//   });
+// };
 
 // const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkOptions, getDocTypeFields, erpnextConfig, getCsrfToken, formValues = {}, isNew = false, bookingPropertyGroup }) => {
 //   if (isInternalTenantField(field)) {
@@ -9339,7 +9830,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //         await Promise.all(itemsToFetch.map(async (item) => {
 //           const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(item.name)}`, {
 //             credentials: 'include',
-//             headers: { 'Content-Type': 'application/json' }
+//             headers: getAuthHeaders({ 'Content-Type': 'application/json' })
 //           });
 //           if (res.ok) {
 //             const json = await res.json();
@@ -9354,6 +9845,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //                 setSelectedCase(prev => ({
 //                   ...prev,
 //                   ...detail,
+//                   onboarding_unit: detail.onboarding_unit || prev?.onboarding_unit || [],
 //                   documents: docList,
 //                   company_search_documents: docList
 //                 }));
@@ -9421,10 +9913,139 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //   };
 
 //   const [firstLoadDone, setFirstLoadDone] = useState(false);
+//   const [itemDetailsCache, setItemDetailsCache] = useState({});
+
+//   const fetchItemDetailsForUnits = async (itemCodes) => {
+//     if (!erpnextConfig?.url || !Array.isArray(itemCodes) || itemCodes.length === 0) return;
+//     const missing = itemCodes.filter(c => c && typeof c === 'string' && !itemDetailsCache[c]);
+//     if (missing.length === 0) return;
+//     try {
+//       const query = new URLSearchParams({
+//         filters: JSON.stringify([['name', 'in', missing]]),
+//         fields: JSON.stringify([
+//           'name',
+//           'item_name',
+//           'item_group',
+//           'custom_property_group',
+//           'property_group',
+//           'district',
+//           'custom_district',
+//           'valuation_rate',
+//           'standard_rate',
+//           'total_area',
+//           'total_area_sqft',
+//           'custom_7average_carpet_area_of_units',
+//           'charges'
+//         ]),
+//         limit_page_length: '500'
+//       });
+//       const res = await fetch(`${erpnextConfig.url}/api/resource/Item?${query}`, {
+//         credentials: 'include',
+//         headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+//       });
+//       if (res.ok) {
+//         const json = await res.json();
+//         const items = json.data || json;
+//         if (Array.isArray(items)) {
+//           setItemDetailsCache(prev => {
+//             const next = { ...prev };
+//             items.forEach(it => { if (it && it.name) next[it.name] = it; });
+//             return next;
+//           });
+//         }
+//       }
+//     } catch (err) {
+//       console.warn("Failed to fetch Item details:", err);
+//     }
+//   };
+
+//   const fetchCaseFullDetails = async (caseName) => {
+//     if (!caseName || !erpnextConfig?.url) return;
+//     try {
+//       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(caseName)}`, {
+//         credentials: 'include',
+//         headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+//       });
+//       if (res.ok) {
+//         const json = await res.json();
+//         const detail = json.data || json;
+//         if (detail) {
+//           setEditType(detail.type || 'Company');
+//           setEditCompanyName(detail.company_name || '');
+//           setEditCompanyVatId(detail.company_vat_id || '');
+//           setEditContactName(detail.contact_name || '');
+//           setEditEmailId(detail.email_id || '');
+//           const phoneParsedDetail = parsePhoneNumber(detail.contact_number || '');
+//           setEditContactPrefix(phoneParsedDetail.prefix || '+679');
+//           setEditContactLocal(phoneParsedDetail.local || '');
+
+//           let units = detail.onboarding_unit || detail.items || detail.onboarding_units || [];
+//           if (!Array.isArray(units) || units.length === 0) {
+//             try {
+//               const childRes = await fetch(`${erpnextConfig.url}/api/resource/Onboarding Unit?filters=%5B%5B%22parent%22%2C%22%3D%22%2C%22${encodeURIComponent(caseName)}%22%5D%5D&fields=%5B%22*%22%5D&limit_page_length=1000`, {
+//                 credentials: 'include',
+//                 headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+//               });
+//               if (childRes.ok) {
+//                 const cJson = await childRes.json();
+//                 const cList = cJson.data || cJson;
+//                 if (Array.isArray(cList) && cList.length > 0) {
+//                   units = cList;
+//                 }
+//               }
+//             } catch (cErr) {
+//               console.warn("Direct child table fetch fallback error:", cErr);
+//             }
+//           }
+
+//           detail.onboarding_unit = units;
+
+//           const unitCodes = units.map(u => u.item_code || u.unit || u.unit_code || u.property_unit || u.item || u.item_name).filter(Boolean);
+//           if (unitCodes.length > 0) {
+//             fetchItemDetailsForUnits(unitCodes);
+//           }
+
+//           const docList = detail.company_search_documents || [];
+//           setCaseDocuments(prev => ({
+//             ...prev,
+//             [detail.name]: docList
+//           }));
+
+//           setSelectedCase(prev => {
+//             if (prev && prev.name === detail.name) {
+//               return {
+//                 ...prev,
+//                 ...detail,
+//                 onboarding_unit: units,
+//                 documents: docList,
+//                 company_search_documents: docList
+//               };
+//             }
+//             return prev;
+//           });
+
+//           setOnboardings(prev => prev.map(c => {
+//             if (c.name === detail.name) {
+//               return {
+//                 ...c,
+//                 ...detail,
+//                 onboarding_unit: units,
+//                 documents: docList,
+//                 company_search_documents: docList
+//               };
+//             }
+//             return c;
+//           }));
+//         }
+//       }
+//     } catch (err) {
+//       console.warn("Failed to fetch detailed onboarding record:", err);
+//     }
+//   };
 
 //   const handleSelectCase = async (item) => {
 //     setSelectedCase(item);
-//     setActiveDetailTab('proposal');
+//     setActiveDetailTab(prev => (prev && ['basic', 'proposal', 'booking', 'documents'].includes(prev)) ? prev : 'proposal');
 //     setIsEditingDetails(false);
 //     setWorkflowState(null);
 //     fetchWorkflowActions(item.name);
@@ -9439,62 +10060,20 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //     setEditContactPrefix(phoneParsed.prefix || '+679');
 //     setEditContactLocal(phoneParsed.local || '');
 
-//     if (!erpnextConfig?.url) return;
-//     try {
-//       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(item.name)}`, {
-//         credentials: 'include',
-//         headers: { 'Content-Type': 'application/json' }
-//       });
-//       if (res.ok) {
-//         const json = await res.json();
-//         const detail = json.data || json;
-//         console.log("Selected Tenant Onboarding Details:", detail);
-//         if (detail) {
-//           setEditType(detail.type || 'Company');
-//           setEditCompanyName(detail.company_name || '');
-//           setEditCompanyVatId(detail.company_vat_id || '');
-//           setEditContactName(detail.contact_name || '');
-//           setEditEmailId(detail.email_id || '');
-//           const phoneParsedDetail = parsePhoneNumber(detail.contact_number || '');
-//           setEditContactPrefix(phoneParsedDetail.prefix || '+679');
-//           setEditContactLocal(phoneParsedDetail.local || '');
-
-//           const docList = detail.company_search_documents || [];
-
-//           setCaseDocuments(prev => ({
-//             ...prev,
-//             [detail.name]: docList
-//           }));
-
-//           setSelectedCase(prev => {
-//             if (prev && prev.name === detail.name) {
-//               return {
-//                 ...prev,
-//                 ...detail,
-//                 documents: docList,
-//                 company_search_documents: docList
-//               };
-//             }
-//             return prev;
-//           });
-
-//           setOnboardings(prev => prev.map(c => {
-//             if (c.name === detail.name) {
-//               return {
-//                 ...c,
-//                 ...detail,
-//                 documents: docList,
-//                 company_search_documents: docList
-//               };
-//             }
-//             return c;
-//           }));
-//         }
-//       }
-//     } catch (err) {
-//       console.warn("Failed to fetch detailed onboarding record:", err);
-//     }
+//     await fetchCaseFullDetails(item.name);
 //   };
+
+//   useEffect(() => {
+//     if (!selectedCase?.name || !erpnextConfig?.url) return;
+//     if (!Array.isArray(selectedCase.onboarding_unit) || selectedCase.onboarding_unit.length === 0) {
+//       fetchCaseFullDetails(selectedCase.name);
+//     } else {
+//       const unitCodes = selectedCase.onboarding_unit.map(u => u.item_code || u.unit || u.unit_code || u.property_unit || u.item || u.item_name).filter(Boolean);
+//       if (unitCodes.length > 0) {
+//         fetchItemDetailsForUnits(unitCodes);
+//       }
+//     }
+//   }, [selectedCase?.name, selectedCase?.onboarding_unit, erpnextConfig?.url]);
 
 //   const fetchWorkflowActions = async (onboardingName) => {
 //     if (!erpnextConfig?.url || !onboardingName) return;
@@ -9526,88 +10105,258 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //     }
 //   };
 
-//   const handleWorkflowAction = async (actionName, nextState) => {
-//     if (!selectedCase || !erpnextConfig?.url) return;
+//   const handleWorkflowAction = async (
+//     actionName,
+//     nextState
+//   ) => {
+//     if (
+//       !selectedCase ||
+//       !erpnextConfig?.url
+//     ) {
+//       return;
+//     }
 
-//     const normalizedAction = (actionName || '').toLowerCase();
+//     const normalizedAction = (
+//       actionName || ''
+//     ).toLowerCase();
+
+//     // =====================================================
+//     // Existing Signed Document business rule
+//     // =====================================================
 
 //     const hasSignedDocument = Boolean(
-//       selectedCase?.[signedDocumentFieldname] &&
-//       String(selectedCase[signedDocumentFieldname]).trim()
+//       selectedCase?.[
+//       signedDocumentFieldname
+//       ] &&
+//       String(
+//         selectedCase[
+//         signedDocumentFieldname
+//         ]
+//       ).trim()
 //     );
 
-//     // Approve / Reject buttons should work only after Signed Document is uploaded.
 //     if (
 //       !hasSignedDocument &&
 //       (
-//         normalizedAction.includes('approve') ||
-//         normalizedAction.includes('reject')
+//         normalizedAction.includes(
+//           'approve'
+//         ) ||
+//         normalizedAction.includes(
+//           'reject'
+//         )
 //       )
 //     ) {
 //       alert(
 //         'Please upload the signed document before approving or rejecting.',
 //         'error'
 //       );
+
 //       return;
 //     }
 
-//     // If user selects No, nothing happens.
-//     if (!(await confirm(`Are you sure you want to "${actionName}"?`))) {
+//     // =====================================================
+//     // Confirmation
+//     // =====================================================
+
+//     const confirmed = await confirm(
+//       `Are you sure you want to "${actionName}"?`
+//     );
+
+//     if (!confirmed) {
 //       return;
 //     }
 
 //     setLoadingWorkflow(true);
 
 //     try {
-//       // Approval maintains the customer/address; quotation creation is a separate action.
-//       // See docs/tenant-onboarding-manual-quotation.md for the controller change.
+
 //       const res = await fetch(
 //         `${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.tenant_onboarding.tenant_onboarding.update_tenant_onboarding_workflow`,
 //         {
 //           method: 'POST',
+
 //           credentials: 'include',
+
 //           headers: getAuthHeaders({
-//             'Content-Type': 'application/json'
+//             'Content-Type':
+//               'application/json'
 //           }),
+
 //           body: JSON.stringify({
-//             tenant_onboarding: selectedCase.name,
-//             action: actionName
+//             tenant_onboarding:
+//               selectedCase.name,
+
+//             action:
+//               actionName
 //           })
 //         }
 //       );
 
-//       if (res.ok) {
-//         const json = await res.json();
-//         const error = json?.message?.error;
+//       if (!res.ok) {
 
-//         if (!error) {
-//           alert(
-//             `Action "${actionName}" applied successfully!`,
-//             'success'
-//           );
+//         const errorMsg =
+//           await extractErrorMessage(res);
 
-//           // Refresh current record, workflow state/actions and master list.
-//           await handleSelectCase({
-//             ...selectedCase,
-//             workflow_state: nextState || selectedCase.workflow_state
-//           });
+//         alert(
+//           errorMsg,
+//           'error'
+//         );
 
-//           await fetchWorkflowActions(selectedCase.name);
-//           await fetchOnboardings();
-//         } else {
-//           alert(`Failed to apply action: ${error}`, 'error');
-//         }
-//       } else {
-//         const errorMsg = await extractErrorMessage(res);
-//         alert(`Failed to apply action: ${errorMsg}`, 'error');
+//         return;
 //       }
+
+//       const json =
+//         await res.json();
+
+//       const result =
+//         json?.message;
+
+//       // ===================================================
+//       // Permission / Workflow error
+//       // ===================================================
+
+//       if (
+//         !result?.success ||
+//         result?.error
+//       ) {
+
+//         alert(
+//           result?.error ||
+//           `You do not have permission to perform "${actionName}".`,
+//           'error'
+//         );
+
+//         return;
+//       }
+
+//       // ===================================================
+//       // Success
+//       // ===================================================
+
+//       alert(
+//         `Action "${actionName}" applied successfully!`,
+//         'success'
+//       );
+
+//       // Reload current record
+//       await handleSelectCase({
+//         ...selectedCase,
+
+//         workflow_state:
+//           result.workflow_state ||
+//           nextState ||
+//           selectedCase.workflow_state
+//       });
+
+//       // Reload available workflow actions
+//       await fetchWorkflowActions(
+//         selectedCase.name
+//       );
+
+//       // Reload Tenant Onboarding list
+//       await fetchOnboardings();
+
 //     } catch (err) {
-//       console.error('Error applying workflow action:', err);
-//       alert(`Error applying workflow action: ${err.message}`, 'error');
+
+//       console.error(
+//         'Workflow action error:',
+//         err
+//       );
+
+//       alert(
+//         err?.message ||
+//         'Unable to perform workflow action.',
+//         'error'
+//       );
+
 //     } finally {
+
 //       setLoadingWorkflow(false);
 //     }
 //   };
+
+//   // const handleWorkflowAction = async (actionName, nextState) => {
+//   //   if (!selectedCase || !erpnextConfig?.url) return;
+
+//   //   const normalizedAction = (actionName || '').toLowerCase();
+
+//   //   const hasSignedDocument = Boolean(
+//   //     selectedCase?.[signedDocumentFieldname] &&
+//   //     String(selectedCase[signedDocumentFieldname]).trim()
+//   //   );
+
+//   //   // Approve / Reject buttons should work only after Signed Document is uploaded.
+//   //   if (
+//   //     !hasSignedDocument &&
+//   //     (
+//   //       normalizedAction.includes('approve') ||
+//   //       normalizedAction.includes('reject')
+//   //     )
+//   //   ) {
+//   //     alert(
+//   //       'Please upload the signed document before approving or rejecting.',
+//   //       'error'
+//   //     );
+//   //     return;
+//   //   }
+
+//   //   // If user selects No, nothing happens.
+//   //   if (!(await confirm(`Are you sure you want to "${actionName}"?`))) {
+//   //     return;
+//   //   }
+
+//   //   setLoadingWorkflow(true);
+
+//   //   try {
+//   //     // Approval maintains the customer/address; quotation creation is a separate action.
+//   //     // See docs/tenant-onboarding-manual-quotation.md for the controller change.
+//   //     const res = await fetch(
+//   //       `${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.tenant_onboarding.tenant_onboarding.update_tenant_onboarding_workflow`,
+//   //       {
+//   //         method: 'POST',
+//   //         credentials: 'include',
+//   //         headers: getAuthHeaders({
+//   //           'Content-Type': 'application/json'
+//   //         }),
+//   //         body: JSON.stringify({
+//   //           tenant_onboarding: selectedCase.name,
+//   //           action: actionName
+//   //         })
+//   //       }
+//   //     );
+
+//   //     if (res.ok) {
+//   //       const json = await res.json();
+//   //       const error = json?.message?.error;
+
+//   //       if (!error) {
+//   //         alert(
+//   //           `Action "${actionName}" applied successfully!`,
+//   //           'success'
+//   //         );
+
+//   //         // Refresh current record, workflow state/actions and master list.
+//   //         await handleSelectCase({
+//   //           ...selectedCase,
+//   //           workflow_state: nextState || selectedCase.workflow_state
+//   //         });
+
+//   //         await fetchWorkflowActions(selectedCase.name);
+//   //         await fetchOnboardings();
+//   //       } else {
+//   //         alert(`Failed to apply action: ${error}`, 'error');
+//   //       }
+//   //     } else {
+//   //       const errorMsg = await extractErrorMessage(res);
+//   //       alert(`Failed to apply action: ${errorMsg}`, 'error');
+//   //     }
+//   //   } catch (err) {
+//   //     console.error('Error applying workflow action:', err);
+//   //     alert(`Error applying workflow action: ${err.message}`, 'error');
+//   //   } finally {
+//   //     setLoadingWorkflow(false);
+//   //   }
+//   // };
 
 //   const handlePrintBookingForm = () => {
 //     if (selectedCase?.business_status === 'Cancelled' || selectedCase?.workflow_state === 'Cancelled' || selectedCase?.docstatus === 2) {
@@ -9881,7 +10630,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //       try {
 //         const docRes = await fetch(`${erpnextConfig.url}/api/resource/Company Search Documents?fields=%5B%22name%22%2C%22parent%22%2C%22document%22%2C%22document_type%22%2C%22verified%22%5D&filters=%5B%5B%22parenttype%22%2C%22%3D%22%2C%22Tenant%20Onboarding%22%5D%5D&limit_page_length=10000`, {
 //           credentials: 'include',
-//           headers: { 'Content-Type': 'application/json' }
+//           headers: getAuthHeaders({ 'Content-Type': 'application/json' })
 //         });
 //         if (docRes.ok) {
 //           const dJson = await docRes.json();
@@ -9904,7 +10653,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //       // 2. Fetch Parent Tenant Onboardings
 //       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding?fields=%5B%22name%22%2C%22proposed_business_type%22%2C%22budget%22%2C%22required_space%22%2C%22shop_space_location%22%2C%22lease_period%22%2C%22usage_of_demised_premises%22%2C%22business_status%22%2C%22owner%22%2C%22creation%22%2C%22menu_and_business_pictures%22%2C%22fitout_period%22%2C%22rental_charges%22%2C%22security_deposit_booking_fee%22%2C%22service_promotional_charges%22%2C%22product_service_range%22%2C%22fitout_approval_timeframe%22%2C%22contact_name%22%2C%22email_id%22%2C%22contact_number%22%2C%22company_name%22%2C%22lease_commencement_date%22%2C%22vacant_possession_date%22%2C%22plans_for_approval%22%2C%22workflow_state%22%2C%22docstatus%22%5D&limit_page_length=1000&order_by=creation%20desc`, {
 //         credentials: 'include',
-//         headers: { 'Content-Type': 'application/json' }
+//         headers: getAuthHeaders({ 'Content-Type': 'application/json' })
 //       });
 //       if (res.ok) {
 //         const data = await res.json();
@@ -9916,13 +10665,14 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //           }));
 //           setOnboardings(mapped);
 
-//           // Re-sync selected case if active without losing cache documents
+//           // Re-sync selected case if active without losing cache documents or onboarding units
 //           if (selectedCase) {
 //             const fresh = mapped.find(c => c.name === selectedCase.name);
 //             if (fresh) {
 //               setSelectedCase(prev => ({
 //                 ...prev,
 //                 ...fresh,
+//                 onboarding_unit: prev.onboarding_unit || fresh.onboarding_unit || [],
 //                 documents: caseDocuments[prev.name] || prev.documents || []
 //               }));
 //             }
@@ -9996,7 +10746,8 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //       const fields = docs?.[0]?.fields || [];
 //       setChildSchemasCache(prev => ({
 //         ...prev,
-//         [doctype]: fields
+//         [doctype]: fields,
+//         [doctype.toLowerCase()]: fields
 //       }));
 //       return fields;
 //     } catch (error) {
@@ -10041,9 +10792,17 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //     fetchCountries();
 //     fetchWorkflowDoctype();
 //     getDocTypeFields("Company Search Documents").catch(err => console.warn(err));
+//     getDocTypeFields("Onboarding Unit").catch(err => console.warn(err));
 //     getDocTypeFields("Tenant Onboarding").then(fields => {
 //       if (Array.isArray(fields) && fields.length > 0) {
 //         setDoctypeFields(fields);
+//         fields.filter(f => f.fieldtype === 'Table' && f.options).forEach(tf => {
+//           getDocTypeFields(tf.options).then(cFields => {
+//             if (Array.isArray(cFields)) {
+//               setChildSchemasCache(prev => ({ ...prev, [tf.options]: cFields }));
+//             }
+//           }).catch(err => console.warn(err));
+//         });
 //         const defaults = {};
 //         fields.forEach(field => {
 //           if (field.default !== undefined && field.default !== null) {
@@ -10381,6 +11140,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //               return {
 //                 ...prev,
 //                 ...detail,
+//                 onboarding_unit: detail.onboarding_unit || payload.onboarding_unit || prev?.onboarding_unit || [],
 //                 documents: caseDocuments[detail.name] || prev.documents || []
 //               };
 //             }
@@ -10392,11 +11152,39 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //               return {
 //                 ...c,
 //                 ...detail,
+//                 onboarding_unit: detail.onboarding_unit || payload.onboarding_unit || c?.onboarding_unit || [],
 //                 documents: caseDocuments[detail.name] || c.documents || []
 //               };
 //             }
 //             return c;
 //           }));
+//         }
+//         if (activeDynamicTabIdx !== undefined) {
+//           const dynSecs = [];
+//           let cSec = { title: 'Basic Info', fields: [] };
+//           doctypeFields
+//             .filter(f => f.hidden !== 1 && !isSignedDocumentField(f) && f.fieldname !== 'naming_series' && f.fieldname !== 'amended_from' && f.fieldname !== 'workflow_state')
+//             .forEach(f => {
+//               if (f.fieldtype === 'Section Break') {
+//                 if (cSec.fields.length > 0) dynSecs.push(cSec);
+//                 cSec = { title: f.label || 'Details', fields: [] };
+//               } else if (f.fieldtype !== 'Column Break') {
+//                 cSec.fields.push(f);
+//               }
+//             });
+//           if (cSec.fields.length > 0) dynSecs.push(cSec);
+//           const curSec = dynSecs[activeDynamicTabIdx];
+//           if (curSec) {
+//             if (curSec.fields.some(f => f.fieldname === 'shop_space_location' || isOnboardingUnitTable(f) || /booking/i.test(curSec.title))) {
+//               setActiveDetailTab('booking');
+//             } else if (curSec.fields.some(f => f.fieldname === 'proposed_business_type' || f.fieldname === 'budget' || /proposal/i.test(curSec.title))) {
+//               setActiveDetailTab('proposal');
+//             } else if (curSec.fields.some(f => f.fieldname === 'company_search_documents' || /document/i.test(curSec.title))) {
+//               setActiveDetailTab('documents');
+//             } else {
+//               setActiveDetailTab('basic');
+//             }
+//           }
 //         }
 //         setIsEditingDetails(false);
 //         alert("Changes saved successfully!", "success");
@@ -10515,6 +11303,366 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //       photo_id: { doc: '', verified: false }
 //     });
 //     setModalExpandedDocs({});
+//   };
+
+//   const syncDefaultServicesForPayload = async (payload) => {
+//     if (!erpnextConfig?.url) {
+//       return payload;
+//     }
+
+//     const rows = Array.isArray(payload.onboarding_unit)
+//       ? payload.onboarding_unit.map(row => ({ ...row }))
+//       : [];
+
+//     // ---------------------------------------------------------
+//     // Get all selected item codes
+//     // ---------------------------------------------------------
+
+//     const itemCodes = [
+//       ...new Set(
+//         rows
+//           .map(row => row?.item_code)
+//           .filter(Boolean)
+//       )
+//     ];
+
+//     if (!itemCodes.length) {
+//       return {
+//         ...payload,
+//         onboarding_unit: rows,
+//         service_promotional_charges: 0
+//       };
+//     }
+
+//     // ---------------------------------------------------------
+//     // Fetch selected Items
+//     // Same information used by ERPNext Client Script
+//     // ---------------------------------------------------------
+
+//     const itemFilters = encodeURIComponent(
+//       JSON.stringify([
+//         ["name", "in", itemCodes]
+//       ])
+//     );
+
+//     const itemFields = encodeURIComponent(
+//       JSON.stringify([
+//         "name",
+//         "item_name",
+//         "item_group",
+//         "custom_7average_carpet_area_of_units",
+//         "stock_uom"
+//       ])
+//     );
+
+//     const itemResponse = await fetch(
+//       `${erpnextConfig.url}/api/resource/Item?filters=${itemFilters}&fields=${itemFields}&limit_page_length=0`,
+//       {
+//         credentials: "include",
+//         headers: getAuthHeaders({
+//           "Content-Type": "application/json"
+//         })
+//       }
+//     );
+
+//     if (!itemResponse.ok) {
+//       throw new Error(
+//         "Unable to fetch property Item details for service calculation."
+//       );
+//     }
+
+//     const itemJson = await itemResponse.json();
+
+//     const items = Array.isArray(itemJson?.data)
+//       ? itemJson.data
+//       : [];
+
+//     const itemMap = {};
+
+//     items.forEach(item => {
+//       if (item?.name) {
+//         itemMap[item.name] = item;
+//       }
+//     });
+
+//     // ---------------------------------------------------------
+//     // Calculate Commercial carpet area
+//     //
+//     // IMPORTANT:
+//     // This intentionally matches your ERPNext Client Script.
+//     // It DOES NOT multiply the carpet area by qty.
+//     // ---------------------------------------------------------
+
+//     let totalCarpetArea = 0;
+//     let commercialCount = 0;
+
+//     rows.forEach(row => {
+//       if (!row?.item_code) {
+//         return;
+//       }
+
+//       const item = itemMap[row.item_code];
+
+//       if (item?.item_group === "Commercial") {
+//         commercialCount += 1;
+
+//         totalCarpetArea += Number(
+//           item.custom_7average_carpet_area_of_units || 0
+//         );
+//       }
+//     });
+
+//     // ---------------------------------------------------------
+//     // Fetch Default Service Items
+//     // Equivalent to:
+//     //
+//     // item_group = Services
+//     // custom_service_group = Default Service
+//     // disabled = 0
+//     // ---------------------------------------------------------
+
+//     const serviceFilters = encodeURIComponent(
+//       JSON.stringify([
+//         ["item_group", "=", "Services"],
+//         ["custom_service_group", "=", "Default Service"],
+//         ["disabled", "=", 0]
+//       ])
+//     );
+
+//     const serviceFields = encodeURIComponent(
+//       JSON.stringify([
+//         "name",
+//         "item_name",
+//         "charges",
+//         "stock_uom"
+//       ])
+//     );
+
+//     const serviceResponse = await fetch(
+//       `${erpnextConfig.url}/api/resource/Item?filters=${serviceFilters}&fields=${serviceFields}&limit_page_length=0`,
+//       {
+//         credentials: "include",
+//         headers: getAuthHeaders({
+//           "Content-Type": "application/json"
+//         })
+//       }
+//     );
+
+//     if (!serviceResponse.ok) {
+//       throw new Error(
+//         "Unable to fetch Default Service Items."
+//       );
+//     }
+
+//     const serviceJson = await serviceResponse.json();
+
+//     const serviceItems = Array.isArray(serviceJson?.data)
+//       ? serviceJson.data
+//       : [];
+
+//     // ---------------------------------------------------------
+//     // Same validation as ERPNext Client Script
+//     // ---------------------------------------------------------
+
+//     if (
+//       commercialCount > 0 &&
+//       serviceItems.length === 0
+//     ) {
+//       throw new Error(
+//         "No active Default Service Item found."
+//       );
+//     }
+
+//     const serviceNames = new Set(
+//       serviceItems.map(service => service.name)
+//     );
+
+//     // ---------------------------------------------------------
+//     // No Commercial Unit
+//     //
+//     // Remove auto-generated Default Service rows
+//     // ---------------------------------------------------------
+
+//     if (commercialCount === 0) {
+//       const remainingRows = rows
+//         .filter(row => !serviceNames.has(row.item_code))
+//         .map((row, index) => ({
+//           ...row,
+//           idx: index + 1
+//         }));
+
+//       return {
+//         ...payload,
+//         onboarding_unit: remainingRows,
+//         service_promotional_charges: 0
+//       };
+//     }
+
+//     // ---------------------------------------------------------
+//     // Split manually-selected rows and default-service rows
+//     // ---------------------------------------------------------
+
+//     const serviceRowsByCode = {};
+
+//     rows.forEach(row => {
+//       if (
+//         row?.item_code &&
+//         serviceNames.has(row.item_code)
+//       ) {
+//         serviceRowsByCode[row.item_code] = {
+//           ...row
+//         };
+//       }
+//     });
+
+//     const calculatedServiceRows = [];
+
+//     let totalServicePromotionalCharges = 0;
+
+//     // ---------------------------------------------------------
+//     // Create / Update Default Services
+//     // ---------------------------------------------------------
+
+//     serviceItems.forEach(service => {
+//       const rate =
+//         totalCarpetArea *
+//         Number(service.charges || 0);
+
+//       const roundedRate =
+//         Math.round(
+//           (rate + Number.EPSILON) * 100
+//         ) / 100;
+
+//       totalServicePromotionalCharges +=
+//         roundedRate;
+
+//       const existing =
+//         serviceRowsByCode[service.name] || {};
+
+//       const uom =
+//         existing.uom ||
+//         service.stock_uom ||
+//         "";
+
+//       const serviceRow = {
+//         ...existing,
+
+//         item_code: service.name,
+
+//         item_name:
+//           service.item_name ||
+//           service.name,
+
+//         description:
+//           existing.description ||
+//           service.item_name ||
+//           service.name,
+
+//         qty: 1,
+
+//         stock_qty: 1,
+
+//         conversion_factor:
+//           Number(
+//             existing.conversion_factor || 1
+//           ),
+
+//         uom,
+
+//         stock_uom:
+//           existing.stock_uom ||
+//           service.stock_uom ||
+//           uom,
+
+//         rate: roundedRate,
+
+//         amount: roundedRate,
+
+//         net_rate: roundedRate,
+
+//         net_amount: roundedRate
+//       };
+
+//       calculatedServiceRows.push(
+//         serviceRow
+//       );
+//     });
+
+//     totalServicePromotionalCharges =
+//       Math.round(
+//         (totalServicePromotionalCharges +
+//           Number.EPSILON) *
+//         100
+//       ) / 100;
+
+//     // ---------------------------------------------------------
+//     // Remove existing Default Services from normal rows
+//     // ---------------------------------------------------------
+
+//     const otherRows = rows.filter(
+//       row =>
+//         !serviceNames.has(row?.item_code)
+//     );
+
+//     // ---------------------------------------------------------
+//     // Find last Commercial Unit
+//     // ---------------------------------------------------------
+
+//     let lastCommercialIndex = -1;
+
+//     otherRows.forEach((row, index) => {
+//       const item = itemMap[row?.item_code];
+
+//       if (item?.item_group === "Commercial") {
+//         lastCommercialIndex = index;
+//       }
+//     });
+
+//     // ---------------------------------------------------------
+//     // Put services immediately after last Commercial Item
+//     // ---------------------------------------------------------
+
+//     let finalRows;
+
+//     if (lastCommercialIndex >= 0) {
+//       finalRows = [
+//         ...otherRows.slice(
+//           0,
+//           lastCommercialIndex + 1
+//         ),
+
+//         ...calculatedServiceRows,
+
+//         ...otherRows.slice(
+//           lastCommercialIndex + 1
+//         )
+//       ];
+//     } else {
+//       finalRows = [
+//         ...otherRows,
+//         ...calculatedServiceRows
+//       ];
+//     }
+
+//     finalRows = finalRows.map(
+//       (row, index) => ({
+//         ...row,
+//         idx: index + 1
+//       })
+//     );
+
+//     // ---------------------------------------------------------
+//     // Final payload
+//     // ---------------------------------------------------------
+
+//     return {
+//       ...payload,
+
+//       onboarding_unit: finalRows,
+
+//       service_promotional_charges:
+//         totalServicePromotionalCharges
+//     };
 //   };
 
 //   // Handle Starting Onboarding process (POST request to ERPNext)
@@ -10769,6 +11917,12 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //           state: state,
 //           country: country
 //         };
+//       }
+
+//       if (useDynamicForm) {
+//         payload = await syncDefaultServicesForPayload(
+//           payload
+//         );
 //       }
 
 //       const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding`, {
@@ -11122,7 +12276,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
 //         {/* List of Onboardings */}
 //         {loading && onboardings.length === 0 ? (
-//           <div style={{ padding: '48px', textAlign: 'center', color: 'var(--text-muted)' }}>Syncing with ERPNext...</div>
+//           <div style={{ padding: '48px', textAlign: 'center', color: 'var(--text-muted)' }}>Waiting for response</div>
 //         ) : filteredCases.length === 0 ? (
 //           <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '48px', textAlign: 'center', color: 'var(--text-muted)' }}>
 //             No onboarding records found.
@@ -11413,7 +12567,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
 //                 {/* Row 2: Title & Action Buttons (Parallel) */}
 //                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '12px' }}>
-//                   <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Compliance Audit</h2>
+//                   <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Tenant Profile</h2>
 
 //                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
 //                     {activeDetailTab !== 'documents' && (
@@ -11432,8 +12586,59 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //                             });
 //                             initialDynamic['is_internal_customer'] = 0;
 //                             initialDynamic['is_internal_tenant'] = 0;
+
+//                             const uField = doctypeFields.find(isOnboardingUnitTable);
+//                             const cSchema = (uField && (childSchemasCache[uField.options] || childSchemasCache[uField.fieldname])) ||
+//                               childSchemasCache['Onboarding Unit'] ||
+//                               childSchemasCache['onboarding_unit'] ||
+//                               [];
+//                             const bUnits = getSelectedCaseUnits(selectedCase, cSchema, doctypeFields, itemDetailsCache);
+//                             const fCommUnit = bUnits.find(u => !u.isService) || bUnits[0];
+//                             const fPropGroup = (fCommUnit?.propGroup && fCommUnit.propGroup !== '-' && fCommUnit.propGroup !== 'Default Service')
+//                               ? fCommUnit.propGroup
+//                               : (itemDetailsCache[fCommUnit?.unitCode]?.custom_property_group || itemDetailsCache[fCommUnit?.unitCode]?.property_group || '');
+//                             const resolvedPG = fPropGroup ||
+//                               selectedCase[bookingPropertyGroupField?.fieldname] ||
+//                               selectedCase.property_group ||
+//                               selectedCase.custom_property_group ||
+//                               '';
+//                             if (resolvedPG) {
+//                               setBookingPropertyGroup(resolvedPG);
+//                               if (bookingPropertyGroupField) {
+//                                 initialDynamic[bookingPropertyGroupField.fieldname] = resolvedPG;
+//                               }
+//                             }
+//                             if (!initialDynamic.onboarding_unit && selectedCase.onboarding_unit) {
+//                               initialDynamic.onboarding_unit = selectedCase.onboarding_unit;
+//                             }
+
 //                             setDynamicFormValues(initialDynamic);
-//                             setActiveDynamicTabIdx(0);
+
+//                             // Map activeDetailTab to corresponding dynamic section index
+//                             const dynSecs = [];
+//                             let cSec = { title: 'Basic Info', fields: [] };
+//                             doctypeFields
+//                               .filter(f => f.hidden !== 1 && !isSignedDocumentField(f) && f.fieldname !== 'naming_series' && f.fieldname !== 'amended_from' && f.fieldname !== 'workflow_state')
+//                               .forEach(f => {
+//                                 if (f.fieldtype === 'Section Break') {
+//                                   if (cSec.fields.length > 0) dynSecs.push(cSec);
+//                                   cSec = { title: f.label || 'Details', fields: [] };
+//                                 } else if (f.fieldtype !== 'Column Break') {
+//                                   cSec.fields.push(f);
+//                                 }
+//                               });
+//                             if (cSec.fields.length > 0) dynSecs.push(cSec);
+
+//                             let targetIdx = 0;
+//                             if (activeDetailTab === 'booking') {
+//                               const bIdx = dynSecs.findIndex(s => s.fields.some(f => f.fieldname === 'shop_space_location' || isOnboardingUnitTable(f) || /booking/i.test(s.title)));
+//                               if (bIdx >= 0) targetIdx = bIdx;
+//                             } else if (activeDetailTab === 'proposal') {
+//                               const pIdx = dynSecs.findIndex(s => s.fields.some(f => f.fieldname === 'proposed_business_type' || f.fieldname === 'budget' || /proposal/i.test(s.title)));
+//                               if (pIdx >= 0) targetIdx = pIdx;
+//                             }
+
+//                             setActiveDynamicTabIdx(targetIdx);
 //                             setIsEditingDetails(true);
 //                           }
 //                         }}
@@ -11725,6 +12930,101 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //                             }
 //                             return true;
 //                           }) || [];
+
+//                           const isBookingSection = fields.some(field =>
+//                             field.fieldname === 'shop_space_location' || isOnboardingUnitTable(field)
+//                           );
+
+//                           /*
+//                            * Edit Booking Form intentionally uses the exact same
+//                            * Property Quick Finder + Selected Units components and
+//                            * state update logic as Start New Onboarding.
+//                            *
+//                            * This keeps creation and editing behaviour identical:
+//                            * - Location change clears Property Group + selected units
+//                            * - Property Group change reloads/selects available units
+//                            * - BookingSelectedUnits calculates booking charges
+//                            * - Existing units remain visible when edit mode opens
+//                            */
+//                           if (isBookingSection) {
+//                             const bookingFields = fields.filter(
+//                               field => field.fieldname !== bookingPropertyGroupField?.fieldname
+//                             );
+
+//                             return (
+//                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+//                                 {bookingFields.map(field => (
+//                                   <React.Fragment key={field.fieldname}>
+//                                     {field.fieldname === 'shop_space_location' ? (
+//                                       <div
+//                                         style={{
+//                                           gridColumn: 'span 2',
+//                                           display: 'grid',
+//                                           gridTemplateColumns: '1fr 1fr',
+//                                           gap: '12px'
+//                                         }}
+//                                       >
+//                                         <DynamicFormField
+//                                           field={field}
+//                                           value={dynamicFormValues[field.fieldname] || ''}
+//                                           onChange={newVal => updateBookingSelection(field.fieldname, newVal)}
+//                                           linkOptionsCache={linkOptionsCache}
+//                                           fetchLinkOptions={fetchLinkOptions}
+//                                           getDocTypeFields={getDocTypeFields}
+//                                           erpnextConfig={erpnextConfig}
+//                                           getCsrfToken={getCsrfToken}
+//                                           formValues={dynamicFormValues}
+//                                         />
+
+//                                         <BookingPropertyFinder
+//                                           key={dynamicFormValues.shop_space_location || ''}
+//                                           location={dynamicFormValues.shop_space_location || ''}
+//                                           value={selectedBookingPropertyGroup}
+//                                           onChange={newVal =>
+//                                             updateBookingSelection(
+//                                               bookingPropertyGroupField?.fieldname,
+//                                               newVal
+//                                             )
+//                                           }
+//                                           erpnextConfig={erpnextConfig}
+//                                           disabled={!!bookingPropertyGroupField?.read_only}
+//                                         />
+//                                       </div>
+//                                     ) : (
+//                                       <DynamicFormField
+//                                         field={field}
+//                                         bookingPropertyGroup={
+//                                           isOnboardingUnitTable(field)
+//                                             ? selectedBookingPropertyGroup
+//                                             : undefined
+//                                         }
+//                                         value={
+//                                           dynamicFormValues[field.fieldname] === undefined
+//                                             ? (field.default || '')
+//                                             : dynamicFormValues[field.fieldname]
+//                                         }
+//                                         onChange={(newVal, bookingCharges) =>
+//                                           setDynamicFormValues(prev => ({
+//                                             ...prev,
+//                                             [field.fieldname]: newVal,
+//                                             ...(isOnboardingUnitTable(field) && bookingCharges
+//                                               ? bookingCharges
+//                                               : {})
+//                                           }))
+//                                         }
+//                                         linkOptionsCache={linkOptionsCache}
+//                                         fetchLinkOptions={fetchLinkOptions}
+//                                         getDocTypeFields={getDocTypeFields}
+//                                         erpnextConfig={erpnextConfig}
+//                                         getCsrfToken={getCsrfToken}
+//                                         formValues={dynamicFormValues}
+//                                       />
+//                                     )}
+//                                   </React.Fragment>
+//                                 ))}
+//                               </div>
+//                             );
+//                           }
 
 //                           const addressFieldNames = ['address_line_1', 'address_line_2', 'city', 'state', 'country'];
 //                           const hasAddress = fields.some(f => addressFieldNames.includes(f.fieldname));
@@ -12137,7 +13437,21 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //                       <div style={{ display: 'flex', gap: '10px', marginTop: '16px', justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
 //                         <button
 //                           type="button"
-//                           onClick={() => setIsEditingDetails(false)}
+//                           onClick={() => {
+//                             const curSec = activeSections[safeTabIdx];
+//                             if (curSec) {
+//                               if (curSec.fields.some(f => f.fieldname === 'shop_space_location' || isOnboardingUnitTable(f) || /booking/i.test(curSec.title))) {
+//                                 setActiveDetailTab('booking');
+//                               } else if (curSec.fields.some(f => f.fieldname === 'proposed_business_type' || f.fieldname === 'budget' || /proposal/i.test(curSec.title))) {
+//                                 setActiveDetailTab('proposal');
+//                               } else if (curSec.fields.some(f => f.fieldname === 'company_search_documents' || /document/i.test(curSec.title))) {
+//                                 setActiveDetailTab('documents');
+//                               } else {
+//                                 setActiveDetailTab('basic');
+//                               }
+//                             }
+//                             setIsEditingDetails(false);
+//                           }}
 //                           disabled={updatingDetails}
 //                           style={{
 //                             padding: '7px 16px',
@@ -12705,278 +14019,420 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //                     )}
 
 //                     {/* Stage 2: Booking Form */}
-//                     {activeDetailTab === 'booking' && (
-//                       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
-//                         <h4 style={{ margin: 0, fontSize: '13px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Booking Form Terms & Conditions</h4>
+//                     {activeDetailTab === 'booking' && (() => {
+//                       const unitTableField = doctypeFields.find(isOnboardingUnitTable);
+//                       const childSchema = (unitTableField && (childSchemasCache[unitTableField.options] || childSchemasCache[unitTableField.fieldname])) ||
+//                         childSchemasCache['Onboarding Unit'] ||
+//                         childSchemasCache['onboarding_unit'] ||
+//                         [];
+//                       const bookedUnits = getSelectedCaseUnits(selectedCase, childSchema, doctypeFields, itemDetailsCache);
 
-//                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+//                       const firstCommercialUnit = bookedUnits.find(u => !u.isService) || bookedUnits[0];
+//                       const firstUnitPropGroup = (firstCommercialUnit?.propGroup && firstCommercialUnit.propGroup !== '-' && firstCommercialUnit.propGroup !== 'Default Service')
+//                         ? firstCommercialUnit.propGroup
+//                         : (itemDetailsCache[firstCommercialUnit?.unitCode]?.custom_property_group || itemDetailsCache[firstCommercialUnit?.unitCode]?.property_group || '');
+
+//                       const resolvedPropertyGroup = firstUnitPropGroup ||
+//                         selectedCase[bookingPropertyGroupField?.fieldname] ||
+//                         selectedCase.property_group ||
+//                         selectedCase.custom_property_group ||
+//                         '-';
+
+//                       const commercialUnits = bookedUnits.filter(u => !u.isService);
+//                       const serviceUnits = bookedUnits.filter(u => u.isService);
+//                       const totalArea = bookedUnits.reduce((acc, u) => acc + (Number(u.area) || 0), 0);
+//                       const totalMonthlyAmount = bookedUnits.reduce((acc, u) => acc + (Number(u.amount) || 0), 0);
+
+//                       // Dynamic additional fields in booking section
+//                       const dynSecs = [];
+//                       let cSec = { title: 'Basic Info', fields: [] };
+//                       doctypeFields
+//                         .filter(f => f.hidden !== 1 && !isSignedDocumentField(f) && f.fieldname !== 'naming_series' && f.fieldname !== 'amended_from' && f.fieldname !== 'workflow_state')
+//                         .forEach(f => {
+//                           if (f.fieldtype === 'Section Break') {
+//                             if (cSec.fields.length > 0) dynSecs.push(cSec);
+//                             cSec = { title: f.label || 'Details', fields: [] };
+//                           } else if (f.fieldtype !== 'Column Break') {
+//                             cSec.fields.push(f);
+//                           }
+//                         });
+//                       if (cSec.fields.length > 0) dynSecs.push(cSec);
+//                       const bookingSec = dynSecs.find(s => s.fields.some(f => f.fieldname === 'shop_space_location' || isOnboardingUnitTable(f) || /booking/i.test(s.title)));
+
+//                       const standardBookingFieldNames = [
+//                         'shop_space_location',
+//                         bookingPropertyGroupField?.fieldname,
+//                         unitTableField?.fieldname,
+//                         'lease_period',
+//                         'rental_charges',
+//                         'service_promotional_charges',
+//                         'security_deposit_booking_fee',
+//                         'fitout_period',
+//                         'usage_of_demised_premises',
+//                         'nature_of_business',
+//                         'proposed_business_type',
+//                         'booking_nature_of_business',
+//                         'types_of_merchandise',
+//                         'product_service_range',
+//                         'booking_merchandise_types',
+//                         'lease_commencement_date',
+//                         'vacant_possession_date',
+//                         'plans_for_approval',
+//                         'facilities_required',
+//                         'booking_facilities_required'
+//                       ].filter(Boolean);
+
+//                       const extraBookingFields = (bookingSec?.fields || []).filter(f =>
+//                         !standardBookingFieldNames.includes(f.fieldname) &&
+//                         !isInternalTenantField(f) &&
+//                         !['Section Break', 'Column Break', 'HTML', 'Button'].includes(f.fieldtype)
+//                       );
+
+//                       return (
+//                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, overflowY: 'auto', paddingRight: '6px' }}>
+
+//                           {/* 1. Property Group & Location Finder Card */}
+//                           <div style={{
+//                             background: 'linear-gradient(120deg, #f0fdf4, #f8fafc 60%, #fff)',
+//                             border: '1px solid #e2e8f0',
+//                             borderLeft: '4px solid #10b981',
+//                             borderRadius: '12px',
+//                             padding: '14px 16px',
+//                             display: 'flex',
+//                             flexDirection: 'column',
+//                             gap: '12px',
+//                             boxShadow: '0 2px 6px rgba(0,0,0,0.02)'
+//                           }}>
+//                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+//                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+//                                 <span style={{ background: '#e6f4ea', borderRadius: '50%', padding: '6px', display: 'flex' }}>
+//                                   <Building size={14} color="#137333" />
+//                                 </span>
+//                                 <div>
+//                                   <div style={{ fontSize: '13px', fontWeight: 700, color: '#1f2937' }}>Property Group & Location</div>
+//                                   <div style={{ fontSize: '10.5px', color: '#6b7280' }}>Designated property cluster and district</div>
+//                                 </div>
+//                               </div>
+//                               <span style={{
+//                                 fontSize: '10.5px',
+//                                 fontWeight: 700,
+//                                 padding: '3px 8px',
+//                                 borderRadius: '6px',
+//                                 background: '#e6f4ea',
+//                                 color: '#137333',
+//                                 border: '1px solid rgba(19, 115, 51, 0.2)'
+//                               }}>
+//                                 Booking Property
+//                               </span>
+//                             </div>
+
+//                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+//                               <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: '#fff' }}>
+//                                 <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+//                                   <MapPin size={11} color="var(--brand-color)" /> Shop Space & Location
+//                                 </span>
+//                                 <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                   {selectedCase.shop_space_location || '-'}
+//                                 </div>
+//                               </div>
+
+//                               <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: '#fff' }}>
+//                                 <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+//                                   <Building size={11} color="var(--brand-color)" /> Property Group
+//                                 </span>
+//                                 <div style={{ fontSize: '13px', fontWeight: 700, color: resolvedPropertyGroup !== '-' ? '#065f46' : 'var(--text-primary)', marginTop: '2px' }}>
+//                                   {resolvedPropertyGroup}
+//                                 </div>
+//                               </div>
+//                             </div>
+//                           </div>
+
+//                           {/* 2. PRICE BREAKDOWN (CURRENT) TABLE */}
+//                           {(() => {
+//                             // Resolve items to display: bookedUnits or fallback from case financial charges
+//                             let displayUnits = bookedUnits;
+//                             if (displayUnits.length === 0) {
+//                               const rentAmt = parseFloat(selectedCase.rental_charges || selectedCase.budget || 0) || 0;
+//                               const reqArea = parseFloat(selectedCase.required_space || selectedCase.total_area || selectedCase.custom_total_area || 0) || 0;
+//                               const promoAmt = parseFloat(selectedCase.service_promotional_charges || 0) || 0;
+//                               const unitName = selectedCase.unit || selectedCase.property_unit || selectedCase.property || selectedCase.item_code || '';
+
+//                               if (rentAmt > 0 || reqArea > 0 || promoAmt > 0 || unitName) {
+//                                 const fallback = [];
+//                                 if (rentAmt > 0 || reqArea > 0 || unitName) {
+//                                   fallback.push({
+//                                     unitCode: unitName || 'Commercial Unit',
+//                                     item_name: unitName || 'Commercial Unit',
+//                                     isService: false,
+//                                     area: reqArea,
+//                                     amount: rentAmt
+//                                   });
+//                                 }
+//                                 if (promoAmt > 0) {
+//                                   if (reqArea > 0) {
+//                                     const calcPromo = Math.round(reqArea * 0.1 * 100) / 100;
+//                                     const calcServ = Math.round(reqArea * 1.64 * 100) / 100;
+//                                     if (Math.abs((calcPromo + calcServ) - promoAmt) < 1) {
+//                                       fallback.push({
+//                                         unitCode: 'Promotional Fees',
+//                                         item_name: 'Promotional Fees',
+//                                         isService: true,
+//                                         area: 0,
+//                                         amount: calcPromo
+//                                       });
+//                                       fallback.push({
+//                                         unitCode: 'Service Charges',
+//                                         item_name: 'Service Charges',
+//                                         isService: true,
+//                                         area: 0,
+//                                         amount: calcServ
+//                                       });
+//                                     } else {
+//                                       fallback.push({
+//                                         unitCode: 'Service Charges',
+//                                         item_name: 'Service Charges',
+//                                         isService: true,
+//                                         area: 0,
+//                                         amount: promoAmt
+//                                       });
+//                                     }
+//                                   } else {
+//                                     fallback.push({
+//                                       unitCode: 'Service Charges',
+//                                       item_name: 'Service Charges',
+//                                       isService: true,
+//                                       area: 0,
+//                                       amount: promoAmt
+//                                     });
+//                                   }
+//                                 }
+//                                 displayUnits = fallback;
+//                               }
+//                             }
+
+//                             return (
+//                               <div style={{
+//                                 border: '1px solid #e5e7eb',
+//                                 borderRadius: 8,
+//                                 overflow: 'hidden',
+//                                 display: 'flex',
+//                                 flexDirection: 'column',
+//                                 minHeight: 200,
+//                                 boxSizing: 'border-box',
+//                                 marginTop: 4,
+//                                 background: '#ffffff',
+//                                 boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02)'
+//                               }}>
+//                                 {/* Header matching Picture 1 */}
+//                                 <div style={{
+//                                   background: '#f9fafb',
+//                                   padding: '10px 14px',
+//                                   borderBottom: '1px solid #e5e7eb',
+//                                   fontWeight: 700,
+//                                   fontSize: 11,
+//                                   textTransform: 'uppercase',
+//                                   color: '#4b5563',
+//                                   flexShrink: 0
+//                                 }}>
+//                                   Price Breakdown (Current)
+//                                 </div>
+
+//                                 {/* Items Table - show all items without vertical scrollbar */}
+//                                 <div style={{ width: '100%', overflowX: 'auto' }}>
+//                                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, textAlign: 'left' }}>
+//                                     <thead>
+//                                       <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#4b5563' }}>
+//                                         <th style={{ padding: '8px 12px' }}>Unit / Fee Name</th>
+//                                         <th style={{ padding: '8px 12px', textAlign: 'center' }}>Total Area (sqft)</th>
+//                                         <th style={{ padding: '8px 12px', textAlign: 'right' }}>Amount</th>
+//                                       </tr>
+//                                     </thead>
+//                                     <tbody>
+//                                       {displayUnits.length > 0 ? (
+//                                         displayUnits.map((item, idx) => {
+//                                           const isFee = item.isService || (item.unitCode || item.item_name || '').toLowerCase().match(/fee|charge|service|deposit|tax/);
+//                                           const nameVal = isFee ? (item.serviceLabel || item.item_name || item.unitCode) : (item.item_name || item.unitCode);
+//                                           const areaVal = !isFee && item.area && Number(item.area) > 0 ? `${Number(item.area).toLocaleString()} sqft` : '—';
+//                                           const amtVal = parseFloat(item.amount !== undefined ? item.amount : ((parseFloat(item.qty) || 1) * (parseFloat(item.rate) || 0))) || 0;
+
+//                                           return (
+//                                             <tr key={idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
+//                                               <td style={{ padding: '8px 12px', color: '#374151', fontWeight: 600 }}>
+//                                                 <span>{nameVal}</span>
+//                                                 {parseFloat(item.discount_amount || 0) > 0 && (
+//                                                   <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 600, marginLeft: 6 }}>
+//                                                     (Disc: -${parseFloat(item.discount_amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })})
+//                                                   </span>
+//                                                 )}
+//                                               </td>
+//                                               <td style={{ padding: '8px 12px', textAlign: 'center', color: '#4b5563', fontWeight: 500 }}>
+//                                                 {areaVal}
+//                                               </td>
+//                                               <td style={{ padding: '8px 12px', textAlign: 'right', color: '#111827', fontWeight: 700 }}>
+//                                                 ${amtVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+//                                               </td>
+//                                             </tr>
+//                                           );
+//                                         })
+//                                       ) : (
+//                                         <tr>
+//                                           <td colSpan={3} style={{ padding: '24px 16px', textAlign: 'center', color: '#64748b' }}>
+//                                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+//                                               <Home size={20} style={{ color: '#94a3b8', opacity: 0.6 }} />
+//                                               <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>No property units recorded for this booking</span>
+//                                               <span style={{ fontSize: '11px', color: '#94a3b8' }}>Click "Edit Details" above to select Property Group and units.</span>
+//                                             </div>
+//                                           </td>
+//                                         </tr>
+//                                       )}
+//                                     </tbody>
+//                                   </table>
+//                                 </div>
+//                               </div>
+//                             );
+//                           })()}
+
+//                           {/* 3. Booking Financial Charges (4 KPI Cards) */}
+//                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Lease Period</span>
+//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                 {(!selectedCase.lease_period || Number(selectedCase.lease_period) === 0) ? '-' : `${selectedCase.lease_period} ${Number(selectedCase.lease_period) === 1 ? 'year' : 'years'}`}
+//                               </div>
+//                             </div>
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Charges ($)</span>
+//                               <div style={{ fontSize: '13px', fontWeight: 700, color: '#065f46', marginTop: '2px' }}>
+//                                 {(!selectedCase.rental_charges || Number(selectedCase.rental_charges) === 0)
+//                                   ? (totalMonthlyAmount > 0 ? `$${totalMonthlyAmount.toLocaleString()}` : '-')
+//                                   : `$${Number(selectedCase.rental_charges).toLocaleString()}`}
+//                               </div>
+//                             </div>
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Promo / Service Charges ($)</span>
+//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                 {(!selectedCase.service_promotional_charges || Number(selectedCase.service_promotional_charges) === 0) ? '-' : `$${Number(selectedCase.service_promotional_charges).toLocaleString()}`}
+//                               </div>
+//                             </div>
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Security Deposit / Fee</span>
+//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                 {(!selectedCase.security_deposit_booking_fee || Number(selectedCase.security_deposit_booking_fee) === 0) ? '-' : `$${Number(selectedCase.security_deposit_booking_fee).toLocaleString()}`}
+//                               </div>
+//                             </div>
+//                           </div>
+
+//                           {/* 4. Booking Terms & Conditions (2-Column Cards) */}
+//                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Period (Days)</span>
+//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                 {(!selectedCase.fitout_period || Number(selectedCase.fitout_period) === 0) ? '-' : `${selectedCase.fitout_period} days`}
+//                               </div>
+//                             </div>
+
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Usage of Demised Premises</span>
+//                               <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                 {selectedCase.usage_of_demised_premises || '-'}
+//                               </div>
+//                             </div>
+
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Nature of Business</span>
+//                               <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                 {selectedCase.nature_of_business || selectedCase.proposed_business_type || caseLocal.booking_nature_of_business || '-'}
+//                               </div>
+//                             </div>
+
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Types of Merchandise</span>
+//                               <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                 {selectedCase.types_of_merchandise || selectedCase.product_service_range || caseLocal.booking_merchandise_types || '-'}
+//                               </div>
+//                             </div>
+
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Commencement of Lease</span>
+//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                 {selectedCase.lease_commencement_date || '-'}
+//                               </div>
+//                             </div>
+
+//                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Vacant Possession Date</span>
+//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                 {selectedCase.vacant_possession_date || '-'}
+//                               </div>
+//                             </div>
+//                           </div>
+
+//                           {/* Facilities Required by Tenant */}
 //                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Shop Space & Location</span>
-//                             {isEditingDetails ? (
-//                               <select
-//                                 value={editShopSpaceLocation}
-//                                 onChange={(e) => setEditShopSpaceLocation(e.target.value)}
-//                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
+//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Facilities Required by Tenant</span>
+//                             <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '4px', whiteSpace: 'pre-wrap' }}>
+//                               {selectedCase.facilities_required || selectedCase.facilities || caseLocal.booking_facilities_required || '-'}
+//                             </div>
+//                           </div>
+
+//                           {/* Plans Submitted for Approval */}
+//                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Plans Submitted for Approval</span>
+//                             {selectedCase.plans_for_approval ? (
+//                               <div
+//                                 onClick={() => {
+//                                   const fullUrl = resolveMediaUrl(selectedCase.plans_for_approval, erpnextConfig?.url);
+//                                   setPreviewDocUrl(fullUrl);
+//                                   setPreviewDocTitle('Plans Submitted for Approval');
+//                                 }}
+//                                 style={{ width: '100%', height: '140px', background: 'var(--bg-secondary, #f8fafc)', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer', marginTop: '6px' }}
 //                               >
-//                                 <option value="">Select Location</option>
-//                                 {districts.map(d => (
-//                                   <option key={d} value={d}>{d}</option>
-//                                 ))}
-//                               </select>
-//                             ) : (
-//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.shop_space_location || '-'}</div>
-//                             )}
-//                           </div>
-//                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Lease Period(Year)</span>
-//                             {isEditingDetails ? (
-//                               <input
-//                                 type="number"
-//                                 min="0"
-//                                 step="1"
-//                                 value={editLeasePeriod}
-//                                 onChange={(e) => setEditLeasePeriod(e.target.value)}
-//                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                               />
-//                             ) : (
-//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.lease_period || Number(selectedCase.lease_period) === 0) ? '-' : `${selectedCase.lease_period} ${Number(selectedCase.lease_period) === 1 ? 'year' : 'years'}`}</div>
-//                             )}
-//                           </div>
-//                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Charges ($)</span>
-//                             {isEditingDetails ? (
-//                               <input
-//                                 type="number"
-//                                 min="0"
-//                                 value={editRentalCharges}
-//                                 onChange={(e) => setEditRentalCharges(e.target.value)}
-//                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                               />
-//                             ) : (
-//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.rental_charges || Number(selectedCase.rental_charges) === 0) ? '-' : `$${Number(selectedCase.rental_charges).toLocaleString()}`}</div>
-//                             )}
-//                           </div>
-//                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Promo / Service Charges ($)</span>
-//                             {isEditingDetails ? (
-//                               <input
-//                                 type="number"
-//                                 min="0"
-//                                 value={editServicePromoCharges}
-//                                 onChange={(e) => setEditServicePromoCharges(e.target.value)}
-//                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                               />
-//                             ) : (
-//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.service_promotional_charges || Number(selectedCase.service_promotional_charges) === 0) ? '-' : `$${Number(selectedCase.service_promotional_charges).toLocaleString()}`}</div>
-//                             )}
-//                           </div>
-//                         </div>
-
-//                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-//                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Security Deposit / Booking Fee</span>
-//                             {isEditingDetails ? (
-//                               <input
-//                                 type="number"
-//                                 min="0"
-//                                 value={editSecurityDepositFee}
-//                                 onChange={(e) => setEditSecurityDepositFee(e.target.value)}
-//                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                               />
-//                             ) : (
-//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.security_deposit_booking_fee || Number(selectedCase.security_deposit_booking_fee) === 0) ? '-' : `$${Number(selectedCase.security_deposit_booking_fee).toLocaleString()}`}</div>
-//                             )}
-//                           </div>
-//                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Fit-out Period (Days)</span>
-//                             {isEditingDetails ? (
-//                               <input
-//                                 type="number"
-//                                 min="0"
-//                                 step="1"
-//                                 value={editFitoutPeriod}
-//                                 onChange={(e) => setEditFitoutPeriod(e.target.value)}
-//                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                               />
-//                             ) : (
-//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{(!selectedCase.fitout_period || Number(selectedCase.fitout_period) === 0) ? '-' : `${selectedCase.fitout_period} days`}</div>
-//                             )}
-//                           </div>
-//                         </div>
-
-//                         <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Usage of Demise Premises</span>
-//                           {isEditingDetails ? (
-//                             <input
-//                               type="text"
-//                               value={editUsageOfDemisedPremises}
-//                               onChange={(e) => setEditUsageOfDemisedPremises(e.target.value)}
-//                               style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                             />
-//                           ) : (
-//                             <div style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.usage_of_demised_premises || '-'}</div>
-//                           )}
-//                         </div>
-
-//                         <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Nature of Business</span>
-//                           <input
-//                             type="text"
-//                             value={caseLocal.booking_nature_of_business || ''}
-//                             onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_nature_of_business', e.target.value)}
-//                             placeholder="e.g. Retail Clothing Boutique"
-//                             style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                           />
-//                         </div>
-
-//                         <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Types of Merchandise</span>
-//                           <input
-//                             type="text"
-//                             value={caseLocal.booking_merchandise_types || ''}
-//                             onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_merchandise_types', e.target.value)}
-//                             placeholder="e.g. Menswear, accessories"
-//                             style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                           />
-//                         </div>
-
-//                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-//                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Commencement of Lease</span>
-//                             {isEditingDetails ? (
-//                               <input
-//                                 type="date"
-//                                 value={editLeaseCommencementDate}
-//                                 onChange={(e) => setEditLeaseCommencementDate(e.target.value)}
-//                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                               />
-//                             ) : (
-//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.lease_commencement_date || '-'}</div>
-//                             )}
-//                           </div>
-//                           <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Vacant Possession Date</span>
-//                             {isEditingDetails ? (
-//                               <input
-//                                 type="date"
-//                                 value={editVacantPossessionDate}
-//                                 onChange={(e) => setEditVacantPossessionDate(e.target.value)}
-//                                 style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none' }}
-//                               />
-//                             ) : (
-//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>{selectedCase.vacant_possession_date || '-'}</div>
-//                             )}
-//                           </div>
-//                         </div>
-
-//                         {/* Plans Submitted for Approval Attach field */}
-//                         <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Plans Submitted for Approval</span>
-
-//                           {isEditingDetails ? (
-//                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px' }}>
-//                               <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: '11.5px', fontWeight: 600, cursor: uploadingFile ? 'not-allowed' : 'pointer' }}>
-//                                 {uploadingFile ? <Loader2 size={12} className="spin" /> : <Paperclip size={12} />}
-//                                 <span>{uploadingFile ? 'Uploading...' : 'Attach Plan'}</span>
-//                                 <input
-//                                   type="file"
-//                                   disabled={uploadingFile}
-//                                   onChange={(e) => handleFileUpload(e, setEditPlansForApproval)}
-//                                   style={{ display: 'none' }}
-//                                 />
-//                               </label>
-//                               {editPlansForApproval ? (
-//                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
-//                                   <CheckCircle size={12} />
-//                                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }} title={editPlansForApproval.startsWith('data:') ? 'Attached Plan' : editPlansForApproval.split('/').pop()}>
-//                                     {editPlansForApproval.startsWith('data:') ? 'Attached Plan' : editPlansForApproval.split('/').pop()}
-//                                   </span>
-//                                   <button
-//                                     type="button"
-//                                     onClick={() => setEditPlansForApproval('')}
-//                                     style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px' }}
-//                                   >
-//                                     <X size={12} />
-//                                   </button>
-//                                 </div>
-//                               ) : (
-//                                 <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>No file attached</span>
-//                               )}
-//                             </div>
-//                           ) : (
-//                             <div>
-//                               {selectedCase.plans_for_approval ? (
-//                                 <div
-//                                   onClick={() => {
-//                                     const fullUrl = resolveMediaUrl(selectedCase.plans_for_approval, erpnextConfig?.url);
-//                                     setPreviewDocUrl(fullUrl);
-//                                     setPreviewDocTitle('Plans Submitted for Approval');
-//                                   }}
-//                                   style={{ width: '100%', height: '140px', background: 'var(--bg-secondary, #f8fafc)', borderRadius: '8px', overflow: 'hidden', position: 'relative', border: '1px solid var(--border-color)', cursor: 'pointer', marginTop: '6px' }}
-//                                 >
-//                                   {/\.(jpg|jpeg|png|gif|webp)$/i.test(selectedCase.plans_for_approval) || String(selectedCase.plans_for_approval).startsWith('data:image/') ? (
-//                                     <img
-//                                       src={resolveMediaUrl(selectedCase.plans_for_approval, erpnextConfig?.url)}
-//                                       alt="Plans Submitted for Approval"
-//                                       style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-//                                       crossOrigin="use-credentials"
-//                                     />
-//                                   ) : (
-//                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', gap: '8px' }}>
-//                                       <FileText size={24} style={{ color: 'var(--text-muted)' }} />
-//                                       <span style={{ fontSize: '11.5px', fontWeight: 600 }}>{selectedCase.plans_for_approval.startsWith('data:') ? 'Attached Plan' : selectedCase.plans_for_approval.split('/').pop()}</span>
-//                                     </div>
-//                                   )}
-//                                   <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
-//                                     <Eye size={10} />
-//                                     <span>Click to Preview</span>
+//                                 {/\.(jpg|jpeg|png|gif|webp)$/i.test(selectedCase.plans_for_approval) || String(selectedCase.plans_for_approval).startsWith('data:image/') ? (
+//                                   <img
+//                                     src={resolveMediaUrl(selectedCase.plans_for_approval, erpnextConfig?.url)}
+//                                     alt="Plans Submitted for Approval"
+//                                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+//                                     crossOrigin="use-credentials"
+//                                   />
+//                                 ) : (
+//                                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#fff', gap: '8px' }}>
+//                                     <FileText size={24} style={{ color: 'var(--text-muted)' }} />
+//                                     <span style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
+//                                       {selectedCase.plans_for_approval.startsWith('data:') ? 'Attached Plan' : selectedCase.plans_for_approval.split('/').pop()}
+//                                     </span>
 //                                   </div>
+//                                 )}
+//                                 <div style={{ position: 'absolute', right: '8px', bottom: '8px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600 }}>
+//                                   <Eye size={10} />
+//                                   <span>Click to Preview</span>
 //                                 </div>
-//                               ) : (
-//                                 <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)', marginTop: '2px' }}>Not Attached</div>
-//                               )}
+//                               </div>
+//                             ) : (
+//                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)', marginTop: '2px' }}>Not Attached</div>
+//                             )}
+//                           </div>
+
+//                           {/* Extra Dynamic Booking Fields if present in doctype schema */}
+//                           {extraBookingFields.length > 0 && (
+//                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+//                               {extraBookingFields.map(f => {
+//                                 const val = selectedCase[f.fieldname];
+//                                 const displayVal = (val === null || val === undefined || val === '') ? '-' : String(val);
+//                                 return (
+//                                   <div key={f.fieldname} style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
+//                                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{f.label || f.fieldname}</span>
+//                                     <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+//                                       {displayVal}
+//                                     </div>
+//                                   </div>
+//                                 );
+//                               })}
 //                             </div>
 //                           )}
-//                         </div>
 
-//                         <div style={{ border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-//                           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Facilities Required by Tenant</span>
-//                           <textarea
-//                             rows={2}
-//                             value={caseLocal.booking_facilities_required || ''}
-//                             onChange={(e) => updateLocalChecklistField(selectedCase.name, 'booking_facilities_required', e.target.value)}
-//                             placeholder="Describe plumbing, power requirements..."
-//                             style={{ width: '100%', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: '12.5px', fontWeight: 600, marginTop: '2px', outline: 'none', resize: 'none' }}
-//                           />
 //                         </div>
-
-//                         {isEditingDetails && (
-//                           <button
-//                             disabled={updatingDetails}
-//                             onClick={handleUpdateCoreDetails}
-//                             style={{
-//                               background: updatingDetails ? 'var(--text-muted, #64748b)' : 'var(--brand-color, #2563eb)',
-//                               color: '#fff',
-//                               padding: '10px 16px',
-//                               borderRadius: '8px',
-//                               border: 'none',
-//                               fontWeight: 700,
-//                               fontSize: '13px',
-//                               cursor: updatingDetails ? 'not-allowed' : 'pointer',
-//                               display: 'flex',
-//                               alignItems: 'center',
-//                               justifyContent: 'center',
-//                               gap: '8px',
-//                               marginTop: '8px',
-//                               boxShadow: updatingDetails ? 'none' : '0 4px 12px rgba(37, 99, 235, 0.25)',
-//                               opacity: updatingDetails ? 0.6 : 1
-//                             }}
-//                           >
-//                             {updatingDetails ? 'Updating...' : 'Save Changes'}
-//                           </button>
-//                         )}
-//                       </div>
-//                     )}
+//                       );
+//                     })()}
 
 //                     {/* Stage 3: Company Search Documents */}
 //                     {activeDetailTab === 'documents' && (
@@ -13520,12 +14976,40 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //                         .filter(field => field.fieldname !== bookingPropertyGroupField?.fieldname)
 //                         .map(field => (
 //                           <React.Fragment key={field.fieldname}>
-//                           {field.fieldname === 'shop_space_location' ? (
-//                             <div style={{ gridColumn: 'span 2', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+//                             {field.fieldname === 'shop_space_location' ? (
+//                               <div style={{ gridColumn: 'span 2', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+//                                 <DynamicFormField
+//                                   field={field}
+//                                   value={dynamicFormValues[field.fieldname] || ''}
+//                                   onChange={newVal => updateBookingSelection(field.fieldname, newVal)}
+//                                   linkOptionsCache={linkOptionsCache}
+//                                   fetchLinkOptions={fetchLinkOptions}
+//                                   getDocTypeFields={getDocTypeFields}
+//                                   erpnextConfig={erpnextConfig}
+//                                   getCsrfToken={getCsrfToken}
+//                                   formValues={dynamicFormValues}
+//                                   isNew={true}
+//                                 />
+//                                 <BookingPropertyFinder
+//                                   key={dynamicFormValues.shop_space_location || ''}
+//                                   location={dynamicFormValues.shop_space_location || ''}
+//                                   value={selectedBookingPropertyGroup}
+//                                   onChange={newVal => updateBookingSelection(bookingPropertyGroupField?.fieldname, newVal)}
+//                                   erpnextConfig={erpnextConfig}
+//                                   disabled={!!bookingPropertyGroupField?.read_only}
+//                                 />
+//                               </div>
+//                             ) : (
 //                               <DynamicFormField
+//                                 key={field.fieldname}
 //                                 field={field}
-//                                 value={dynamicFormValues[field.fieldname] || ''}
-//                                 onChange={newVal => updateBookingSelection(field.fieldname, newVal)}
+//                                 bookingPropertyGroup={isOnboardingUnitTable(field) ? selectedBookingPropertyGroup : undefined}
+//                                 value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
+//                                 onChange={(newVal, bookingCharges) => setDynamicFormValues(prev => ({
+//                                   ...prev,
+//                                   [field.fieldname]: newVal,
+//                                   ...(isOnboardingUnitTable(field) && bookingCharges ? bookingCharges : {})
+//                                 }))}
 //                                 linkOptionsCache={linkOptionsCache}
 //                                 fetchLinkOptions={fetchLinkOptions}
 //                                 getDocTypeFields={getDocTypeFields}
@@ -13534,35 +15018,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //                                 formValues={dynamicFormValues}
 //                                 isNew={true}
 //                               />
-//                               <BookingPropertyFinder
-//                                 key={dynamicFormValues.shop_space_location || ''}
-//                                 location={dynamicFormValues.shop_space_location || ''}
-//                                 value={selectedBookingPropertyGroup}
-//                                 onChange={newVal => updateBookingSelection(bookingPropertyGroupField?.fieldname, newVal)}
-//                                 erpnextConfig={erpnextConfig}
-//                                 disabled={!!bookingPropertyGroupField?.read_only}
-//                               />
-//                             </div>
-//                           ) : (
-//                           <DynamicFormField
-//                             key={field.fieldname}
-//                             field={field}
-//                             bookingPropertyGroup={isOnboardingUnitTable(field) ? selectedBookingPropertyGroup : undefined}
-//                             value={dynamicFormValues[field.fieldname] === undefined ? (field.default || '') : dynamicFormValues[field.fieldname]}
-//                             onChange={(newVal, bookingCharges) => setDynamicFormValues(prev => ({
-//                               ...prev,
-//                               [field.fieldname]: newVal,
-//                               ...(isOnboardingUnitTable(field) && bookingCharges ? bookingCharges : {})
-//                             }))}
-//                             linkOptionsCache={linkOptionsCache}
-//                             fetchLinkOptions={fetchLinkOptions}
-//                             getDocTypeFields={getDocTypeFields}
-//                             erpnextConfig={erpnextConfig}
-//                             getCsrfToken={getCsrfToken}
-//                             formValues={dynamicFormValues}
-//                             isNew={true}
-//                           />
-//                           )}
+//                             )}
 //                           </React.Fragment>
 //                         ))}
 //                     </div>
@@ -14745,3 +16201,13 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 //     </div>
 //   );
 // }
+
+
+
+
+
+
+
+
+
+
