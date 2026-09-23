@@ -292,7 +292,7 @@ export default function HRMS({ employees, setEmployees, onCreateEmployee, depart
     if (!empFirstName || !empLastName || !empEmail) return;
 
     setIsLoading(true);
-    setMessage({ text: 'Registering employee in ERPNext...', type: 'info' });
+    setMessage({ text: 'Waiting for response', type: 'info' });
 
     const newId = `EMP-${String(employees.length + 1).padStart(3, '0')}`;
     const initials = `${empFirstName[0] || ''}${empLastName[0] || ''}`.toUpperCase();
@@ -1508,7 +1508,7 @@ export default function HRMS({ employees, setEmployees, onCreateEmployee, depart
               <div className="modal-footer" style={{ padding: '16px 24px', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end', gap: 12, flexShrink: 0 }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)} disabled={isLoading}>Cancel</button>
                 <button type="submit" className="btn btn-primary" disabled={isLoading}>
-                  {isLoading ? 'Syncing with ERPNext...' : 'Save Record'}
+                  {isLoading ? 'Waiting for response' : 'Save Record'}
                 </button>
               </div>
             </form>

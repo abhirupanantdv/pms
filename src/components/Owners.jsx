@@ -257,7 +257,7 @@ export default function Owners({ owners, erpnextConfig }) {
 
             {detailsLoading ? (
               <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                Loading details from ERPNext Supplier...
+                Waiting for response
               </div>
             ) : (
               <>

@@ -2192,6 +2192,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
   const [selectedBookingId, setSelectedBookingId] = useState(null);
   const [selectedBookingDetails, setSelectedBookingDetails] = useState(null);
   const [currency, setCurrency] = useState('FJD');
+  const [spaceUnits, setSpaceUnits] = useState([]);
   const [editStartDate, setEditStartDate] = useState('');
   const [editEndDate, setEditEndDate] = useState('');
   const [updatingDates, setUpdatingDates] = useState(false);
@@ -2508,6 +2509,32 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     }
   };
 
+  // Fetch Space Units (Items) to get carpet area / specs for commercial units
+  const fetchSpaceUnits = async () => {
+    if (!erpnextConfig || !erpnextConfig.url) return;
+    try {
+      const filters = encodeURIComponent(JSON.stringify([["item_group", "=", "Commercial"]]));
+      let url = `${erpnextConfig.url}/api/resource/Item?fields=["name","item_name","standard_rate","valuation_rate","custom_property_group","custom_property_reference","stock_uom","custom_floor","item_group","custom_7average_carpet_area_of_units"]&filters=${filters}&limit_page_length=500`;
+      let res = await fetch(url, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (!res.ok) {
+        url = `${erpnextConfig.url}/api/resource/Item?fields=["name","item_name","standard_rate","valuation_rate","custom_property_group","custom_property_reference","stock_uom","custom_floor","item_group","custom_7average_carpet_area_of_units"]&limit_page_length=500`;
+        res = await fetch(url, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      if (res.ok) {
+        const json = await res.json();
+        setSpaceUnits(json.data || []);
+      }
+    } catch (e) {
+      console.warn('Failed fetching Space Units (Items):', e);
+    }
+  };
+
   // Fetch bookings list, falling back to resource endpoint or mock data
   const fetchBookings = async (cust = '') => {
     setLoadingList(true);
@@ -2518,7 +2545,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     try {
       let dataList = null;
       if (erpnextConfig && erpnextConfig.url) {
-        setSyncStatus('Syncing via ERPNext REST Resource API...');
+        setSyncStatus('Waiting for response');
 
         let filtersQuery = '';
         if (cust) {
@@ -2667,7 +2694,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
       if (details) {
         if (details.quotation && erpnextConfig && erpnextConfig.url) {
           try {
-            const qRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(details.quotation)}?fields=["name","custom_start_date","custom_end_date","valid_till","discount_amount"]`, {
+            const qRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(details.quotation)}?fields=["name","custom_start_date","custom_end_date","valid_till","discount_amount","total_area","custom_total_area"]`, {
               credentials: 'include',
               headers: { 'Content-Type': 'application/json' }
             });
@@ -2678,6 +2705,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
               details.quotation_end_date = qData.custom_end_date;
               details.quotation_valid_till = qData.valid_till;
               details.quotation_discount_amount = qData.discount_amount;
+              details.quotation_total_area = qData.total_area || qData.custom_total_area;
             }
           } catch (_) { }
         }
@@ -3330,7 +3358,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                 name: subscriptionId,
                 fieldname: { status: 'Cancelled' }
               })
-            }).catch(() => {});
+            }).catch(() => { });
           }
         } catch (subErr) {
           console.warn('Subscription cancellation warning:', subErr);
@@ -3631,7 +3659,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                 name: contractId,
                 fieldname: { status: 'Cancelled' }
               })
-            }).catch(() => {});
+            }).catch(() => { });
           }
         } catch (_) { }
       } else {
@@ -3678,6 +3706,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
   useEffect(() => {
     fetchBookings();
     fetchDocTypeFields();
+    fetchSpaceUnits();
   }, [erpnextConfig]);
 
   useEffect(() => {
@@ -4270,7 +4299,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                           {b.quotation}
                         </span>
                       ) : (
-                        <span style={{ color: "var(--text-muted)" }}>{loadingList ? 'Syncing...' : 'Not specified'}</span>
+                        <span style={{ color: "var(--text-muted)" }}>{loadingList ? 'Waiting for response' : 'Not specified'}</span>
                       )}
                     </td>
                     <td>
@@ -4372,7 +4401,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
             {loadingDetails ? (
               <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                 <Loader size={24} className="spin" style={{ margin: '0 auto 10px auto' }} />
-                <span>Loading details from ERPNext...</span>
+                <span>Waiting for response</span>
               </div>
             ) : selectedBookingDetails ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -4809,75 +4838,89 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                   );
                 })()}
 
-                {/* BOOKING ITEMS TABLE */}
+                {/* BOOKING ITEMS TABLE (PRICE BREAKDOWN) */}
                 {selectedBookingDetails.booking_item && selectedBookingDetails.booking_item.length > 0 && (
-                  <div style={{ border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden', marginTop: 4, boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02)' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', textAlign: 'left' }}>
-                      <thead>
-                        <tr style={{ background: '#0a6c66', color: '#ffffff' }}>
-                          <th style={{ padding: '12px 14px', color: '#ffffff', fontWeight: 600 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <Building size={13} style={{ color: '#ffffff' }} />
-                              <span>Unit Name</span>
-                            </div>
-                          </th>
-                          <th style={{ padding: '12px 14px', color: '#ffffff', fontWeight: 600 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <RefreshCw size={13} style={{ color: '#ffffff' }} />
-                              <span>Billing Cycle</span>
-                            </div>
-                          </th>
-                          <th style={{ padding: '12px 14px', textAlign: 'right', color: '#ffffff', fontWeight: 600 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
-                              <DollarSign size={13} style={{ color: '#ffffff' }} />
-                              <span>Amount ({currency})</span>
-                            </div>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedBookingDetails.booking_item.map((item, idx) => {
-                          const amtVal = item.amount !== undefined && item.amount !== null
-                            ? parseFloat(item.amount)
-                            : ((parseFloat(item.qty) || 1) * (parseFloat(item.rate) || 0));
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', marginTop: 4, background: '#ffffff', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02)' }}>
+                    <div style={{ background: '#f9fafb', padding: '10px 14px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', color: '#4b5563', flexShrink: 0 }}>
+                      Price Breakdown (Current)
+                    </div>
+                    <div style={{ flex: 1, maxHeight: 180, overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, textAlign: 'left' }}>
+                        <thead>
+                          <tr style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', fontWeight: 600, color: '#4b5563' }}>
+                            <th style={{ padding: '8px 12px' }}>Unit / Fee Name</th>
+                            <th style={{ padding: '8px 12px', textAlign: 'center' }}>Total Area (sqft)</th>
+                            <th style={{ padding: '8px 12px', textAlign: 'right' }}>Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedBookingDetails.booking_item.map((item, idx) => {
+                            const amtVal = item.amount !== undefined && item.amount !== null
+                              ? parseFloat(item.amount)
+                              : ((parseFloat(item.qty) || 1) * (parseFloat(item.rate) || 0));
 
-                          const nameLower = (item.item_name || item.item_code || '').toLowerCase();
-                          let cellIcon = <Building size={14} style={{ color: '#0a6c66' }} />;
-                          let iconBg = '#e6f4ea';
-                          if (nameLower.includes('promo') || nameLower.includes('discount')) {
-                            cellIcon = <Tag size={14} style={{ color: '#d97706' }} />;
-                            iconBg = '#fffbeb';
-                          } else if (nameLower.includes('service') || nameLower.includes('maintenance')) {
-                            cellIcon = <Settings size={14} style={{ color: '#2563eb' }} />;
-                            iconBg = '#eff6ff';
-                          }
+                            const matchedUnit = spaceUnits.find(u =>
+                              (u.name && (u.name === item.item_code || u.name === item.item_name)) ||
+                              (u.item_code && (u.item_code === item.item_code || u.item_code === item.item_name))
+                            );
 
-                          return (
-                            <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9', background: '#ffffff' }}>
-                              <td style={{ padding: '12px 14px', color: '#374151', fontWeight: 700 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                  <div style={{ width: '28px', height: '28px', borderRadius: '6px', backgroundColor: iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                    {cellIcon}
-                                  </div>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                    <span>{item.item_name || item.item_code}</span>
-                                    {parseFloat(item.discount_amount || 0) > 0 && (
-                                      <span style={{ fontSize: '10px', color: '#d97706', background: '#fffbeb', border: '1px solid #fef3c7', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>
-                                        Disc: -${parseFloat(item.discount_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              </td>
-                              <td style={{ padding: '12px 14px', color: '#6b7280', fontWeight: 500 }}>{item.uom || 'Month'}</td>
-                              <td style={{ padding: '12px 14px', textAlign: 'right', color: '#0a6c66', fontWeight: 700, fontSize: '12px' }}>
-                                ${amtVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                            let areaVal = '—';
+                            const isFee = (item.item_name || item.item_code || '').toLowerCase().match(/fee|charge|service|deposit|tax/);
+                            if (!isFee) {
+                              if (item.total_areasqm) areaVal = item.total_areasqm;
+                              else if (item.custom_total_area) areaVal = item.custom_total_area;
+                              else if (item.total_area) areaVal = item.total_area;
+                              else if (item.custom_total_area_sqft) areaVal = item.custom_total_area_sqft;
+                              else if (item.area_sqft) areaVal = item.area_sqft;
+                              else if (item.area) areaVal = item.area;
+                              else if (item.custom_area) areaVal = item.custom_area;
+                              else if (matchedUnit) {
+                                areaVal = matchedUnit.custom_7average_carpet_area_of_units || matchedUnit.total_areasqm || matchedUnit.custom_total_area || matchedUnit.total_area || matchedUnit.area || matchedUnit.custom_total_area_sqft || '—';
+                              }
+
+                              if (areaVal === '—') {
+                                const otherWithQty = (selectedBookingDetails.booking_item || []).find(it => {
+                                  const itFee = (it.item_name || it.item_code || '').toLowerCase().match(/fee|charge|service|deposit|tax/);
+                                  return !itFee && ((parseFloat(it.qty) || 0) > 1 || (parseFloat(it.quantity) || 0) > 1);
+                                });
+                                if (otherWithQty) {
+                                  areaVal = otherWithQty.qty || otherWithQty.quantity;
+                                } else if (item.qty && parseFloat(item.qty) > 1) {
+                                  areaVal = item.qty;
+                                } else if (selectedBookingDetails.total_area) {
+                                  areaVal = selectedBookingDetails.total_area;
+                                } else if (selectedBookingDetails.custom_total_area) {
+                                  areaVal = selectedBookingDetails.custom_total_area;
+                                } else if (selectedBookingDetails.area) {
+                                  areaVal = selectedBookingDetails.area;
+                                } else if (selectedBookingDetails.quotation_total_area) {
+                                  areaVal = selectedBookingDetails.quotation_total_area;
+                                }
+                              }
+                            }
+
+                            return (
+                              <tr key={idx} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                <td style={{ padding: '8px 12px', color: '#374151', fontWeight: 600 }}>
+                                  <span>{item.item_name || item.item_code}</span>
+                                  {parseFloat(item.discount_amount || 0) > 0 && (
+                                    <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 600, marginLeft: 6 }}>
+                                      (Disc: -${parseFloat(item.discount_amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })})
+                                    </span>
+                                  )}
+                                </td>
+                                <td style={{ padding: '8px 12px', textAlign: 'center', color: '#4b5563', fontWeight: 500 }}>
+                                  {areaVal && areaVal !== '—' ? `${areaVal} sqft` : '—'}
+                                </td>
+                                <td style={{ padding: '8px 12px', textAlign: 'right', color: '#111827', fontWeight: 700 }}>
+                                  ${amtVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
 
@@ -5382,7 +5425,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                   {submitting ? (
                     <>
                       <Loader size={14} className="spin" />
-                      Syncing...
+                      Waiting for response
                     </>
                   ) : (
                     'Submit to ERPNext'
@@ -5639,21 +5682,21 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
 
         const theme = isError
           ? {
-              headerBg: '#fff1f2',
-              headerBorder: '#fecdd3',
-              titleColor: '#9f1239',
-              subtitleColor: '#be123c',
-              subtitle: 'Validation Notice / Action Error',
-              iconContainerBg: '#ffe4e6',
-              icon: <AlertCircle size={22} style={{ color: '#e11d48' }} />,
-              boxBg: '#fff5f5',
-              boxBorder: '#fed7d7',
-              boxLeftBorder: '#e11d48',
-              btnBg: '#e11d48',
-              btnHover: '#be123c'
-            }
+            headerBg: '#fff1f2',
+            headerBorder: '#fecdd3',
+            titleColor: '#9f1239',
+            subtitleColor: '#be123c',
+            subtitle: 'Validation Notice / Action Error',
+            iconContainerBg: '#ffe4e6',
+            icon: <AlertCircle size={22} style={{ color: '#e11d48' }} />,
+            boxBg: '#fff5f5',
+            boxBorder: '#fed7d7',
+            boxLeftBorder: '#e11d48',
+            btnBg: '#e11d48',
+            btnHover: '#be123c'
+          }
           : isSuccess
-          ? {
+            ? {
               headerBg: '#ecfdf5',
               headerBorder: '#a7f3d0',
               titleColor: '#065f46',
@@ -5667,35 +5710,35 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
               btnBg: '#059669',
               btnHover: '#047857'
             }
-          : isWarning
-          ? {
-              headerBg: '#fffbeb',
-              headerBorder: '#fde68a',
-              titleColor: '#92400e',
-              subtitleColor: '#b45309',
-              subtitle: 'Confirmation Required / Caution',
-              iconContainerBg: '#fef3c7',
-              icon: <AlertTriangle size={22} style={{ color: '#d97706' }} />,
-              boxBg: '#fffdf5',
-              boxBorder: '#fde68a',
-              boxLeftBorder: '#d97706',
-              btnBg: alertModal.isDestructive ? '#dc2626' : '#d97706',
-              btnHover: alertModal.isDestructive ? '#b91c1c' : '#b45309'
-            }
-          : {
-              headerBg: '#f0fdfa',
-              headerBorder: '#99f6e4',
-              titleColor: '#115e59',
-              subtitleColor: '#0f766e',
-              subtitle: 'Information Notice',
-              iconContainerBg: '#ccfbf1',
-              icon: <Info size={22} style={{ color: '#0d9488' }} />,
-              boxBg: '#f0fdfa',
-              boxBorder: '#99f6e4',
-              boxLeftBorder: '#0d9488',
-              btnBg: '#0a6c66',
-              btnHover: '#085450'
-            };
+            : isWarning
+              ? {
+                headerBg: '#fffbeb',
+                headerBorder: '#fde68a',
+                titleColor: '#92400e',
+                subtitleColor: '#b45309',
+                subtitle: 'Confirmation Required / Caution',
+                iconContainerBg: '#fef3c7',
+                icon: <AlertTriangle size={22} style={{ color: '#d97706' }} />,
+                boxBg: '#fffdf5',
+                boxBorder: '#fde68a',
+                boxLeftBorder: '#d97706',
+                btnBg: alertModal.isDestructive ? '#dc2626' : '#d97706',
+                btnHover: alertModal.isDestructive ? '#b91c1c' : '#b45309'
+              }
+              : {
+                headerBg: '#f0fdfa',
+                headerBorder: '#99f6e4',
+                titleColor: '#115e59',
+                subtitleColor: '#0f766e',
+                subtitle: 'Information Notice',
+                iconContainerBg: '#ccfbf1',
+                icon: <Info size={22} style={{ color: '#0d9488' }} />,
+                boxBg: '#f0fdfa',
+                boxBorder: '#99f6e4',
+                boxLeftBorder: '#0d9488',
+                btnBg: '#0a6c66',
+                btnHover: '#085450'
+              };
 
         const handleClose = () => {
           const cancelCb = alertModal.onCancel;

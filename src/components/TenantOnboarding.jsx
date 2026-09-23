@@ -3566,7 +3566,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
         {/* List of Onboardings */}
         {loading && onboardings.length === 0 ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: 'var(--text-muted)' }}>Syncing with ERPNext...</div>
+          <div style={{ padding: '48px', textAlign: 'center', color: 'var(--text-muted)' }}>Waiting for response</div>
         ) : filteredCases.length === 0 ? (
           <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '48px', textAlign: 'center', color: 'var(--text-muted)' }}>
             No onboarding records found.
@@ -3857,7 +3857,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
                 {/* Row 2: Title & Action Buttons (Parallel) */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '12px' }}>
-                  <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Compliance Audit</h2>
+                  <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Tenant Profile</h2>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     {activeDetailTab !== 'documents' && (

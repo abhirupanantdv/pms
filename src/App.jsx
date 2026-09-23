@@ -3444,8 +3444,12 @@ export default function App() {
         //   console.warn('ERPNext Customer fetch failed, using fallback mock data:', err);
         // }
         try {
-          const res = await fetch(
-            `${ERPNEXT_CONFIG.url}/api/resource/Customer?fields=["*"]&limit_page_length=200&order_by=modified desc`,
+          const safeFields = encodeURIComponent(JSON.stringify([
+            "name", "customer_name", "customer_type", "custom_type", "customer_group",
+            "territory", "email_id", "email", "mobile_no", "phone_no", "owner", "modified"
+          ]));
+          let res = await fetch(
+            `${ERPNEXT_CONFIG.url}/api/resource/Customer?fields=${safeFields}&limit_page_length=200&order_by=modified desc`,
             {
               credentials: "include",
               headers: getAuthHeaders({
@@ -3453,6 +3457,19 @@ export default function App() {
               })
             }
           );
+
+          if (!res.ok) {
+            // Fallback: minimal verified fields to avoid 502 timeout/overload
+            res = await fetch(
+              `${ERPNEXT_CONFIG.url}/api/resource/Customer?fields=["name","customer_name"]&limit_page_length=200`,
+              {
+                credentials: "include",
+                headers: getAuthHeaders({
+                  "Content-Type": "application/json"
+                })
+              }
+            );
+          }
 
           if (res.ok) {
             const { data } = await res.json();

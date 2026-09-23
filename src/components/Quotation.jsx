@@ -5775,7 +5775,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   const vJson = await vRes.json();
                   return vJson.data || vJson;
                 }
-              } catch (_) {}
+              } catch (_) { }
               return v;
             }));
           } else {
@@ -6860,7 +6860,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 action: 'Submit'
               })
             });
-          } catch (_) {}
+          } catch (_) { }
         }
       }
 
@@ -6983,7 +6983,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           } else if (errData.exception) {
             rawMsg = errData.exception;
           }
-        } catch (_) {}
+        } catch (_) { }
         throw new Error(rawMsg);
       }
 
@@ -7004,7 +7004,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               content: `New version created: ${versionNote.trim()}`
             })
           });
-        } catch (_) {}
+        } catch (_) { }
       }
 
       showToast('success', `Revised quotation ${createdName || ''} created successfully.`);
@@ -7876,9 +7876,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       <td style={{ fontWeight: 600 }}>${(q.grand_total || 0).toLocaleString()}</td>
                       <td>
                         {(() => {
-                          const displayStatus = q.workflow_state || q.status || (q.docstatus === 1 ? 'Submitted' : q.docstatus === 2 ? 'Cancelled' : 'Draft');
-                          const lower = (displayStatus || '').toLowerCase();
+                          const displayStatus = q.status || '';
+                          const lower = displayStatus.toLowerCase();
+
                           let badgeClass = 'badge-warning';
+
                           if (lower === 'submitted' || lower === 'approved' || lower === 'ordered') {
                             badgeClass = 'badge-success';
                           } else if (lower === 'cancelled' || lower === 'rejected' || lower === 'lost') {
@@ -7886,6 +7888,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                           } else if (lower === 'draft' || lower === 'open' || lower.includes('created')) {
                             badgeClass = 'badge-info';
                           }
+
                           return (
                             <span className={`badge ${badgeClass}`}>
                               {displayStatus}

@@ -2177,7 +2177,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
 
                           {loadingCustomerAddresses ? (
                             <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: '6px' }}>
-                              Loading addresses from ERPNext...
+                              Waiting for response
                             </div>
                           ) : customerAddresses.length > 0 ? (
                             <select
@@ -2890,7 +2890,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                   {creatingAddress ? (
                     <>
                       <Loader2 size={13} className="spin" />
-                      <span>Saving to ERPNext...</span>
+                      <span>Waiting for response</span>
                     </>
                   ) : (
                     <>
