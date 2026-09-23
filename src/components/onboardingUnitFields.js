@@ -1,21 +1,22 @@
 // Adapt quotation values to the actual onboarding child DocType fields.
-export function getUnitFields(fields) {
+export function getUnitFields(fields = []) {
+  const safeFields = Array.isArray(fields) ? fields : [];
   const normalize = name => (name || '').toLowerCase().replace(/^custom_/, '').replace(/[^a-z0-9]/g, '');
   const find = (...names) => {
     const normalized = names.map(normalize);
-    return fields.find(f => names.includes(f.fieldname))?.fieldname ||
-      fields.find(f => normalized.includes(normalize(f.fieldname)) || normalized.includes(normalize(f.label)))?.fieldname;
+    return safeFields.find(f => names.includes(f.fieldname))?.fieldname ||
+      safeFields.find(f => normalized.includes(normalize(f.fieldname)) || normalized.includes(normalize(f.label)))?.fieldname;
   };
   return {
-    unit: fields.find(f => f.fieldtype === 'Link' && ['Unit', 'Item'].includes(f.options))?.fieldname,
-    valuation: find('valuation_rate', 'standard_rate', 'val_rate', 'valuation_rate_monthly'),
-    rate: find('offered_rate', 'rate', 'rental_rate'),
-    group: fields.find(f => f.fieldtype === 'Link' && f.options === 'Property Group')?.fieldname || find('property_group', 'custom_property_group'),
-    district: find('district', 'custom_district'),
-    area: find('total_area', 'total_area_sqft', 'total_areasqm', 'carpet_area', 'area', 'total_area_sq_ft'),
-    amount: find('amount', 'total_amount'),
-    qty: find('qty', 'quantity'),
-    uom: find('uom', 'stock_uom')
+    unit: safeFields.find(f => f.fieldtype === 'Link' && ['Unit', 'Item'].includes(f.options))?.fieldname || 'item_code',
+    valuation: find('valuation_rate', 'standard_rate', 'val_rate', 'valuation_rate_monthly') || 'valuation_rate',
+    rate: find('offered_rate', 'rate', 'rental_rate') || 'rate',
+    group: safeFields.find(f => f.fieldtype === 'Link' && f.options === 'Property Group')?.fieldname || find('property_group', 'custom_property_group') || 'property_group',
+    district: find('district', 'custom_district') || 'district',
+    area: find('total_area', 'total_area_sqft', 'total_areasqm', 'carpet_area', 'area', 'total_area_sq_ft') || 'total_area',
+    amount: find('amount', 'total_amount') || 'amount',
+    qty: find('qty', 'quantity') || 'qty',
+    uom: find('uom', 'stock_uom') || 'uom'
   };
 }
 
