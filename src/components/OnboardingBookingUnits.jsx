@@ -117,8 +117,10 @@ export function BookingSelectedUnits({ field, fields, value, onChange, propertyG
           const id = row[map.unit] || '';
           const service = current.services.find(item => item.name === id);
           const detail = unitDetails(current.units.find(unit => unit.name === id));
-          const rate = map.rate ? row[map.rate] ?? '' : detail.valuation;
-          const amount = (Number(row[map.qty]) || 1) * (Number(rate) || 0);
+          const rate = (map.rate && row[map.rate] !== undefined && row[map.rate] !== '')
+            ? row[map.rate]
+            : (row.rate !== undefined && row.rate !== '' ? row.rate : (row.offered_rate !== undefined && row.offered_rate !== '' ? row.offered_rate : detail.valuation));
+          const amount = (Number(row[map.qty] || row.qty) || 1) * (Number(rate) || 0);
           return <React.Fragment key={index}><tr style={{ borderBottom: '1px solid #e2e8f0', background: service ? '#faf5ff' : undefined }}>
             <td style={cell}>{index + 1}</td>
             <td style={{ padding: '6px 8px', minWidth: 170 }}>{service ? <div><div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 700 }}>{service.item_name || service.name}<span style={{ fontSize: 9, color: '#7c3aed', background: '#ede9fe', padding: '3px 5px', borderRadius: 4 }}>Default Service</span></div><div style={{ fontSize: 9, color: '#64748b', marginTop: 4 }}>Rate: {money(service.charges)}/sqft × {row[map.area] || 0} sqft</div></div> : <select aria-label={`Unit ${index + 1}`} value={id} disabled={disabled || !map.unit || !propertyGroup || current.loading || !!current.error} onChange={event => { const doc = current.units.find(unit => unit.name === event.target.value); if (doc && rows.some((other, i) => i !== index && other[map.unit] === doc.name)) return; update(index, selectUnitRow(fields, doc, { name: propertyGroup, district: location }, row)); }} style={control}><option value="">{!propertyGroup ? 'Choose property group first' : current.loading ? 'Loading...' : '-- Choose Unit --'}</option>{id && !current.units.some(unit => unit.name === id) && <option value={id}>{id}</option>}{current.units.map(unit => { const added = rows.some((other, i) => i !== index && other[map.unit] === unit.name); return <option key={unit.name} value={unit.name} disabled={added}>{unit.item_name || unit.unit_name || unit.name}{added ? ' (Already Added)' : ''}</option>; })}</select>}</td>

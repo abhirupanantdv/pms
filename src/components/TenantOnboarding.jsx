@@ -576,7 +576,7 @@ const getSelectedCaseUnits = (caseDoc, unitFieldsSchema = [], allFields = [], it
 
     const offeredRate = (map.rate && row[map.rate] !== undefined && row[map.rate] !== '')
       ? row[map.rate]
-      : (row.offered_rate ?? row.rate ?? row.rental_rate ?? valRate);
+      : (row.offered_rate ?? row.rate ?? row.rental_rate ?? (row.net_rate ?? valRate));
 
     const propGroup = isService ? 'Default Service' :
       ((map.group && row[map.group]) || row.property_group || row.custom_property_group || row.group || row.custom_property_reference || row.property || cachedItem.custom_property_group || cachedItem.property_group || caseDoc.property_group || caseDoc.custom_property_group || '-');
@@ -590,9 +590,16 @@ const getSelectedCaseUnits = (caseDoc, unitFieldsSchema = [], allFields = [], it
 
     const qty = (map.qty && row[map.qty] !== undefined && row[map.qty] !== '') ? row[map.qty] : (row.qty || 1);
 
-    const amount = (map.amount && row[map.amount] !== undefined && row[map.amount] !== null && row[map.amount] !== '')
-      ? Number(row[map.amount])
-      : (Number(qty) * Number(offeredRate || 0));
+    // Map Amount from net_amount (doctype field name of child table)
+    const rawAmount = (row.net_amount !== undefined && row.net_amount !== null && row.net_amount !== '')
+      ? row.net_amount
+      : ((map.amount && row[map.amount] !== undefined && row[map.amount] !== null && row[map.amount] !== '')
+          ? row[map.amount]
+          : (row.amount !== undefined && row.amount !== null && row.amount !== ''
+              ? row.amount
+              : (Number(qty) * Number(offeredRate || 0))));
+
+    const amount = Number(rawAmount) || 0;
 
     return {
       raw: row,
@@ -605,7 +612,8 @@ const getSelectedCaseUnits = (caseDoc, unitFieldsSchema = [], allFields = [], it
       propGroup,
       district,
       area: Number(area) || 0,
-      amount: Number(amount) || 0,
+      amount: amount,
+      net_amount: amount,
       qty: Number(qty) || 1
     };
   });
@@ -2989,9 +2997,35 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       }
     });
 
-    const payload = {
+    let payload = {
       ...cleanedValues
     };
+
+    if (Array.isArray(payload.onboarding_unit) && payload.onboarding_unit.length > 0) {
+      try {
+        payload = await syncDefaultServicesForPayload(payload);
+      } catch (syncErr) {
+        console.warn("Failed to sync default services in update:", syncErr);
+        payload.onboarding_unit = payload.onboarding_unit.map(row => {
+          const isComm = (row.item_group || '').toLowerCase() === 'commercial' || !/service/i.test(row.item_code || '');
+          if (isComm) {
+            const r = Number(row.rate !== undefined && row.rate !== '' && row.rate !== null ? row.rate : (row.offered_rate || 0)) || 0;
+            const q = Number(row.qty) || 1;
+            const a = Math.round((r * q + Number.EPSILON) * 100) / 100;
+            return {
+              ...row,
+              rate: r,
+              offered_rate: r,
+              amount: a,
+              net_rate: r,
+              net_amount: a,
+              item_group: row.item_group || 'Commercial'
+            };
+          }
+          return row;
+        });
+      }
+    }
 
     console.log("Core details update payload:", payload);
 
@@ -3011,6 +3045,9 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         console.log("Successfully submitted Tenant Onboarding payload:", payload);
         const detail = json.data || json;
         if (detail) {
+          if (selectedCase?.name) {
+            syncCreatedOnboardingServices(selectedCase.name).catch(e => console.warn(e));
+          }
           setSelectedCase(prev => {
             if (prev && prev.name === detail.name) {
               return {
@@ -3362,10 +3399,39 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     if (commercialCount === 0) {
       const remainingRows = rows
         .filter(row => !serviceNames.has(row.item_code))
-        .map((row, index) => ({
-          ...row,
-          idx: index + 1
-        }));
+        .map((row, index) => {
+          const item = itemMap[row?.item_code];
+          const itemGroup = item?.item_group || row?.item_group || '';
+          const isCommercial = itemGroup.toLowerCase() === 'commercial' || (!itemGroup && !serviceNames.has(row?.item_code));
+
+          if (isCommercial) {
+            const rawRate = row.rate !== undefined && row.rate !== '' && row.rate !== null
+              ? row.rate
+              : (row.offered_rate !== undefined && row.offered_rate !== '' && row.offered_rate !== null
+                  ? row.offered_rate
+                  : (row.valuation_rate ?? row.standard_rate ?? 0));
+            const rateVal = Number(rawRate) || 0;
+            const qtyVal = Number(row.qty) || 1;
+            const amountVal = Math.round((rateVal * qtyVal + Number.EPSILON) * 100) / 100;
+
+            return {
+              ...row,
+              idx: index + 1,
+              item_group: item?.item_group || row.item_group || 'Commercial',
+              rate: rateVal,
+              offered_rate: rateVal,
+              qty: qtyVal,
+              amount: amountVal,
+              net_rate: rateVal,
+              net_amount: amountVal
+            };
+          }
+
+          return {
+            ...row,
+            idx: index + 1
+          };
+        });
 
       return {
         ...payload,
@@ -3481,15 +3547,48 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     );
 
     // ---------------------------------------------------------
+    // Set rate field into amount for commercial units
+    // ---------------------------------------------------------
+
+    const processedOtherRows = otherRows.map(row => {
+      const item = itemMap[row?.item_code];
+      const itemGroup = item?.item_group || row?.item_group || '';
+      const isCommercial = itemGroup.toLowerCase() === 'commercial' || (!itemGroup && !serviceNames.has(row?.item_code));
+
+      if (isCommercial) {
+        const rawRate = row.rate !== undefined && row.rate !== '' && row.rate !== null
+          ? row.rate
+          : (row.offered_rate !== undefined && row.offered_rate !== '' && row.offered_rate !== null
+              ? row.offered_rate
+              : (row.valuation_rate ?? row.standard_rate ?? 0));
+        const rateVal = Number(rawRate) || 0;
+        const qtyVal = Number(row.qty) || 1;
+        const amountVal = Math.round((rateVal * qtyVal + Number.EPSILON) * 100) / 100;
+
+        return {
+          ...row,
+          item_group: item?.item_group || row.item_group || 'Commercial',
+          rate: rateVal,
+          offered_rate: rateVal,
+          qty: qtyVal,
+          amount: amountVal,
+          net_rate: rateVal,
+          net_amount: amountVal
+        };
+      }
+      return row;
+    });
+
+    // ---------------------------------------------------------
     // Find last Commercial Unit
     // ---------------------------------------------------------
 
     let lastCommercialIndex = -1;
 
-    otherRows.forEach((row, index) => {
+    processedOtherRows.forEach((row, index) => {
       const item = itemMap[row?.item_code];
-
-      if (item?.item_group === "Commercial") {
+      const itemGroup = item?.item_group || row?.item_group || '';
+      if (itemGroup.toLowerCase() === 'commercial' || (!itemGroup && !serviceNames.has(row?.item_code))) {
         lastCommercialIndex = index;
       }
     });
@@ -3502,20 +3601,20 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
     if (lastCommercialIndex >= 0) {
       finalRows = [
-        ...otherRows.slice(
+        ...processedOtherRows.slice(
           0,
           lastCommercialIndex + 1
         ),
 
         ...calculatedServiceRows,
 
-        ...otherRows.slice(
+        ...processedOtherRows.slice(
           lastCommercialIndex + 1
         )
       ];
     } else {
       finalRows = [
-        ...otherRows,
+        ...processedOtherRows,
         ...calculatedServiceRows
       ];
     }
@@ -4527,7 +4626,31 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               }
                             }
                             if (!initialDynamic.onboarding_unit && selectedCase.onboarding_unit) {
-                              initialDynamic.onboarding_unit = selectedCase.onboarding_unit;
+                              initialDynamic.onboarding_unit = (Array.isArray(selectedCase.onboarding_unit) ? selectedCase.onboarding_unit : []).map(row => {
+                                const itemCode = row.item_code || row.unit || row.item || '';
+                                const cachedItem = itemDetailsCache[itemCode] || {};
+                                const itemGroup = row.item_group || cachedItem.item_group || '';
+                                const isService = (row.property_group || '').toLowerCase() === 'default service' || (itemGroup || '').toLowerCase() === 'services';
+                                const isCommercial = (itemGroup || '').toLowerCase() === 'commercial' || (!isService && !/service/i.test(itemCode));
+
+                                if (isCommercial) {
+                                  const rateVal = Number(row.rate !== undefined && row.rate !== '' && row.rate !== null ? row.rate : (row.offered_rate ?? 0)) || 0;
+                                  const qtyVal = Number(row.qty) || 1;
+                                  const amountVal = (row.amount !== undefined && row.amount !== '' && row.amount !== null && Number(row.amount) > 0)
+                                    ? Number(row.amount)
+                                    : (rateVal * qtyVal);
+                                  return {
+                                    ...row,
+                                    rate: rateVal,
+                                    offered_rate: rateVal,
+                                    amount: amountVal,
+                                    net_rate: rateVal,
+                                    net_amount: amountVal,
+                                    item_group: itemGroup || 'Commercial'
+                                  };
+                                }
+                                return row;
+                              });
                             }
 
                             setDynamicFormValues(initialDynamic);
@@ -5959,7 +6082,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       const commercialUnits = bookedUnits.filter(u => !u.isService);
                       const serviceUnits = bookedUnits.filter(u => u.isService);
                       const totalArea = bookedUnits.reduce((acc, u) => acc + (Number(u.area) || 0), 0);
-                      const totalMonthlyAmount = bookedUnits.reduce((acc, u) => acc + (Number(u.amount) || 0), 0);
+                      const totalMonthlyAmount = bookedUnits.reduce((acc, u) => acc + (Number(u.net_amount !== undefined && u.net_amount !== null ? u.net_amount : u.amount) || 0), 0);
 
                       // Dynamic additional fields in booking section
                       const dynSecs = [];
