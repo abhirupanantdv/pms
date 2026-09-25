@@ -79,9 +79,11 @@ export function syncOnboardingServices(rows, fields, services, units) {
     // Commercial unit: set rate field in amount
     const isCommercial = !itemGroup || itemGroup === 'Commercial';
     if (isCommercial) {
-      const rateVal = row[map.rate] !== undefined && row[map.rate] !== ''
+      const rateVal = (map.rate && row[map.rate] !== undefined && row[map.rate] !== null)
         ? row[map.rate]
-        : (row.rate !== undefined && row.rate !== '' ? row.rate : (row.offered_rate ?? ''));
+        : (row.rate !== undefined && row.rate !== null
+            ? row.rate
+            : (row.offered_rate !== undefined && row.offered_rate !== null ? row.offered_rate : ''));
       const numRate = Number(rateVal) || 0;
       const qtyVal = Number(row[map.qty] || row.qty) || 1;
       const amountVal = qtyVal * numRate;

@@ -1949,6 +1949,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
 
   useEffect(() => {
     if (!selectedCase?.name || !erpnextConfig?.url) return;
+    fetchWorkflowActions(selectedCase.name);
     if (!Array.isArray(selectedCase.onboarding_unit) || selectedCase.onboarding_unit.length === 0) {
       fetchCaseFullDetails(selectedCase.name);
     } else {
@@ -1963,24 +1964,42 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     if (!erpnextConfig?.url || !onboardingName) return;
     setLoadingWorkflow(true);
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.tenant_onboarding.tenant_onboarding.get_tenant_onboarding_workflow_actions`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: getAuthHeaders({
-          'Content-Type': 'application/json'
-        }),
-        body: JSON.stringify({
-          tenant_onboarding: onboardingName
-        })
-      });
-      if (res.ok) {
-        const json = await res.json();
-        console.log("Workflow actions response:", json);
-        setWorkflowState(json.message || null);
-      } else {
-        console.warn("Failed to fetch workflow actions:", res.status);
-        setWorkflowState(null);
+      const endpoints = [
+        `${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.tenant_onboarding.tenant_onboarding.get_tenant_onboarding_workflow_actions`,
+        `${erpnextConfig.url}/api/method/get_tenant_onboarding_workflow_actions`,
+        `${erpnextConfig.url}/api/method/property_management.property_management_system.doctype.tenant_onboarding.tenant_onboarding.get_tenant_onboarding_workflow_actions`
+      ];
+
+      let json = null;
+      for (const endpoint of endpoints) {
+        try {
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ tenant_onboarding: onboardingName })
+          });
+          if (res.ok) {
+            json = await res.json();
+            if (json?.message) break;
+          } else if (res.status === 405 || res.status === 417) {
+            const getRes = await fetch(`${endpoint}?tenant_onboarding=${encodeURIComponent(onboardingName)}`, {
+              method: 'GET',
+              credentials: 'include',
+              headers: getAuthHeaders()
+            });
+            if (getRes.ok) {
+              json = await getRes.json();
+              if (json?.message) break;
+            }
+          }
+        } catch (e) {
+          console.warn(`Workflow action fetch attempt failed for ${endpoint}:`, e);
+        }
       }
+
+      console.log("Workflow actions response:", json);
+      setWorkflowState(json?.message || null);
     } catch (err) {
       console.error("Error fetching workflow actions:", err);
       setWorkflowState(null);
@@ -1989,172 +2008,77 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     }
   };
 
-  const handleWorkflowAction = async (
-    actionName,
-    nextState
-  ) => {
-    if (
-      !selectedCase ||
-      !erpnextConfig?.url
-    ) {
-      return;
-    }
+  const handleWorkflowAction = async (actionName, nextState) => {
+    if (!selectedCase || !erpnextConfig?.url) return;
 
-    const normalizedAction = (
-      actionName || ''
-    ).toLowerCase();
-
-    // =====================================================
-    // Existing Signed Document business rule
-    // =====================================================
-
-    const hasSignedDocument = Boolean(
-      selectedCase?.[
-      signedDocumentFieldname
-      ] &&
-      String(
-        selectedCase[
-        signedDocumentFieldname
-        ]
-      ).trim()
-    );
-
-    if (
-      !hasSignedDocument &&
-      (
-        normalizedAction.includes(
-          'approve'
-        ) ||
-        normalizedAction.includes(
-          'reject'
-        )
-      )
-    ) {
-      alert(
-        'Please upload the signed document before approving or rejecting.',
-        'error'
-      );
-
-      return;
-    }
-
-    // =====================================================
-    // Confirmation
-    // =====================================================
-
-    const confirmed = await confirm(
-      `Are you sure you want to "${actionName}"?`
-    );
-
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = await confirm(`Are you sure you want to "${actionName}"?`);
+    if (!confirmed) return;
 
     setLoadingWorkflow(true);
 
     try {
-
-      const res = await fetch(
+      const endpoints = [
         `${erpnextConfig.url}/api/method/property_management.property_managmenet_system.doctype.tenant_onboarding.tenant_onboarding.update_tenant_onboarding_workflow`,
-        {
-          method: 'POST',
+        `${erpnextConfig.url}/api/method/update_tenant_onboarding_workflow`,
+        `${erpnextConfig.url}/api/method/property_management.property_management_system.doctype.tenant_onboarding.tenant_onboarding.update_tenant_onboarding_workflow`
+      ];
 
-          credentials: 'include',
-
-          headers: getAuthHeaders({
-            'Content-Type':
-              'application/json'
-          }),
-
-          body: JSON.stringify({
-            tenant_onboarding:
-              selectedCase.name,
-
-            action:
-              actionName
-          })
+      let res = null;
+      for (const endpoint of endpoints) {
+        try {
+          const attempt = await fetch(endpoint, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({
+              tenant_onboarding: selectedCase.name,
+              action: actionName
+            })
+          });
+          if (attempt.status !== 404) {
+            res = attempt;
+            break;
+          }
+        } catch (e) {
+          console.warn(`Workflow action update attempt failed for ${endpoint}:`, e);
         }
-      );
+      }
 
-      if (!res.ok) {
-
-        const errorMsg =
-          await extractErrorMessage(res);
-
-        alert(
-          errorMsg,
-          'error'
-        );
-
+      if (!res || !res.ok) {
+        const errorMsg = res ? await extractErrorMessage(res) : 'Workflow action endpoint not found.';
+        alert(errorMsg, 'error');
         return;
       }
 
-      const json =
-        await res.json();
+      const json = await res.json();
+      const result = json?.message;
 
-      const result =
-        json?.message;
-
-      // ===================================================
-      // Permission / Workflow error
-      // ===================================================
-
-      if (
-        !result?.success ||
-        result?.error
-      ) {
-
+      // Handle permission denied or error response from backend
+      if (!result?.success || result?.error) {
         alert(
-          result?.error ||
-          `You do not have permission to perform "${actionName}".`,
+          result?.error || `You do not have permission to perform "${actionName}".`,
           'error'
         );
-
         return;
       }
 
-      // ===================================================
-      // Success
-      // ===================================================
+      alert(`Action "${actionName}" applied successfully!`, 'success');
 
-      alert(
-        `Action "${actionName}" applied successfully!`,
-        'success'
-      );
-
-      // Reload current record
+      // Reload current record with new workflow state
       await handleSelectCase({
         ...selectedCase,
-
-        workflow_state:
-          result.workflow_state ||
-          nextState ||
-          selectedCase.workflow_state
+        workflow_state: result.workflow_state || result.next_state || nextState || selectedCase.workflow_state
       });
 
       // Reload available workflow actions
-      await fetchWorkflowActions(
-        selectedCase.name
-      );
+      await fetchWorkflowActions(selectedCase.name);
 
       // Reload Tenant Onboarding list
       await fetchOnboardings();
-
     } catch (err) {
-
-      console.error(
-        'Workflow action error:',
-        err
-      );
-
-      alert(
-        err?.message ||
-        'Unable to perform workflow action.',
-        'error'
-      );
-
+      console.error('Workflow action error:', err);
+      alert(err?.message || 'Unable to perform workflow action.', 'error');
     } finally {
-
       setLoadingWorkflow(false);
     }
   };
@@ -4747,29 +4671,16 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       baseUrl={erpnextConfig?.url}
                     />}
                     {!isEditingDetails && workflowState?.next_actions?.filter(act => {
+                      if (!act.allowed) return false;
                       const current = (workflowState?.current_state || selectedCase.workflow_state || '').toLowerCase();
                       const action = (act.action || '').toLowerCase();
-
-                      const hasSignedDocument = Boolean(
-                        selectedCase?.[signedDocumentFieldname] &&
-                        String(selectedCase[signedDocumentFieldname]).trim()
-                      );
 
                       if (current === 'approved' && action.includes('approve')) return false;
                       if (current === 'cancelled' && action.includes('cancel')) return false;
                       if (current === 'rejected' && action.includes('reject')) return false;
 
-                      // Hide Approve / Reject until the signed document is uploaded.
-                      if (
-                        !hasSignedDocument &&
-                        (action.includes('approve') || action.includes('reject'))
-                      ) {
-                        return false;
-                      }
-
                       return true;
                     }).map((act, idx) => {
-                      if (!act.allowed) return null;
                       const actionStyle = getActionButtonStyle(act.action);
                       return (
                         <button

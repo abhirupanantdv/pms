@@ -31,6 +31,18 @@ test('offered rate updates the saved amount using quotation quantity logic', () 
   assert.equal(updateUnitRate({ ...row, qty: 3 }, getUnitFields(fields), '18.5').amount, 55.5);
 });
 
+test('offered rate can be blanked out to empty string without resetting', () => {
+  const row = selectUnitRow(fields, doc);
+  const cleared = updateUnitRate(row, getUnitFields(fields), '');
+  assert.equal(cleared.offered_rate, '');
+  assert.equal(cleared.rate, '');
+  assert.equal(cleared.amount, 0);
+  const synced = syncOnboardingServices([cleared], fields, [], [doc]);
+  assert.equal(synced[0].offered_rate, '');
+  assert.equal(synced[0].rate, '');
+  assert.equal(synced[0].amount, 0);
+});
+
 test('custom labels map to real child field names without inventing payload fields', () => {
   const custom = [{ fieldname: 'item_code', fieldtype: 'Link', options: 'Item' }, { fieldname: 'custom_price', label: 'Offered Rate' }, { fieldname: 'custom_total_area_sqft', label: 'Total Area (Sqft)' }];
   const row = selectUnitRow(custom, doc);

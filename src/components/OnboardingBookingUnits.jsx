@@ -74,17 +74,20 @@ export function BookingSelectedUnits({ field, fields, value, onChange, propertyG
   const map = getUnitFields(fields);
   const link = fields.find(f => f.fieldname === map.unit);
   const [result, setResult] = useState({ key: '', units: [], services: [], loading: false, error: '' });
-  const key = `${erpnextConfig?.url}:${link?.options}:${propertyGroup}`;
+  const key = `${erpnextConfig?.url}:${link?.options}:${propertyGroup || 'ALL'}`;
   const rows = Array.isArray(value) && value.length ? value : [{}];
   useEffect(() => {
-    if (!propertyGroup || !link || !erpnextConfig?.url) return;
+    if (!link || !erpnextConfig?.url) return;
     const controller = new AbortController();
     const load = async () => {
       try {
         const schema = await getDocTypeFields(link.options);
-        const groupField = schema.find(f => f.fieldname === 'custom_property_group') || schema.find(f => f.fieldtype === 'Link' && f.options === 'Property Group');
-        if (!groupField) throw new Error('The unit Property Group link could not be found.');
-        const filters = [[groupField.fieldname, '=', propertyGroup]];
+        const filters = [];
+        if (propertyGroup) {
+          const groupField = schema.find(f => f.fieldname === 'custom_property_group') || schema.find(f => f.fieldtype === 'Link' && f.options === 'Property Group');
+          if (!groupField) throw new Error('The unit Property Group link could not be found.');
+          filters.push([groupField.fieldname, '=', propertyGroup]);
+        }
         if (link.options === 'Item') filters.push(['item_group', '=', 'Commercial']);
         const [units, services] = await Promise.all([
           listRecords(erpnextConfig.url, link.options, filters, controller.signal),
@@ -100,7 +103,7 @@ export function BookingSelectedUnits({ field, fields, value, onChange, propertyG
     // The metadata loader is recreated by the parent; selections identify requests.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  const current = result.key === key ? result : { units: [], services: [], loading: !!propertyGroup && !!link, error: '' };
+  const current = result.key === key ? result : { units: [], services: [], loading: !!link && !!erpnextConfig?.url, error: '' };
   const commitRows = next => {
     const synced = syncOnboardingServices(next, fields, current.services, current.units);
     onChange(synced, calculateBookingCharges(synced, fields, current.services));
@@ -109,7 +112,7 @@ export function BookingSelectedUnits({ field, fields, value, onChange, propertyG
   const disabled = !!field.read_only;
   return (
     <div style={{ gridColumn: 'span 2', display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ background: '#e6f4ea', borderRadius: '50%', padding: 7, display: 'flex' }}><Home size={14} color="#137333" /></span><span style={{ fontSize: 14, fontWeight: 700 }}>Selected Units</span></div><button type="button" disabled={disabled || !map.unit || !propertyGroup || current.loading || !!current.error} onClick={() => commitRows([...rows, selectUnitRow(fields)])} style={{ padding: '6px 14px', fontSize: 11, fontWeight: 600, borderRadius: 8, background: 'transparent', color: '#137333', border: '1px solid #137333', cursor: 'pointer' }}>+ Add More Units</button></div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ background: '#e6f4ea', borderRadius: '50%', padding: 7, display: 'flex' }}><Home size={14} color="#137333" /></span><span style={{ fontSize: 14, fontWeight: 700 }}>Selected Units</span></div><button type="button" disabled={disabled || !map.unit || current.loading || !!current.error} onClick={() => commitRows([...rows, selectUnitRow(fields)])} style={{ padding: '6px 14px', fontSize: 11, fontWeight: 600, borderRadius: 8, background: 'transparent', color: '#137333', border: '1px solid #137333', cursor: 'pointer' }}>+ Add More Units</button></div>
       {(!map.unit || current.error) && <div role="alert" style={{ color: '#dc2626', fontSize: 12 }}>{current.error || 'Unable to find the Unit link in the onboarding table.'}</div>}
       <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}><div style={{ overflow: 'auto', maxHeight: 260 }}><table style={{ width: '100%', minWidth: 850, borderCollapse: 'collapse', fontSize: 11, background: '#f8fafc' }}>
         <thead><tr>{['#', 'Unit Code', 'Val. Rate', 'Offered Rate', 'Property Group', 'District', 'Total Area (Sqft)', 'Amount', ''].map((title, i) => <th key={i} style={{ padding: '12px 10px', textAlign: 'left', color: '#475569', background: '#fff', borderBottom: '1px solid #e2e8f0', whiteSpace: 'nowrap' }}>{title}</th>)}</tr></thead>
@@ -117,21 +120,26 @@ export function BookingSelectedUnits({ field, fields, value, onChange, propertyG
           const id = row[map.unit] || '';
           const service = current.services.find(item => item.name === id);
           const detail = unitDetails(current.units.find(unit => unit.name === id));
-          const rate = (map.rate && row[map.rate] !== undefined && row[map.rate] !== '')
-            ? row[map.rate]
-            : (row.rate !== undefined && row.rate !== '' ? row.rate : (row.offered_rate !== undefined && row.offered_rate !== '' ? row.offered_rate : detail.valuation));
+          const hasRate = (map.rate && row[map.rate] !== undefined && row[map.rate] !== null)
+            || (row.rate !== undefined && row.rate !== null)
+            || (row.offered_rate !== undefined && row.offered_rate !== null);
+          const rate = hasRate
+            ? ((map.rate && row[map.rate] !== undefined && row[map.rate] !== null)
+                ? row[map.rate]
+                : (row.rate !== undefined && row.rate !== null ? row.rate : row.offered_rate))
+            : (id ? detail.valuation : '');
           const amount = (Number(row[map.qty] || row.qty) || 1) * (Number(rate) || 0);
           return <React.Fragment key={index}><tr style={{ borderBottom: '1px solid #e2e8f0', background: service ? '#faf5ff' : undefined }}>
             <td style={cell}>{index + 1}</td>
-            <td style={{ padding: '6px 8px', minWidth: 170 }}>{service ? <div><div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 700 }}>{service.item_name || service.name}<span style={{ fontSize: 9, color: '#7c3aed', background: '#ede9fe', padding: '3px 5px', borderRadius: 4 }}>Default Service</span></div><div style={{ fontSize: 9, color: '#64748b', marginTop: 4 }}>Rate: {money(service.charges)}/sqft × {row[map.area] || 0} sqft</div></div> : <select aria-label={`Unit ${index + 1}`} value={id} disabled={disabled || !map.unit || !propertyGroup || current.loading || !!current.error} onChange={event => { const doc = current.units.find(unit => unit.name === event.target.value); if (doc && rows.some((other, i) => i !== index && other[map.unit] === doc.name)) return; update(index, selectUnitRow(fields, doc, { name: propertyGroup, district: location }, row)); }} style={control}><option value="">{!propertyGroup ? 'Choose property group first' : current.loading ? 'Loading...' : '-- Choose Unit --'}</option>{id && !current.units.some(unit => unit.name === id) && <option value={id}>{id}</option>}{current.units.map(unit => { const added = rows.some((other, i) => i !== index && other[map.unit] === unit.name); return <option key={unit.name} value={unit.name} disabled={added}>{unit.item_name || unit.unit_name || unit.name}{added ? ' (Already Added)' : ''}</option>; })}</select>}</td>
+            <td style={{ padding: '6px 8px', minWidth: 170 }}>{service ? <div><div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 700 }}>{service.item_name || service.name}<span style={{ fontSize: 9, color: '#7c3aed', background: '#ede9fe', padding: '3px 5px', borderRadius: 4 }}>Default Service</span></div><div style={{ fontSize: 9, color: '#64748b', marginTop: 4 }}>Rate: {money(service.charges)}/sqft × {row[map.area] || 0} sqft</div></div> : <select aria-label={`Unit ${index + 1}`} value={id} disabled={disabled || !map.unit || current.loading || !!current.error} onChange={event => { const doc = current.units.find(unit => unit.name === event.target.value); if (doc && rows.some((other, i) => i !== index && other[map.unit] === doc.name)) return; update(index, selectUnitRow(fields, doc, { name: propertyGroup, district: location }, row)); }} style={control}><option value="">{current.loading ? 'Loading...' : '-- Choose Unit --'}</option>{id && !current.units.some(unit => unit.name === id) && <option value={id}>{id}</option>}{current.units.map(unit => { const added = rows.some((other, i) => i !== index && other[map.unit] === unit.name); const group = !propertyGroup && (unit.custom_property_group || unit.property_group || unit.custom_property_reference); const label = (unit.item_name || unit.unit_name || unit.name) + (group ? ` (${group})` : ''); return <option key={unit.name} value={unit.name} disabled={added}>{label}{added ? ' (Already Added)' : ''}</option>; })}</select>}</td>
             <td style={cell}>{id ? money(row[map.valuation] ?? detail.valuation) : '—'}</td>
-            <td style={{ padding: '6px 8px', minWidth: 95 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>$<input aria-label={`Offered rate ${index + 1}`} type="number" min="0" step="any" value={id ? rate : ''} disabled={disabled || current.loading || !!current.error || !!service || !id || !map.rate || fields.find(f => f.fieldname === map.rate)?.read_only} onChange={event => update(index, updateUnitRate(row, map, event.target.value))} style={control} /></div></td>
-            <td style={cell}>{id ? service ? 'Default Service' : row[map.group] || detail.group || propertyGroup : '—'}</td><td style={cell}>{id ? service ? '—' : row[map.district] || detail.district || location : '—'}</td><td style={cell}>{id ? `${row[map.area] || detail.area || 0} sqft` : '—'}</td><td style={{ ...cell, fontWeight: 700, textAlign: 'right', color: '#0f172a' }}>{money(amount)}</td>
+            <td style={{ padding: '6px 8px', minWidth: 95 }}><div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>$<input aria-label={`Offered rate ${index + 1}`} type="number" min="0" step="any" value={id ? rate : ''} onFocus={event => event.target.select()} disabled={disabled || current.loading || !!current.error || !!service || !id || !map.rate || fields.find(f => f.fieldname === map.rate)?.read_only} onChange={event => update(index, updateUnitRate(row, map, event.target.value))} style={control} /></div></td>
+            <td style={cell}>{id ? service ? 'Default Service' : row[map.group] || detail.group || propertyGroup || '—' : '—'}</td><td style={cell}>{id ? service ? '—' : row[map.district] || detail.district || location || '—' : '—'}</td><td style={cell}>{id ? `${row[map.area] || detail.area || 0} sqft` : '—'}</td><td style={{ ...cell, fontWeight: 700, textAlign: 'right', color: '#0f172a' }}>{money(amount)}</td>
             <td style={{ padding: 4 }}>{!service && rows.length > 1 && <button type="button" aria-label={`Remove unit ${index + 1}`} disabled={disabled || current.loading || !!current.error} onClick={() => commitRows(rows.filter((_, i) => i !== index))} style={{ border: 0, background: 'transparent', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={14} /></button>}</td>
           </tr></React.Fragment>;
         })}</tbody>
       </table></div></div>
-      {propertyGroup && !current.loading && !current.error && current.units.length === 0 && <span style={{ fontSize: 12, color: '#64748b' }}>No units found for this property group.</span>}
+      {!current.loading && !current.error && current.units.length === 0 && <span style={{ fontSize: 12, color: '#64748b' }}>{propertyGroup ? 'No units found for this property group.' : 'No units found.'}</span>}
       {!current.loading && !current.error && rows.some(row => row[map.unit]) && current.services.length === 0 && <span role="status" style={{ fontSize: 12, color: '#64748b' }}>No active Default Service Item found.</span>}
       {map.unit && !map.rate && <span style={{ fontSize: 12, color: '#64748b' }}>Offered rate is read-only because this onboarding table has no rate field.</span>}
     </div>

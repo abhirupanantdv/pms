@@ -1634,35 +1634,327 @@ def _existing_quotation(onboarding_name):
 
 @frappe.whitelist()
 def get_tenant_onboarding_workflow_actions(tenant_onboarding):
-    from frappe.model.workflow import get_workflow, get_transitions, has_approval_access
+    """
+    Return current workflow state and available actions.
 
-    doc = frappe.get_doc("Tenant Onboarding", tenant_onboarding)
-    doc.check_permission("read")
-    workflow = get_workflow(doc.doctype)
-    state = doc.get(workflow.workflow_state_field)
-    transitions = get_transitions(doc, workflow) if state else []
+    Approve / Reject actions are hidden automatically
+    when the logged-in user does not have the role
+    configured in the Workflow transition.
+    """
+
+    if not tenant_onboarding:
+        frappe.throw("Tenant Onboarding is required.")
+
+    doc = frappe.get_doc(
+        "Tenant Onboarding",
+        tenant_onboarding
+    )
+
+    workflow_name = frappe.db.get_value(
+        "Workflow",
+        {
+            "document_type": "Tenant Onboarding",
+            "is_active": 1
+        },
+        "name"
+    )
+
+    if not workflow_name:
+        return {
+            "current_state": doc.workflow_state or "",
+            "next_actions": []
+        }
+
+    workflow = frappe.get_doc(
+        "Workflow",
+        workflow_name
+    )
+
+    current_state = (
+        doc.workflow_state
+        or ""
+    )
+
+    current_user = frappe.session.user
+    user_roles = frappe.get_roles(current_user)
+
+    is_administrator = (
+        current_user == "Administrator"
+    )
+
+    next_actions = []
+
+    for transition in workflow.transitions:
+
+        if transition.state != current_state:
+            continue
+
+        required_role = (
+            transition.allowed
+            or ""
+        )
+
+        # Default: action is allowed.
+        allowed = True
+
+        # -----------------------------------------
+        # Only restrict Approve / Reject by role
+        # -----------------------------------------
+        normalized_action = (
+            transition.action or ""
+        ).strip().lower()
+
+        if normalized_action in {
+            "approve",
+            "reject"
+        }:
+
+            if (
+                required_role
+                and required_role != "All"
+                and required_role not in user_roles
+                and not is_administrator
+            ):
+                allowed = False
+
+        next_actions.append({
+            "action": transition.action,
+            "next_state": transition.next_state,
+            "required_role": required_role,
+            "allowed": allowed
+        })
+
     return {
-        "current_state": state,
-        "next_actions": [
-            {"action": transition.action, "next_state": transition.next_state,
-             "allowed": bool(has_approval_access(frappe.session.user, doc, transition))}
-            for transition in transitions
-        ],
+        "workflow": workflow.name,
+        "current_state": current_state,
+        "next_actions": next_actions
     }
 
 
-@frappe.whitelist(methods=["POST"])
-def update_tenant_onboarding_workflow(tenant_onboarding, action):
+@frappe.whitelist()
+def update_tenant_onboarding_workflow(
+    tenant_onboarding,
+    action
+):
+    """
+    Apply Tenant Onboarding workflow action.
+
+    Custom role permission check is performed ONLY for:
+    - Approve
+    - Reject
+
+    The required role is fetched dynamically from the
+    active ERPNext Workflow transition.
+
+    Other actions such as:
+    - Request For Approval
+
+    are not checked by this custom role-validation block.
+    """
     from frappe.model.workflow import apply_workflow
 
-    doc = frappe.get_doc("Tenant Onboarding", tenant_onboarding)
-    doc.check_permission("write")
-    if any(word in (action or "").lower() for word in ("approve", "reject")):
-        if not doc.get("signed_document"):
-            frappe.throw("Upload the signed document before approving or rejecting.")
-    # Frappe validates roles, conditions and document status for this action.
-    apply_workflow(doc.as_dict(), action)
-    return {"success": True}
+    if not tenant_onboarding:
+        frappe.throw(
+            "Tenant Onboarding is required."
+        )
+
+    if not action:
+        frappe.throw(
+            "Workflow action is required."
+        )
+
+    try:
+        # =====================================================
+        # LOAD TENANT ONBOARDING
+        # =====================================================
+
+        doc = frappe.get_doc(
+            "Tenant Onboarding",
+            tenant_onboarding
+        )
+
+        current_state = (
+            doc.workflow_state
+            or ""
+        )
+
+        # =====================================================
+        # FIND ACTIVE WORKFLOW
+        # =====================================================
+
+        workflow_name = frappe.db.get_value(
+            "Workflow",
+            {
+                "document_type":
+                    "Tenant Onboarding",
+
+                "is_active":
+                    1
+            },
+            "name"
+        )
+
+        if not workflow_name:
+            return {
+                "success": False,
+                "error": (
+                    "No active Workflow found "
+                    "for Tenant Onboarding."
+                )
+            }
+
+        workflow = frappe.get_doc(
+            "Workflow",
+            workflow_name
+        )
+
+        # =====================================================
+        # FIND THE CLICKED TRANSITION
+        # =====================================================
+
+        selected_transition = None
+
+        for transition in workflow.transitions:
+
+            if (
+                transition.state == current_state
+                and transition.action == action
+            ):
+                selected_transition = transition
+                break
+
+        if not selected_transition:
+            return {
+                "success": False,
+                "error": (
+                    f'Action "{action}" is not available '
+                    f'from workflow state "{current_state}".'
+                )
+            }
+
+        # =====================================================
+        # CUSTOM ROLE CHECK
+        #
+        # ONLY for Approve / Reject
+        # =====================================================
+
+        normalized_action = (
+            action or ""
+        ).strip().lower()
+
+        restricted_actions = {
+            "approve",
+            "reject"
+        }
+
+        if normalized_action in restricted_actions:
+
+            # ---------------------------------------------
+            # Read required role dynamically
+            # from Workflow Transition
+            # ---------------------------------------------
+
+            required_role = (
+                selected_transition.allowed
+                or ""
+            )
+
+            current_user = (
+                frappe.session.user
+            )
+
+            user_roles = frappe.get_roles(
+                current_user
+            )
+
+            # Administrator bypass
+            is_administrator = (
+                current_user
+                == "Administrator"
+            )
+
+            # ---------------------------------------------
+            # Validate configured role
+            # ---------------------------------------------
+
+            if (
+                required_role
+                and required_role != "All"
+                and required_role not in user_roles
+                and not is_administrator
+            ):
+                return {
+                    "success": False,
+
+                    "permission_denied": True,
+
+                    "required_role":
+                        required_role,
+
+                    "action":
+                        action,
+
+                    "error": (
+                        f'You do not have permission to '
+                        f'perform "{action}". '
+                        f'Required Role: {required_role}'
+                    )
+                }
+
+        # =====================================================
+        # APPLY WORKFLOW
+        #
+        # Request For Approval reaches here directly.
+        #
+        # Approve / Reject reach here only after the
+        # custom role check has passed.
+        # =====================================================
+
+        updated_doc = apply_workflow(
+            doc,
+            action
+        )
+
+        # =====================================================
+        # SUCCESS RESPONSE
+        # =====================================================
+
+        return {
+            "success": True,
+
+            "name":
+                updated_doc.name,
+
+            "action":
+                action,
+
+            "previous_state":
+                current_state,
+
+            "workflow_state":
+                updated_doc.workflow_state,
+
+            "next_state":
+                selected_transition.next_state,
+
+            "docstatus":
+                updated_doc.docstatus
+        }
+
+    except Exception as e:
+
+        frappe.log_error(
+            message=frappe.get_traceback(),
+            title=(
+                "Tenant Onboarding "
+                "Workflow Action Error"
+            )
+        )
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 @frappe.whitelist()
