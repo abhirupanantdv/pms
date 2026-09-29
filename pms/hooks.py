@@ -4,6 +4,11 @@ app_publisher = "Administrator"
 app_description = "Property Management System"
 app_email = "admin@example.com"
 app_license = "mit"
+app_logo_url = "https://pms.advtinni.com/files/Screenshot%202026-05-11%20151414.png"
+website_context = {
+    "favicon": "https://pms.advtinni.com/files/Screenshot%202026-05-11%20151414.png",
+    "splash_image": "https://pms.advtinni.com/files/Screenshot%202026-05-11%20151414.png"
+}
 
 # Home Page
 home_page = "pms"

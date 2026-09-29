@@ -2925,7 +2925,7 @@
 //     </div>
 //   );
 // }
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   LayoutDashboard,
   Building,
@@ -2943,7 +2943,10 @@ import {
   Bookmark,
   Calendar,
   FileSignature,
-  UserCheck
+  UserCheck,
+  ShieldCheck,
+  ChevronDown,
+  Building2
 } from 'lucide-react';
 
 // Import Components
@@ -3070,6 +3073,60 @@ export default function App() {
   const [preSelectedIssue, setPreSelectedIssue] = useState(null);
   const [bookingSearchFromQuotation, setBookingSearchFromQuotation] = useState('');
 
+  // PMS Portal Selection State ('admin' | 'operation')
+  const [selectedPortal, setSelectedPortal] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const pathname = window.location.pathname;
+      if (pathname.includes('/assets/apps') || pathname.includes('/apps')) {
+        localStorage.setItem('pms_selected_portal', 'admin');
+        return 'admin';
+      }
+      if (pathname.includes('/assets/pms') || pathname.includes('/pms')) {
+        const saved = localStorage.getItem('pms_selected_portal');
+        return saved === 'admin' && !pathname.endsWith('/assets/pms') ? 'admin' : 'operation';
+      }
+      return localStorage.getItem('pms_selected_portal') || 'admin';
+    }
+    return 'admin';
+  });
+  const [portalDropdownOpen, setPortalDropdownOpen] = useState(false);
+  const portalDropdownRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (portalDropdownRef.current && !portalDropdownRef.current.contains(event.target)) {
+        setPortalDropdownOpen(false);
+      }
+    }
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        setPortalDropdownOpen(false);
+      }
+    }
+    if (portalDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [portalDropdownOpen]);
+
+  const handleSelectPortal = (portalType) => {
+    setSelectedPortal(portalType);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('pms_selected_portal', portalType);
+    }
+    setPortalDropdownOpen(false);
+    const portalElement = document.getElementById('portal');
+    if (portalElement) {
+      portalElement.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
   // App Global State
   const [dataLoading, setDataLoading] = useState(true);
   const [properties, setProperties] = useState([]);
@@ -3143,6 +3200,22 @@ export default function App() {
       setSystemDateTime(new Date());
     }, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // Ensure favicon points to target URL across all portals
+  useEffect(() => {
+    const faviconUrl = 'https://pms.advtinni.com/files/Screenshot%202026-05-11%20151414.png';
+    const linkRels = ['icon', 'shortcut icon', 'apple-touch-icon'];
+    linkRels.forEach(rel => {
+      let link = document.querySelector(`link[rel="${rel}"]`);
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = rel;
+        document.head.appendChild(link);
+      }
+      link.type = 'image/png';
+      link.href = faviconUrl;
+    });
   }, []);
 
   // Sync with ERPNext server API
@@ -3996,22 +4069,55 @@ export default function App() {
 
       if (res.ok) {
         const data = await res.json();
+
+        // Determine whether admin or operator login
+        const isAdmin = selectedPortal === 'admin' || (loginUser && ['admin', 'administrator'].includes(loginUser.trim().toLowerCase()) && selectedPortal !== 'operation');
+
+        if (isAdmin) {
+          // Do not open React page - directly redirect to http://localhost:5173/assets/apps
+          window.location.href = `${window.location.origin}/assets/apps`;
+          return;
+        }
+
+        // Operator login: open React PMS page at http://localhost:5173/assets/pms
         setIsAuthenticated(true);
         localStorage.setItem('pms_auth', 'true');
         localStorage.setItem('pms_user', loginUser);
+        localStorage.setItem('pms_selected_portal', 'operation');
         setLoginError('');
-        if (typeof window !== 'undefined' && (window.location.pathname.startsWith('/pms') || window.location.pathname === '/')) {
+
+        const targetUrl = `${window.location.origin}/assets/pms`;
+        if (window.location.href === targetUrl) {
           window.location.reload();
+        } else {
+          window.location.href = targetUrl;
         }
+        return;
       } else {
         const errData = await res.json().catch(() => ({}));
         setLoginError(errData.message || 'Invalid username or password credentials.');
       }
     } catch (err) {
       if (loginUser === 'admin' && loginPass === 'Pms@ADV2026!@#') {
+        const isAdmin = selectedPortal === 'admin' || selectedPortal !== 'operation';
+        if (isAdmin) {
+          window.location.href = `${window.location.origin}/assets/apps`;
+          return;
+        }
+
         setIsAuthenticated(true);
         localStorage.setItem('pms_auth', 'true');
+        localStorage.setItem('pms_user', loginUser);
+        localStorage.setItem('pms_selected_portal', 'operation');
         setLoginError('');
+
+        const targetUrl = `${window.location.origin}/assets/pms`;
+        if (window.location.href === targetUrl) {
+          window.location.reload();
+        } else {
+          window.location.href = targetUrl;
+        }
+        return;
       } else {
         setLoginError('Error connecting to authentication service. Please try again.');
       }
@@ -5769,20 +5875,195 @@ export default function App() {
               <span style={{ fontSize: '11px', color: '#b59b00', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pte Limited</span>
             </div>
           </div>
-          <nav className="portal-nav">
+          <nav className="portal-nav" style={{ position: 'relative' }}>
             <a href="#about" style={{ color: '#475569', textDecoration: 'none', fontSize: '13px', fontWeight: 500, transition: 'color 0.2s' }} onMouseEnter={(e) => e.target.style.color = '#0f172a'} onMouseLeave={(e) => e.target.style.color = '#475569'}>About Us</a>
             <a href="#developments" style={{ color: '#475569', textDecoration: 'none', fontSize: '13px', fontWeight: 500, transition: 'color 0.2s' }} onMouseEnter={(e) => e.target.style.color = '#0f172a'} onMouseLeave={(e) => e.target.style.color = '#475569'}>Flagship Projects</a>
-            <a href="#portal" className="portal-btn-primary" style={{
-              background: 'rgba(255, 221, 0, 0.15)',
-              color: '#9a8100',
-              padding: '8px 18px',
-              borderRadius: '20px',
-              fontSize: '12px',
-              fontWeight: 600,
-              textDecoration: 'none',
-              border: '1px solid rgba(255, 221, 0, 0.4)',
-              transition: 'all 0.2s'
-            }} onMouseEnter={(e) => { e.target.style.background = '#FFDD00'; e.target.style.color = '#000'; }} onMouseLeave={(e) => { e.target.style.background = 'rgba(255, 221, 0, 0.15)'; e.target.style.color = '#9a8100'; }}>PMS Portal</a>
+
+            {/* PMS Portal Dropdown Trigger & Options */}
+            <div style={{ position: 'relative' }} ref={portalDropdownRef}>
+              <button
+                type="button"
+                id="pms-portal-dropdown-btn"
+                onClick={() => setPortalDropdownOpen(prev => !prev)}
+                className="portal-btn-primary"
+                style={{
+                  background: portalDropdownOpen ? '#FFDD00' : 'rgba(255, 221, 0, 0.15)',
+                  color: portalDropdownOpen ? '#000000' : '#9a8100',
+                  padding: '8px 18px',
+                  borderRadius: '20px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  textDecoration: 'none',
+                  border: '1px solid rgba(255, 221, 0, 0.4)',
+                  transition: 'all 0.2s',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  cursor: 'pointer'
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#FFDD00'; e.currentTarget.style.color = '#000'; }}
+                onMouseLeave={(e) => {
+                  if (!portalDropdownOpen) {
+                    e.currentTarget.style.background = 'rgba(255, 221, 0, 0.15)';
+                    e.currentTarget.style.color = '#9a8100';
+                  }
+                }}
+              >
+                <span>PMS Portal</span>
+                <ChevronDown
+                  size={14}
+                  style={{
+                    transform: portalDropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.2s ease'
+                  }}
+                />
+              </button>
+
+              {/* Dropdown with Two Options: Admin Portal & Operation Portal */}
+              {portalDropdownOpen && (
+                <div
+                  id="pms-portal-dropdown-menu"
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 10px)',
+                    right: 0,
+                    width: '320px',
+                    background: '#ffffff',
+                    borderRadius: '16px',
+                    padding: '12px',
+                    boxShadow: '0 20px 30px -10px rgba(0, 0, 0, 0.15), 0 10px 15px -5px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.08)',
+                    zIndex: 2000,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    animation: 'portalDropdownFadeIn 0.2s ease-out'
+                  }}
+                >
+                  <div style={{
+                    padding: '4px 10px 6px',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: '#94a3b8',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.08em',
+                    borderBottom: '1px solid #f1f5f9',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}>
+                    {/* <span>Select Portal</span>
+                    <span style={{ fontSize: '10px', color: '#b59b00', fontWeight: 600 }}>2 Options Available</span> */}
+                  </div>
+
+                  {/* Option 1: Admin Portal */}
+                  <button
+                    type="button"
+                    id="opt-admin-portal"
+                    onClick={() => handleSelectPortal('admin')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '12px',
+                      padding: '12px',
+                      background: selectedPortal === 'admin' ? 'rgba(255, 221, 0, 0.14)' : '#f8fafc',
+                      border: selectedPortal === 'admin' ? '1.5px solid #FFDD00' : '1px solid #e2e8f0',
+                      borderRadius: '12px',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      transition: 'all 0.15s ease',
+                      width: '100%'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(255, 221, 0, 0.18)';
+                      e.currentTarget.style.borderColor = '#FFDD00';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = selectedPortal === 'admin' ? 'rgba(255, 221, 0, 0.14)' : '#f8fafc';
+                      e.currentTarget.style.borderColor = selectedPortal === 'admin' ? '#FFDD00' : '#e2e8f0';
+                      e.currentTarget.style.transform = 'none';
+                    }}
+                  >
+                    <div style={{
+                      width: '38px',
+                      height: '38px',
+                      borderRadius: '10px',
+                      background: '#FFDD00',
+                      color: '#000000',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                      boxShadow: '0 2px 6px rgba(255, 221, 0, 0.4)'
+                    }}>
+                      <ShieldCheck size={20} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>Admin Portal</span>
+
+                      </div>
+                      <span style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.35, display: 'block', marginTop: '3px' }}>
+                        System administration, HRMS, billing ledger, reports & executive management.
+                      </span>
+                    </div>
+                  </button>
+
+                  {/* Option 2: Operation Portal */}
+                  <button
+                    type="button"
+                    id="opt-operation-portal"
+                    onClick={() => handleSelectPortal('operation')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '12px',
+                      padding: '12px',
+                      background: selectedPortal === 'operation' ? 'rgba(255, 221, 0, 0.14)' : '#f8fafc',
+                      border: selectedPortal === 'operation' ? '1.5px solid #FFDD00' : '1px solid #e2e8f0',
+                      borderRadius: '12px',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      transition: 'all 0.15s ease',
+                      width: '100%'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(255, 221, 0, 0.18)';
+                      e.currentTarget.style.borderColor = '#FFDD00';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = selectedPortal === 'operation' ? 'rgba(255, 221, 0, 0.14)' : '#f8fafc';
+                      e.currentTarget.style.borderColor = selectedPortal === 'operation' ? '#FFDD00' : '#e2e8f0';
+                      e.currentTarget.style.transform = 'none';
+                    }}
+                  >
+                    <div style={{
+                      width: '38px',
+                      height: '38px',
+                      borderRadius: '10px',
+                      background: '#0f172a',
+                      color: '#FFDD00',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                      boxShadow: '0 2px 6px rgba(15, 23, 42, 0.3)'
+                    }}>
+                      <Building2 size={20} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>Operation Portal</span>
+                      </div>
+                      <span style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.35, display: 'block', marginTop: '3px' }}>
+                        Property operations, bookings, tenant onboarding, maintenance & support tickets.
+                      </span>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
           </nav>
         </header>
 
@@ -5853,8 +6134,81 @@ export default function App() {
               </svg>
             </div>
 
-            <h3 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 6px 0', color: '#0f172a' }}>PMS Control Center</h3>
-            <p style={{ fontSize: '12px', color: '#64748b', margin: '0 0 28px 0' }}>Authenticate with your system credentials</p>
+            <h3 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 6px 0', color: '#0f172a' }}>
+              {selectedPortal === 'admin' ? 'PMS Admin Portal' : 'PMS Operation Portal'}
+            </h3>
+            <p style={{ fontSize: '12px', color: '#64748b', margin: '0 0 18px 0' }}>
+              {selectedPortal === 'admin'
+                ? ''
+                : ''}
+            </p>
+
+            {/* Portal Switcher Tabs on Login Card */}
+            {/* <div style={{
+              display: 'flex',
+              background: '#f1f5f9',
+              padding: '4px',
+              borderRadius: '10px',
+              marginBottom: '22px',
+              border: '1px solid #e2e8f0'
+            }}>
+              <button
+                type="button"
+                id="tab-select-admin-portal"
+                onClick={() => {
+                  setSelectedPortal('admin');
+                  localStorage.setItem('pms_selected_portal', 'admin');
+                }}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  padding: '8px 12px',
+                  borderRadius: '7px',
+                  border: 'none',
+                  fontSize: '12px',
+                  fontWeight: selectedPortal === 'admin' ? 700 : 500,
+                  background: selectedPortal === 'admin' ? '#ffffff' : 'transparent',
+                  color: selectedPortal === 'admin' ? '#0f172a' : '#64748b',
+                  boxShadow: selectedPortal === 'admin' ? '0 2px 4px rgba(0,0,0,0.06)' : 'none',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <ShieldCheck size={14} color={selectedPortal === 'admin' ? '#b59b00' : 'currentColor'} />
+                <span>Admin Portal</span>
+              </button>
+              <button
+                type="button"
+                id="tab-select-operation-portal"
+                onClick={() => {
+                  setSelectedPortal('operation');
+                  localStorage.setItem('pms_selected_portal', 'operation');
+                }}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  padding: '8px 12px',
+                  borderRadius: '7px',
+                  border: 'none',
+                  fontSize: '12px',
+                  fontWeight: selectedPortal === 'operation' ? 700 : 500,
+                  background: selectedPortal === 'operation' ? '#ffffff' : 'transparent',
+                  color: selectedPortal === 'operation' ? '#0f172a' : '#64748b',
+                  boxShadow: selectedPortal === 'operation' ? '0 2px 4px rgba(0,0,0,0.06)' : 'none',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <Building2 size={14} color={selectedPortal === 'operation' ? '#b59b00' : 'currentColor'} />
+                <span>Operation Portal</span>
+              </button>
+            </div> */}
 
             <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px', textAlign: 'left' }}>
               <div>
@@ -5933,7 +6287,7 @@ export default function App() {
                 onMouseEnter={(e) => { if (!loginLoading) e.currentTarget.style.opacity = '0.9'; }}
                 onMouseLeave={(e) => { if (!loginLoading) e.currentTarget.style.opacity = '1'; }}
               >
-                {loginLoading ? 'Authenticating...' : 'Sign In'}
+                {loginLoading ? 'Authenticating...' : `Sign In to ${selectedPortal === 'admin' ? 'Admin Portal' : 'Operation Portal'}`}
               </button>
             </form>
           </div>

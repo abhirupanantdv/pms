@@ -2108,7 +2108,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                       flexShrink: 0,
                       border: '1px solid #e2e8f0'
                     }}>
-                      <img src={homeImg} alt="Property" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
+                      <img src="https://pms.advtinni.com/files/home.png" alt="Property" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <strong style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
@@ -2168,7 +2168,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     overflow: 'hidden'
                   }}>
                     <img
-                      src={houseImg}
+                      src="https://pms.advtinni.com/files/new-house.png"
                       alt="Illustration"
                       style={{ height: '90%', width: 'auto', objectFit: 'contain', opacity: 0.25 }}
                     />
@@ -2515,16 +2515,16 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                   const bookingItems = (selectedBookingDetails.booking_item && selectedBookingDetails.booking_item.length > 0)
                     ? selectedBookingDetails.booking_item
                     : [
-                        {
-                          item_code: selectedBookingDetails.property || selectedBookingDetails.name || 'Unit',
-                          item_name: selectedBookingDetails.property || selectedBookingDetails.name || 'Unit',
-                          amount: selectedBookingDetails.booking_amount || selectedBookingDetails.grand_totalmonthly || 0,
-                          qty: 1,
-                          rate: selectedBookingDetails.booking_amount || selectedBookingDetails.grand_totalmonthly || 0,
-                          discount_amount: selectedBookingDetails.discount_amount || 0,
-                          total_areasqm: selectedBookingDetails.total_area || selectedBookingDetails.custom_total_area || selectedBookingDetails.area
-                        }
-                      ];
+                      {
+                        item_code: selectedBookingDetails.property || selectedBookingDetails.name || 'Unit',
+                        item_name: selectedBookingDetails.property || selectedBookingDetails.name || 'Unit',
+                        amount: selectedBookingDetails.booking_amount || selectedBookingDetails.grand_totalmonthly || 0,
+                        qty: 1,
+                        rate: selectedBookingDetails.booking_amount || selectedBookingDetails.grand_totalmonthly || 0,
+                        discount_amount: selectedBookingDetails.discount_amount || 0,
+                        total_areasqm: selectedBookingDetails.total_area || selectedBookingDetails.custom_total_area || selectedBookingDetails.area
+                      }
+                    ];
 
                   // Calculate Discount Amount by summing discount_amount across all items in booking_item
                   const itemsDiscount = bookingItems.reduce((sum, item) => {
@@ -2794,7 +2794,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     minHeight: '140px'
                   }}>
                     <img
-                      src={billingSummaryImg}
+                      src="https://pms.advtinni.com/files/Billing.png"
                       alt="Billing Summary"
                       style={{ width: '100%', height: '100%', objectFit: 'contain', maxHeight: '135px' }}
                     />
