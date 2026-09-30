@@ -1655,33 +1655,83 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                   </p>
                 </div>
 
-                {/* Scan to Pay QR */}
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderLeft: '1px solid #e5e7eb', paddingLeft: 20 }}>
-                  <span style={{ fontSize: 9, color: '#111827', marginBottom: 6, textTransform: 'uppercase', fontWeight: 700 }}>SCAN TO PAY</span>
-                  <svg viewBox="0 0 100 100" style={{ width: 64, height: 64 }}>
-                    <rect width="100" height="100" fill="#ffffff" />
-                    <rect x="5" y="5" width="25" height="25" fill="#000000" />
-                    <rect x="8" y="8" width="19" height="19" fill="#ffffff" />
-                    <rect x="11" y="11" width="13" height="13" fill="#000000" />
-                    <rect x="70" y="5" width="25" height="25" fill="#000000" />
-                    <rect x="73" y="8" width="19" height="19" fill="#ffffff" />
-                    <rect x="76" y="11" width="13" height="13" fill="#000000" />
-                    <rect x="5" y="70" width="25" height="25" fill="#000000" />
-                    <rect x="8" y="73" width="19" height="19" fill="#ffffff" />
-                    <rect x="11" y="76" width="13" height="13" fill="#000000" />
-                    <rect x="35" y="10" width="5" height="5" fill="#000000" />
-                    <rect x="45" y="15" width="10" height="5" fill="#000000" />
-                    <rect x="35" y="25" width="15" height="5" fill="#000000" />
-                    <rect x="55" y="25" width="5" height="10" fill="#000000" />
-                    <rect x="25" y="35" width="10" height="10" fill="#000000" />
-                    <rect x="50" y="35" width="10" height="5" fill="#000000" />
-                    <rect x="15" y="45" width="5" height="15" fill="#000000" />
-                    <rect x="35" y="50" width="15" height="5" fill="#000000" />
-                    <rect x="65" y="40" width="15" height="10" fill="#000000" />
-                    <rect x="45" y="65" width="10" height="5" fill="#000000" />
-                    <rect x="60" y="60" width="20" height="5" fill="#000000" />
-                    <rect x="80" y="70" width="10" height="15" fill="#000000" />
-                  </svg>
+                {/* Accurate QR to Scan & Open Invoice */}
+                <div
+                  className="barcode-area"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderLeft: '1px solid #e5e7eb',
+                    paddingLeft: 20
+                  }}
+                >
+                  <div
+                    className="barcode-inner"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textAlign: 'center'
+                    }}
+                  >
+                    {(() => {
+                      const invId = doc?.name || selectedInvoice.id;
+                      const invoiceUrl = `https://pms.advtinni.com/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(invId)}&format=Sales%20Invoice&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+                      const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(invoiceUrl)}`;
+
+                      return (
+                        <>
+                          <a
+                            href={invoiceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="invoice-qr-link"
+                            title={`Scan or click to open invoice ${invId}`}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: 4,
+                              background: '#ffffff',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: 6,
+                              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)',
+                              cursor: 'pointer',
+                              textDecoration: 'none'
+                            }}
+                          >
+                            <img
+                              src={qrApiUrl}
+                              alt="Invoice QR Code"
+                              className="invoice-qr"
+                              style={{
+                                width: 76,
+                                height: 76,
+                                display: 'block',
+                                objectFit: 'contain'
+                              }}
+                            />
+                          </a>
+                          <div
+                            className="barcode-title"
+                            style={{
+                              fontSize: 9,
+                              color: '#111827',
+                              marginTop: 6,
+                              fontWeight: 700,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.04em'
+                            }}
+                          >
+                            Scan to View Invoice
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
 
@@ -3188,33 +3238,83 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                   </p>
                 </div>
 
-                {/* Scan to Pay QR */}
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderLeft: '1px solid #e5e7eb', paddingLeft: 20 }}>
-                  <span style={{ fontSize: 9, color: '#111827', marginBottom: 6, textTransform: 'uppercase', fontWeight: 700 }}>SCAN TO PAY</span>
-                  <svg viewBox="0 0 100 100" style={{ width: 64, height: 64 }}>
-                    <rect width="100" height="100" fill="#ffffff" />
-                    <rect x="5" y="5" width="25" height="25" fill="#000000" />
-                    <rect x="8" y="8" width="19" height="19" fill="#ffffff" />
-                    <rect x="11" y="11" width="13" height="13" fill="#000000" />
-                    <rect x="70" y="5" width="25" height="25" fill="#000000" />
-                    <rect x="73" y="8" width="19" height="19" fill="#ffffff" />
-                    <rect x="76" y="11" width="13" height="13" fill="#000000" />
-                    <rect x="5" y="70" width="25" height="25" fill="#000000" />
-                    <rect x="8" y="73" width="19" height="19" fill="#ffffff" />
-                    <rect x="11" y="76" width="13" height="13" fill="#000000" />
-                    <rect x="35" y="10" width="5" height="5" fill="#000000" />
-                    <rect x="45" y="15" width="10" height="5" fill="#000000" />
-                    <rect x="35" y="25" width="15" height="5" fill="#000000" />
-                    <rect x="55" y="25" width="5" height="10" fill="#000000" />
-                    <rect x="25" y="35" width="10" height="10" fill="#000000" />
-                    <rect x="50" y="35" width="10" height="5" fill="#000000" />
-                    <rect x="15" y="45" width="5" height="15" fill="#000000" />
-                    <rect x="35" y="50" width="15" height="5" fill="#000000" />
-                    <rect x="65" y="40" width="15" height="10" fill="#000000" />
-                    <rect x="45" y="65" width="10" height="5" fill="#000000" />
-                    <rect x="60" y="60" width="20" height="5" fill="#000000" />
-                    <rect x="80" y="70" width="10" height="15" fill="#000000" />
-                  </svg>
+                {/* Accurate QR to Scan & Open Invoice */}
+                <div
+                  className="barcode-area"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderLeft: '1px solid #e5e7eb',
+                    paddingLeft: 20
+                  }}
+                >
+                  <div
+                    className="barcode-inner"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textAlign: 'center'
+                    }}
+                  >
+                    {(() => {
+                      const invId = doc?.name || activeReceipt.id;
+                      const invoiceUrl = `https://pms.advtinni.com/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(invId)}&format=Sales%20Invoice&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+                      const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(invoiceUrl)}`;
+
+                      return (
+                        <>
+                          <a
+                            href={invoiceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="invoice-qr-link"
+                            title={`Scan or click to open invoice ${invId}`}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: 4,
+                              background: '#ffffff',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: 6,
+                              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)',
+                              cursor: 'pointer',
+                              textDecoration: 'none'
+                            }}
+                          >
+                            <img
+                              src={qrApiUrl}
+                              alt="Invoice QR Code"
+                              className="invoice-qr"
+                              style={{
+                                width: 76,
+                                height: 76,
+                                display: 'block',
+                                objectFit: 'contain'
+                              }}
+                            />
+                          </a>
+                          <div
+                            className="barcode-title"
+                            style={{
+                              fontSize: 9,
+                              color: '#111827',
+                              marginTop: 6,
+                              fontWeight: 700,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.04em'
+                            }}
+                          >
+                            Scan to View Invoice
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
 

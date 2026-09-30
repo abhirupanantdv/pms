@@ -9,6 +9,7 @@ export default defineConfig({
     {
       name: 'redirect-to-pms',
       configureServer(server) {
+        server.middlewares.use((req, res, next) => {
           // Redirect favicon requests directly to configured favicon url
           if (
             req.url === '/favicon.ico' ||
