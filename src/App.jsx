@@ -3077,13 +3077,13 @@ export default function App() {
   const [selectedPortal, setSelectedPortal] = useState(() => {
     if (typeof window !== 'undefined') {
       const pathname = window.location.pathname;
-      if (pathname.includes('/assets/apps') || pathname.includes('/apps')) {
+      if (pathname.includes('/apps') || pathname.includes('/apps')) {
         localStorage.setItem('pms_selected_portal', 'admin');
         return 'admin';
       }
-      if (pathname.includes('/assets/pms') || pathname.includes('/pms')) {
+      if (pathname.includes('/pms') || pathname.includes('/pms')) {
         const saved = localStorage.getItem('pms_selected_portal');
-        return saved === 'admin' && !pathname.endsWith('/assets/pms') ? 'admin' : 'operation';
+        return saved === 'admin' && !pathname.endsWith('/pms') ? 'admin' : 'operation';
       }
       return localStorage.getItem('pms_selected_portal') || 'admin';
     }

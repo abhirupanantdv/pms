@@ -197,6 +197,20 @@ const extractErrorMessage = async (res) => {
   let message = "An error occurred with the request.";
   try {
     const errJson = await res.json();
+    console.error("ERPNext full server error response:", errJson);
+
+    // If Python exception traceback is returned, log it formatted to console
+    let tracebackText = '';
+    if (errJson.exc) {
+      try {
+        const parsedExc = typeof errJson.exc === 'string' ? JSON.parse(errJson.exc) : errJson.exc;
+        tracebackText = Array.isArray(parsedExc) ? parsedExc.join('\n') : String(parsedExc);
+      } catch {
+        tracebackText = String(errJson.exc);
+      }
+      console.error("ERPNext Server Python Traceback:\n" + tracebackText);
+    }
+
     let serverMsgs = '';
     if (errJson._server_messages) {
       try {
@@ -208,12 +222,42 @@ const extractErrorMessage = async (res) => {
           } catch {
             return m.message || m;
           }
-        }).join('\n');
+        }).filter(Boolean).join('\n');
       } catch {
         serverMsgs = errJson._server_messages;
       }
     }
-    message = errJson.exception || serverMsgs || errJson.message || message;
+
+    if (serverMsgs) {
+      serverMsgs = serverMsgs.replace(/<[^>]*>/g, '').trim();
+    }
+
+    // Try to extract specific root cause from traceback (e.g. ModuleNotFoundError, SyntaxError, etc.)
+    let rootCause = '';
+    if (tracebackText) {
+      const tbLines = tracebackText.split('\n').map(l => l.trim()).filter(Boolean);
+      for (let i = tbLines.length - 1; i >= 0; i--) {
+        const line = tbLines[i];
+        if (
+          (line.includes('Error:') || line.includes('Exception:')) &&
+          !line.startsWith('ImportError: Tenant Onboarding')
+        ) {
+          rootCause = line;
+          break;
+        }
+      }
+    }
+
+    if (serverMsgs) {
+      message = serverMsgs;
+    } else if (errJson.exception) {
+      message = errJson.exception;
+      if (rootCause && !message.includes(rootCause)) {
+        message += ` (${rootCause})`;
+      }
+    } else if (errJson.message) {
+      message = typeof errJson.message === 'string' ? errJson.message : JSON.stringify(errJson.message);
+    }
   } catch (e) {
     console.warn("Failed parsing error json:", e);
   }
@@ -1712,7 +1756,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     const fetchDetailsForItems = async () => {
       try {
         await Promise.all(itemsToFetch.map(async (item) => {
-          const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(item.name)}`, {
+          const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding/${encodeURIComponent(item.name)}`, {
             credentials: 'include',
             headers: getAuthHeaders({ 'Content-Type': 'application/json' })
           });
@@ -1846,7 +1890,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
   const fetchCaseFullDetails = async (caseName) => {
     if (!caseName || !erpnextConfig?.url) return;
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(caseName)}`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding/${encodeURIComponent(caseName)}`, {
         credentials: 'include',
         headers: getAuthHeaders({ 'Content-Type': 'application/json' })
       });
@@ -2459,7 +2503,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       }
 
       // 2. Fetch Parent Tenant Onboardings
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding?fields=%5B%22name%22%2C%22proposed_business_type%22%2C%22budget%22%2C%22required_space%22%2C%22shop_space_location%22%2C%22lease_period%22%2C%22usage_of_demised_premises%22%2C%22business_status%22%2C%22owner%22%2C%22creation%22%2C%22menu_and_business_pictures%22%2C%22fitout_period%22%2C%22rental_charges%22%2C%22security_deposit_booking_fee%22%2C%22service_promotional_charges%22%2C%22product_service_range%22%2C%22fitout_approval_timeframe%22%2C%22contact_name%22%2C%22email_id%22%2C%22contact_number%22%2C%22company_name%22%2C%22lease_commencement_date%22%2C%22vacant_possession_date%22%2C%22plans_for_approval%22%2C%22workflow_state%22%2C%22docstatus%22%5D&limit_page_length=1000&order_by=creation%20desc`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding?fields=%5B%22name%22%2C%22proposed_business_type%22%2C%22budget%22%2C%22required_space%22%2C%22shop_space_location%22%2C%22lease_period%22%2C%22usage_of_demised_premises%22%2C%22business_status%22%2C%22owner%22%2C%22creation%22%2C%22menu_and_business_pictures%22%2C%22fitout_period%22%2C%22rental_charges%22%2C%22security_deposit_booking_fee%22%2C%22service_promotional_charges%22%2C%22product_service_range%22%2C%22fitout_approval_timeframe%22%2C%22contact_name%22%2C%22email_id%22%2C%22contact_number%22%2C%22company_name%22%2C%22lease_commencement_date%22%2C%22vacant_possession_date%22%2C%22plans_for_approval%22%2C%22workflow_state%22%2C%22docstatus%22%5D&limit_page_length=1000&order_by=creation%20desc`, {
         credentials: 'include',
         headers: getAuthHeaders({ 'Content-Type': 'application/json' })
       });
@@ -2669,7 +2713,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     }));
 
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(selectedCase.name)}`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding/${encodeURIComponent(selectedCase.name)}`, {
         method: 'PUT',
         credentials: 'include',
         headers: getAuthHeaders({
@@ -2757,7 +2801,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     }));
 
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(selectedCase.name)}`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding/${encodeURIComponent(selectedCase.name)}`, {
         method: 'PUT',
         credentials: 'include',
         headers: getAuthHeaders({
@@ -2954,7 +2998,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
     console.log("Core details update payload:", payload);
 
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(selectedCase.name)}`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding/${encodeURIComponent(selectedCase.name)}`, {
         method: 'PUT',
         credentials: 'include',
         headers: getAuthHeaders({
@@ -3860,7 +3904,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         );
       }
 
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding`, {
+      let res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding`, {
         method: 'POST',
         credentials: 'include',
         headers: getAuthHeaders({
@@ -3869,10 +3913,41 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
         body: JSON.stringify(payload)
       });
       console.log("Onboarding create payload:", payload);
+
+      let freshDoc = null;
       if (res.ok) {
         const json = await res.json();
         console.log("Onboarding create response:", json);
-        const freshDoc = json.data || json;
+        freshDoc = json.data || json;
+      } else {
+        // Attempt fallback via frappe.client.insert RPC in case REST resource route encountered issues
+        try {
+          console.warn("POST /api/resource/Tenant%20Onboarding was not successful. Attempting frappe.client.insert fallback...");
+          const rpcRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.insert`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getAuthHeaders({
+              'Content-Type': 'application/json'
+            }),
+            body: JSON.stringify({
+              doc: {
+                doctype: 'Tenant Onboarding',
+                ...payload
+              }
+            })
+          });
+          if (rpcRes.ok) {
+            const rpcJson = await rpcRes.json();
+            console.log("Onboarding create via frappe.client.insert response:", rpcJson);
+            freshDoc = rpcJson.message || rpcJson.data || rpcJson;
+            res = rpcRes;
+          }
+        } catch (rpcErr) {
+          console.warn("frappe.client.insert fallback attempt failed:", rpcErr);
+        }
+      }
+
+      if (res.ok && freshDoc) {
         const newDocName = freshDoc.name;
 
         // REST creation does not execute the ERPNext Client Script that recalculates
@@ -3926,7 +4001,11 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
       } else {
         const errorMsg = await extractErrorMessage(res);
         console.error("Tenant Onboarding error:", errorMsg);
-        alert(errorMsg);
+        if (errorMsg.includes("ImportError: Tenant Onboarding")) {
+          alert("Server Error (ImportError: Tenant Onboarding):\nThe Frappe server failed to import the Python controller for Tenant Onboarding.\n\nPlease check the browser console for the full server traceback. The controller file 'tenant_onboarding.py' must be placed at the DocType module path on the server and bench restarted.");
+        } else {
+          alert(errorMsg);
+        }
       }
     } catch (err) {
       console.error("Failed creating onboarding case:", err);
@@ -6755,7 +6834,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                             upload={file => uploadFileToERPNext(file, erpnextConfig, getCsrfToken)}
                             save={async fileUrl => {
                               const caseName = selectedCase.name;
-                              const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant Onboarding/${encodeURIComponent(caseName)}`, {
+                              const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding/${encodeURIComponent(caseName)}`, {
                                 method: 'PUT',
                                 credentials: 'include',
                                 headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
