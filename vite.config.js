@@ -24,12 +24,21 @@ export default defineConfig({
             return;
           }
 
-          // Redirect root "/" and "/pms" to "/assets/pms/"
-          if (req.url === '/' || req.url === '' || req.url === '/pms' || req.url === '/pms/') {
-            res.writeHead(302, { Location: '/assets/pms/' });
+          // Redirect root "/" to "/pms"
+          if (req.url === '/' || req.url === '') {
+            res.writeHead(302, { Location: '/pms' });
             res.end();
             return;
           }
+
+          // Support /pms without redirecting away: rewrite internally to /assets/pms/
+          if (req.url === '/pms' || req.url === '/pms/' || req.url?.startsWith('/pms?') || req.url?.startsWith('/pms/')) {
+            const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+            req.url = '/assets/pms/' + query;
+            next();
+            return;
+          }
+
           // Support /assets/pms without trailing slash: rewrite to /assets/pms/
           if (req.url === '/assets/pms' || req.url?.startsWith('/assets/pms?')) {
             const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
@@ -61,6 +70,11 @@ export default defineConfig({
   server: {
     host: true,
     proxy: {
+      '/app': {
+        target: 'https://pms.advtinni.com',
+        changeOrigin: true,
+        secure: false,
+      },
       '/assets/apps': {
         target: 'https://pms.advtinni.com',
         changeOrigin: true,

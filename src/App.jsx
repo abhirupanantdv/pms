@@ -3077,17 +3077,17 @@ export default function App() {
   const [selectedPortal, setSelectedPortal] = useState(() => {
     if (typeof window !== 'undefined') {
       const pathname = window.location.pathname;
-      if (pathname.includes('/apps') || pathname.includes('/apps')) {
+      if (pathname.includes('/app') || pathname.includes('/apps')) {
         localStorage.setItem('pms_selected_portal', 'admin');
         return 'admin';
       }
-      if (pathname.includes('/pms') || pathname.includes('/pms')) {
+      if (pathname.includes('/pms')) {
         const saved = localStorage.getItem('pms_selected_portal');
         return saved === 'admin' && !pathname.endsWith('/pms') ? 'admin' : 'operation';
       }
-      return localStorage.getItem('pms_selected_portal') || 'admin';
+      return localStorage.getItem('pms_selected_portal') || 'operation';
     }
-    return 'admin';
+    return 'operation';
   });
   const [portalDropdownOpen, setPortalDropdownOpen] = useState(false);
   const portalDropdownRef = useRef(null);
@@ -4074,19 +4074,22 @@ export default function App() {
         const isAdmin = selectedPortal === 'admin' || (loginUser && ['admin', 'administrator'].includes(loginUser.trim().toLowerCase()) && selectedPortal !== 'operation');
 
         if (isAdmin) {
-          // Do not open React page - directly redirect to http://localhost:5173/assets/apps
-          window.location.href = `${window.location.origin}/assets/apps`;
+          localStorage.setItem('pms_auth', 'true');
+          localStorage.setItem('pms_user', loginUser);
+          localStorage.setItem('pms_selected_portal', 'admin');
+          // Admin Portal: redirect default link with /app
+          window.location.href = `${window.location.origin}/app`;
           return;
         }
 
-        // Operator login: open React PMS page at http://localhost:5173/assets/pms
+        // Operation Portal: redirect default link with /pms
         setIsAuthenticated(true);
         localStorage.setItem('pms_auth', 'true');
         localStorage.setItem('pms_user', loginUser);
         localStorage.setItem('pms_selected_portal', 'operation');
         setLoginError('');
 
-        const targetUrl = `${window.location.origin}/assets/pms`;
+        const targetUrl = `${window.location.origin}/pms`;
         if (window.location.href === targetUrl) {
           window.location.reload();
         } else {
@@ -4101,7 +4104,11 @@ export default function App() {
       if (loginUser === 'admin' && loginPass === 'Pms@ADV2026!@#') {
         const isAdmin = selectedPortal === 'admin' || selectedPortal !== 'operation';
         if (isAdmin) {
-          window.location.href = `${window.location.origin}/assets/apps`;
+          localStorage.setItem('pms_auth', 'true');
+          localStorage.setItem('pms_user', loginUser);
+          localStorage.setItem('pms_selected_portal', 'admin');
+          // Admin Portal: redirect default link with /app
+          window.location.href = `${window.location.origin}/app`;
           return;
         }
 
@@ -4111,7 +4118,7 @@ export default function App() {
         localStorage.setItem('pms_selected_portal', 'operation');
         setLoginError('');
 
-        const targetUrl = `${window.location.origin}/assets/pms`;
+        const targetUrl = `${window.location.origin}/pms`;
         if (window.location.href === targetUrl) {
           window.location.reload();
         } else {
