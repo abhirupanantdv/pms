@@ -71,37 +71,37 @@ export default defineConfig({
     host: true,
     proxy: {
       '/app': {
-        target: 'https://pms.advtinni.com',
+        target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
       },
       '/assets/apps': {
-        target: 'https://pms.advtinni.com',
+        target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
       },
       '/apps': {
-        target: 'https://pms.advtinni.com',
+        target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
       },
       '/api': {
-        target: 'https://pms.advtinni.com',
+        target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
       },
       '/printview': {
-        target: 'https://pms.advtinni.com',
+        target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
       },
       '/files': {
-        target: 'https://pms.advtinni.com',
+        target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
       },
       '/private': {
-        target: 'https://pms.advtinni.com',
+        target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
       }

@@ -27,16 +27,81 @@ export const getCsrfToken = () => {
         }
       }
     } catch { }
+    // 4. Fallback to web storage
+    try {
+      const stored = localStorage.getItem('frappe_csrf_token') || sessionStorage.getItem('frappe_csrf_token') || localStorage.getItem('pms_csrf_token');
+      if (stored && stored !== 'None' && stored !== 'null') {
+        return stored.trim();
+      }
+    } catch { }
   }
   return '';
 };
 
 /**
- * Returns request headers including Content-Type and X-Frappe-CSRF-Token.
- * CRITICAL: If no CSRF token exists, the header is NOT included.
- * Frappe's backend throws CSRFTokenError immediately if X-Frappe-CSRF-Token is present but empty!
+ * Asynchronously ensures a valid CSRF token is available.
+ * If missing, pings /pms or /app to extract the session's active CSRF token from the server response.
  */
-export const getAuthHeaders = (extraHeaders = {}) => {
+export const ensureCsrfToken = async () => {
+  let token = getCsrfToken();
+  if (token) return token;
+
+  const baseUrl = getApiBaseUrl();
+
+  // 1. Try /pms which renders pms.html with window.csrf_token
+  try {
+    const res = await fetch(`${baseUrl}/pms`, { credentials: 'include' });
+    if (res.ok) {
+      const html = await res.text();
+      const match = html.match(/window\.csrf_token\s*=\s*["']([^"']+)["']/i) ||
+        html.match(/["']?csrf_token["']?\s*[:=]\s*["']([^"']+)["']/i);
+      if (match && match[1] && match[1] !== 'None' && match[1] !== 'null') {
+        token = match[1].trim();
+        if (typeof window !== 'undefined') {
+          window.csrf_token = token;
+          try {
+            localStorage.setItem('frappe_csrf_token', token);
+            sessionStorage.setItem('frappe_csrf_token', token);
+          } catch { }
+        }
+        return token;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed fetching CSRF token from /pms:', err);
+  }
+
+  // 2. Try /app which renders desk with csrf_token
+  try {
+    const resApp = await fetch(`${baseUrl}/app`, { credentials: 'include' });
+    if (resApp.ok) {
+      const htmlApp = await resApp.text();
+      const matchApp = htmlApp.match(/csrf_token["']?\s*[:=]\s*["']([^"']+)["']/i) ||
+        htmlApp.match(/window\.csrf_token\s*=\s*["']([^"']+)["']/i);
+      if (matchApp && matchApp[1] && matchApp[1] !== 'None' && matchApp[1] !== 'null') {
+        token = matchApp[1].trim();
+        if (typeof window !== 'undefined') {
+          window.csrf_token = token;
+          try {
+            localStorage.setItem('frappe_csrf_token', token);
+            sessionStorage.setItem('frappe_csrf_token', token);
+          } catch { }
+        }
+        return token;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed fetching CSRF token from /app:', err);
+  }
+
+  return token || '';
+};
+
+/**
+ * Returns request headers including Content-Type and X-Frappe-CSRF-Token.
+ * Accepts optional dynamicToken override.
+ */
+export const getAuthHeaders = (extraHeaders = {}, dynamicToken = null) => {
   const headers = {};
   if (!('Content-Type' in extraHeaders)) {
     headers['Content-Type'] = 'application/json';
@@ -48,7 +113,7 @@ export const getAuthHeaders = (extraHeaders = {}) => {
       headers[key] = val;
     }
   }
-  const token = getCsrfToken();
+  const token = dynamicToken || getCsrfToken();
   if (token) {
     headers['X-Frappe-CSRF-Token'] = token;
   }
@@ -75,7 +140,7 @@ export const getUploadHeaders = (extraHeaders = {}) => {
  * - On production domains, ensures https:// is used to avoid Nginx 301 redirects (which drop headers and POST bodies).
  */
 export const getApiBaseUrl = () => {
-  if (typeof window === 'undefined') return 'https://pms.advtinni.com';
+  if (typeof window === 'undefined') return 'https://cfpl.anantdv.com';
   const { origin, protocol, hostname, host } = window.location;
 
   // Local development via Vite dev server proxy

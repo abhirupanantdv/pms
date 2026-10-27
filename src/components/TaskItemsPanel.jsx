@@ -1940,7 +1940,7 @@
 // export default TaskAssignPanel;
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Plus, Minus, Trash2, Save, RefreshCw, FileText, CheckCircle2, ChevronDown, Search, X, Briefcase, Clock } from "lucide-react";
+import { Plus, Minus, Trash2, Save, RefreshCw, FileText, CheckCircle2, ChevronDown, Search, X, Briefcase, Clock, ArrowRight, ExternalLink } from "lucide-react";
 import { getAuthHeaders, getCsrfToken as getGlobalCsrfToken } from '../config';
 
 // ---------- Searchable multi-select dropdown (local data — employees / vendors) ----------
@@ -1957,21 +1957,22 @@ function AssignSearchDropdown({ items = [], selected = [], onToggle, placeholder
 
     const filtered = query
         ? items.filter((item) => {
-            const label = `${item?.name || ""} ${item?.id || ""} ${item?.certs || ""} ${item?.type || ""}`;
+            const servicesStr = (item?.services_list || []).map(s => `${s.service_group || ''} ${s.services || ''}`).join(' ');
+            const label = `${item?.name || ""} ${item?.id || ""} ${item?.certs || ""} ${item?.type || ""} ${item?.group || ""} ${servicesStr}`;
             return label.toLowerCase().includes(query.toLowerCase());
         })
         : items;
 
-    const selectedItems = items.filter((item) => selected.includes(item?.id));
+    const selectedItems = items.filter((item) => selected.includes(item?.id) || selected.includes(item?.name));
 
     return (
         <div ref={wrapRef} style={{ position: "relative" }}>
             {selectedItems.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
                     {selectedItems.map((item) => (
-                        <span key={item.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: "var(--brand-color, #2563eb)", color: "#fff" }}>
+                        <span key={item.id || item.name} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: "var(--brand-color, #2563eb)", color: "#fff" }}>
                             {item.name}
-                            {!disabled && <X size={10} style={{ cursor: "pointer", opacity: 0.8 }} onClick={() => onToggle?.(item.id)} />}
+                            {!disabled && <X size={10} style={{ cursor: "pointer", opacity: 0.8 }} onClick={() => onToggle?.(item.id || item.name)} />}
                         </span>
                     ))}
                 </div>
@@ -1993,9 +1994,9 @@ function AssignSearchDropdown({ items = [], selected = [], onToggle, placeholder
                         {filtered.length === 0 ? (
                             <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--text-muted)" }}>No results.</div>
                         ) : filtered.map((item) => {
-                            const checked = selected.includes(item?.id);
+                            const checked = selected.includes(item?.id) || selected.includes(item?.name);
                             return (
-                                <div key={item.id} onClick={() => onToggle?.(item.id)}
+                                <div key={item.id || item.name} onClick={() => onToggle?.(item.id || item.name)}
                                     style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", fontSize: 11.5, cursor: "pointer", borderBottom: "1px solid var(--border-color)", background: checked ? "color-mix(in srgb, var(--brand-color, #2563eb) 10%, transparent)" : "transparent" }}
                                     onMouseEnter={(e) => { if (!checked) e.currentTarget.style.background = "var(--bg-tertiary)"; }}
                                     onMouseLeave={(e) => { e.currentTarget.style.background = checked ? "color-mix(in srgb, var(--brand-color, #2563eb) 10%, transparent)" : "transparent"; }}
@@ -2036,22 +2037,130 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
         const t = setTimeout(async () => {
             setLoading(true);
             try {
-                const filters = [["item_group", "descendants of (inclusive)", "Services"]];
-                if (query) {
-                    filters.push(["item_code", "like", `%${query}%`]);
+                // Safe DocType Item fields ONLY (custom_price / rate do NOT exist on Item doctype)
+                const safeFields = ["name", "item_code", "item_name", "item_group", "custom_service_group", "standard_rate"];
+                const fallbackFields = ["name", "item_code", "item_name", "item_group"];
+
+                const tryFetch = async (filters, fields) => {
+                    try {
+                        const filterParam = filters && filters.length > 0 ? `&filters=${encodeURIComponent(JSON.stringify(filters))}` : "";
+                        const fieldParam = `fields=${encodeURIComponent(JSON.stringify(fields))}`;
+                        const url = `${erpnextConfig.url}/api/resource/Item?${fieldParam}${filterParam}&limit_page_length=500`;
+                        const res = await fetch(url, { credentials: "include" });
+                        if (res.ok) {
+                            const json = await res.json();
+                            if (Array.isArray(json?.data) && json.data.length > 0) {
+                                return json.data;
+                            }
+                        }
+                    } catch (err) {
+                        console.warn("Item fetch attempt error:", err);
+                    }
+                    return null;
+                };
+
+                // 1. Try querying Services (descendants of inclusive)
+                let items = await tryFetch([["item_group", "descendants of (inclusive)", "Services"], ["disabled", "=", 0]], safeFields);
+
+                // 2. Try querying item_group = "Services" with disabled=0
+                if (!items) {
+                    items = await tryFetch([["item_group", "=", "Services"], ["disabled", "=", 0]], safeFields);
                 }
-                const res = await fetch(
-                    `${erpnextConfig.url}/api/resource/Item?filters=${encodeURIComponent(JSON.stringify(filters))}&fields=${encodeURIComponent(JSON.stringify(["item_code", "item_name"]))}&limit_page_length=20`,
-                    { credentials: "include" }
-                );
-                const json = await res.json();
-                console.log("Items (Services) shown in Add Item:", json?.data);
-                setOptions(Array.isArray(json?.data) ? json.data : []);
-            } catch (e) { console.error("Item search failed:", e); setOptions([]); }
-            finally { setLoading(false); }
-        }, 250);
+
+                // 3. Try querying item_group = "Services" without disabled filter
+                if (!items) {
+                    items = await tryFetch([["item_group", "=", "Services"]], safeFields);
+                }
+
+                // 4. Try querying without item_group filter in case items have different group
+                if (!items) {
+                    items = await tryFetch([["disabled", "=", 0]], safeFields);
+                }
+
+                // 5. Fallback without custom fields in case custom_service_group is rejected
+                if (!items) {
+                    items = await tryFetch([["item_group", "=", "Services"]], fallbackFields);
+                }
+                if (!items) {
+                    items = await tryFetch([], fallbackFields);
+                }
+
+                const rawItems = Array.isArray(items) ? items : [];
+
+                // Filter out any "Default Service" (custom_service_group !== "Default Service")
+                const nonDefaultServices = rawItems
+                    .map((it) => {
+                        const code = (it.item_code || it.name || "").trim();
+                        const name = (it.item_name || code).trim();
+                        const sGroup = (it.custom_service_group || "").trim();
+                        const iGroup = (it.item_group || "").trim();
+                        const rate = Number(it.standard_rate || it.charges || 0) || 0;
+                        return {
+                            name: it.name || code,
+                            item_code: code,
+                            item_name: name,
+                            item_group: iGroup,
+                            custom_service_group: sGroup,
+                            standard_rate: rate,
+                            custom_price: rate
+                        };
+                    })
+                    .filter((opt) => {
+                        if (!opt.item_code) return false;
+
+                        const sGroup = opt.custom_service_group.toLowerCase();
+                        const iName = opt.item_name.toLowerCase();
+                        const iCode = opt.item_code.toLowerCase();
+                        const iGroup = opt.item_group.toLowerCase();
+
+                        // Exclude if custom_service_group is "Default Service"
+                        if (sGroup === "default service" || sGroup.includes("default service")) {
+                            return false;
+                        }
+
+                        // Exclude if item name or code is "Default Service"
+                        if (iName === "default service" || iCode === "default service") {
+                            return false;
+                        }
+
+                        // Exclude standard onboarding default fee services
+                        if (
+                            iName === "promotional fee" || iName === "promotional fees" || iCode.includes("promotional") ||
+                            iName === "service charge" || iName === "service charges" || iCode.includes("service charge") ||
+                            iName === "water connection" || iName === "water connection fee" || iCode.includes("water connection")
+                        ) {
+                            return false;
+                        }
+
+                        // Exclude property units / commercial / residential rental items
+                        if (iGroup === "commercial" || iGroup === "residential" || iGroup === "units" || iGroup === "unit" || iGroup === "property" || iGroup === "properties") {
+                            return false;
+                        }
+
+                        return true;
+                    });
+
+                console.log("Services loaded in Add Services (without Default Service):", nonDefaultServices);
+                setOptions(nonDefaultServices);
+            } catch (e) {
+                console.error("Item search failed:", e);
+                setOptions([]);
+            } finally {
+                setLoading(false);
+            }
+        }, 200);
         return () => clearTimeout(t);
-    }, [query, open, erpnextConfig?.url]);
+    }, [open, erpnextConfig?.url]);
+
+    const filteredOptions = useMemo(() => {
+        if (!query) return options;
+        const q = query.trim().toLowerCase();
+        return options.filter((opt) => {
+            const code = (opt.item_code || "").toLowerCase();
+            const name = (opt.item_name || "").toLowerCase();
+            return code.includes(q) || name.includes(q);
+        });
+    }, [options, query]);
 
     return (
         <div ref={wrapRef} style={{ position: "relative", flex: 1 }}>
@@ -2065,17 +2174,17 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
                 <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "var(--bg-primary)", border: "1px solid var(--border-color)", borderRadius: 6, marginTop: 4, boxShadow: "0 6px 20px rgba(0,0,0,0.15)" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderBottom: "1px solid var(--border-color)" }}>
                         <Search size={12} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
-                        <input autoFocus type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search item code…" style={{ flex: 1, border: "none", outline: "none", fontSize: 12, background: "transparent", color: "var(--text-primary)" }} />
+                        <input autoFocus type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search item code or name…" style={{ flex: 1, border: "none", outline: "none", fontSize: 12, background: "transparent", color: "var(--text-primary)" }} />
                         {query && <X size={11} style={{ cursor: "pointer", color: "var(--text-muted)" }} onClick={() => setQuery("")} />}
                     </div>
                     <div style={{ maxHeight: 180, overflowY: "auto" }}>
                         {loading ? (
                             <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--text-muted)" }}>Searching…</div>
-                        ) : options.length === 0 ? (
-                            <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--text-muted)" }}>No items found.</div>
-                        ) : options.map((opt) => (
+                        ) : filteredOptions.length === 0 ? (
+                            <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--text-muted)" }}>No services found.</div>
+                        ) : filteredOptions.map((opt) => (
                             <div key={opt.item_code} onClick={() => { onSelect?.(opt); setOpen(false); setQuery(""); }}
-                                style={{ padding: "7px 10px", fontSize: 11.5, cursor: "pointer", borderBottom: "1px solid var(--border-color)" }}
+                                style={{ padding: "7px 10px", fontSize: 11.5, cursor: "pointer", borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", justifyContent: "space-between" }}
                                 onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-tertiary)")}
                                 onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                             >
@@ -2083,6 +2192,9 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
                                     <span style={{ fontWeight: 600, color: "var(--brand-color)" }}>{opt.item_code}</span>
                                     {opt.item_name && opt.item_name !== opt.item_code && <span style={{ fontSize: 10, color: "var(--text-secondary)" }}>{opt.item_name}</span>}
                                 </div>
+                                {opt.custom_price > 0 && (
+                                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>${opt.custom_price}</span>
+                                )}
                             </div>
                         ))}
                     </div>
@@ -2100,9 +2212,32 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     const [isLockedLocal, setIsLockedLocal] = useState(false);
     const isLocked = Boolean(taskDoc?.status === "Completed" || taskDoc?.status === "Cancelled" || isLockedLocal);
 
+    const [currentQuotationId, setCurrentQuotationId] = useState(taskDoc?.custom_quotation_id || null);
+    const [creatingQuotation, setCreatingQuotation] = useState(false);
+    const [showQuotationConfirm, setShowQuotationConfirm] = useState(false);
+
     useEffect(() => {
         setIsLockedLocal(taskDoc?.status === "Completed");
     }, [taskDoc?.status, taskDoc?.name]);
+
+    useEffect(() => {
+        const qId = taskDoc?.custom_quotation_id || taskDoc?.quotation_id || null;
+        if (qId) {
+            setCurrentQuotationId(qId);
+        } else if (isLocked && taskDoc?.name && erpnextConfig?.url) {
+            fetch(`${erpnextConfig.url}/api/resource/Quotation?filters=${encodeURIComponent(JSON.stringify([["custom_task_reference", "=", taskDoc.name], ["docstatus", "!=", 2]]))}&fields=["name"]&limit=1`, {
+                credentials: "include",
+                headers: safeHeaders()
+            })
+            .then(r => r.ok ? r.json() : null)
+            .then(json => {
+                if (json?.data?.[0]?.name) {
+                    setCurrentQuotationId(json.data[0].name);
+                }
+            })
+            .catch(() => {});
+        }
+    }, [taskDoc?.custom_quotation_id, taskDoc?.quotation_id, taskDoc?.name, isLocked, erpnextConfig?.url]);
 
     const resolveToken = () => {
         try {
@@ -2124,44 +2259,92 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     const [savingAssign, setSavingAssign] = useState(false);
     const [selectedEmpIds, setSelectedEmpIds] = useState([]);
     const [selectedVendorIds, setSelectedVendorIds] = useState([]);
+    const [empRows, setEmpRows] = useState(() => taskDoc?.custom_assign_to_ || []);
+    const [vendorRows, setVendorRows] = useState(() => taskDoc?.custom_assign_to_vendor || []);
 
     const effectiveAssignType = useMemo(() => {
-        const raw = (taskDoc?.custom_assign || "").toLowerCase().trim();
+        const raw = (taskDoc?.custom_assign || assignType || "").toLowerCase().trim();
         if (raw === "employee" || raw.includes("employee")) return "employee";
         if (raw === "vendor" || raw.includes("vendor")) return "vendor";
-        if ((taskDoc?.custom_assign_to_ || []).length > 0) return "employee";
-        if ((taskDoc?.custom_assign_to_vendor || []).length > 0) return "vendor";
+        if (empRows.length > 0) return "employee";
+        if (vendorRows.length > 0) return "vendor";
         return assignType || "employee";
-    }, [taskDoc?.custom_assign, taskDoc?.custom_assign_to_, taskDoc?.custom_assign_to_vendor, assignType]);
+    }, [taskDoc?.custom_assign, assignType, empRows, vendorRows]);
 
     useEffect(() => {
+        let isMounted = true;
+        const currentVendors = taskDoc?.custom_assign_to_vendor;
+        const currentEmps = taskDoc?.custom_assign_to_;
+
+        if (Array.isArray(currentVendors)) {
+            setVendorRows(currentVendors);
+            setSelectedVendorIds(currentVendors.map((r) => r?.vendor_name || r?.vendor || r?.supplier || r?.name).filter(Boolean));
+        }
+        if (Array.isArray(currentEmps)) {
+            setEmpRows(currentEmps);
+            setSelectedEmpIds(currentEmps.map((r) => r?.emp_id || r?.employee || r?.id || r?.name).filter(Boolean));
+        }
+
         const raw = (taskDoc?.custom_assign || "").toLowerCase().trim();
         if (raw) setAssignType(raw);
-        else if ((taskDoc?.custom_assign_to_ || []).length > 0) setAssignType("employee");
-        else if ((taskDoc?.custom_assign_to_vendor || []).length > 0) setAssignType("vendor");
-    }, [taskDoc?.custom_assign, taskDoc?.custom_assign_to_, taskDoc?.custom_assign_to_vendor]);
+        else if (Array.isArray(currentEmps) && currentEmps.length > 0) setAssignType("employee");
+        else if (Array.isArray(currentVendors) && currentVendors.length > 0) setAssignType("vendor");
 
-    useEffect(() => {
-        setSelectedEmpIds((taskDoc?.custom_assign_to_ || []).map((r) => r?.emp_id || r?.employee || r?.id || r?.name).filter(Boolean));
-        setSelectedVendorIds((taskDoc?.custom_assign_to_vendor || []).map((r) => r?.vendor_name || r?.vendor || r?.supplier || r?.name).filter(Boolean));
-    }, [taskDoc]);
+        // Fetch full Task doc to guarantee child tables (custom_assign_to_vendor, custom_assign_to_) are loaded
+        if (taskDoc?.name && erpnextConfig?.url) {
+            fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                credentials: "include",
+                headers: safeHeaders()
+            })
+                .then(res => res.ok ? res.json() : null)
+                .then(json => {
+                    if (!isMounted) return;
+                    const doc = json?.data || json || {};
+                    const fetchedVendors = Array.isArray(doc?.custom_assign_to_vendor) ? doc.custom_assign_to_vendor : [];
+                    const fetchedEmps = Array.isArray(doc?.custom_assign_to_) ? doc.custom_assign_to_ : [];
+
+                    setVendorRows(fetchedVendors);
+                    setSelectedVendorIds(fetchedVendors.map((r) => r?.vendor_name || r?.vendor || r?.supplier || r?.name).filter(Boolean));
+
+                    setEmpRows(fetchedEmps);
+                    setSelectedEmpIds(fetchedEmps.map((r) => r?.emp_id || r?.employee || r?.id || r?.name).filter(Boolean));
+
+                    if (doc?.custom_assign) {
+                        setAssignType(doc.custom_assign.toLowerCase().trim());
+                    }
+                })
+                .catch(err => {
+                    console.warn("Could not fetch Task child tables in TaskItemsPanel:", err);
+                });
+        }
+
+        return () => { isMounted = false; };
+    }, [taskDoc?.name, taskDoc?.custom_assign_to_vendor, taskDoc?.custom_assign_to_, erpnextConfig?.url]);
 
     const toggleEmp = (id) => setSelectedEmpIds((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
-    const toggleVendor = (id) => setSelectedVendorIds((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
-    const empRows = taskDoc?.custom_assign_to_ || [];
-    const vendorRows = taskDoc?.custom_assign_to_vendor || [];
+    const toggleVendor = (id) => setSelectedVendorIds((p) => {
+        const match = allVendorsList.find(v => v.id === id || v.name === id);
+        const targetId = match?.id || id;
+        const targetName = match?.name || id;
+        const exists = p.some(x => x === targetId || x === targetName);
+        if (exists) {
+            return p.filter(x => x !== targetId && x !== targetName);
+        } else {
+            return [...p, targetId];
+        }
+    });
 
     const [assignedVendorDetails, setAssignedVendorDetails] = useState({});
 
-    const vendorNamesStr = vendorRows.map(r => r.vendor_name || r.vendor).filter(Boolean).join(',');
+    const vendorNamesStr = (vendorRows || []).map(r => r?.vendor_name || r?.vendor || r?.supplier || r?.name).filter(Boolean).join(',');
 
     useEffect(() => {
-        if (!erpnextConfig?.url || vendorRows.length === 0) return;
+        if (!erpnextConfig?.url || !vendorRows || vendorRows.length === 0) return;
 
         const fetchDetails = async () => {
             const details = {};
             for (const r of vendorRows) {
-                const vName = r.vendor_name || r.vendor;
+                const vName = r?.vendor_name || r?.vendor || r?.supplier || r?.name;
                 if (!vName || details[vName]) continue;
                 try {
                     const res = await fetch(`${erpnextConfig.url}/api/resource/Supplier/${encodeURIComponent(vName)}`, {
@@ -2264,79 +2447,68 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
 
     const handleReassign = async () => {
         if (isLocked) return;
-        if (!erpnextConfig?.url || !taskDoc?.name) { showToast?.("No ERPNext connection.", "error"); return; }
         setSavingAssign(true);
         try {
-            const body = effectiveAssignType === "employee"
-                ? { custom_assign_to_: selectedEmpIds.map((id) => { const e = employeeDir.find((x) => x?.id === id); return { emp_id: id, emp_name: e?.name || "", designation: e?.certs || e?.designation || "", contact_number: e?.phone || "" }; }) }
-                : { custom_assign_to_vendor: selectedVendorIds.map((id) => { const v = vendorDir.find((x) => x?.id === id); return { vendor_name: id, supplier_type: v?.type || "" }; }) };
-            const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`, { method: "PUT", credentials: "include", headers: safeHeaders(), body: JSON.stringify(body) });
-            const json = await res.json();
-            if (!res.ok) { showToast?.(json?.exception || "Failed to update assignment.", "error"); return; }
-            showToast?.(`${effectiveAssignType === "employee" ? "Employees" : "Vendors"} updated successfully.`, "success");
-            onSaved?.(json.data);
-        } catch (err) { console.error(err); showToast?.("Error saving assignment.", "error"); }
-        finally { setSavingAssign(false); }
+            await handleSaveDocument();
+        } finally {
+            setSavingAssign(false);
+        }
     };
 
     // ── ITEMS ──
     const [itemRows, setItemRows] = useState([]);
     const [pendingItem, setPendingItem] = useState(null);
     const [pendingQty, setPendingQty] = useState(1);
+    const [pendingPrice, setPendingPrice] = useState("");
     const [savingItems, setSavingItems] = useState(false);
+    const [savingDocument, setSavingDocument] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
 
     useEffect(() => {
         let isMounted = true;
-        const rawList = taskDoc?.custom_items_used_for_maintenance || [];
-        if (rawList.length > 0) {
-            setItemRows(rawList.map((r) => ({
+
+        const mapMaintenanceItems = (rawList) => {
+            if (!Array.isArray(rawList)) return [];
+            return rawList.map((r) => ({
                 name: r?.name,
                 item_code: r?.item_code || r?.item || r?.service || r?.service_name || r?.name || "",
                 item_name: r?.item_name || r?.item_description || r?.description || r?.service_name || r?.item_code || "—",
-                qty: Number(r?.qty || r?.quantity || 1)
-            })));
-        } else {
-            // If taskDoc doesn't have items, check if the linked Maintenance Schedule has items
-            const schedName =
-                taskDoc?.custom_mantainence_sechedule ||
-                taskDoc?.custom_maintenance_schedule ||
-                taskDoc?.maintenance_schedule ||
-                taskDoc?.custom_schedule ||
-                taskDoc?.scheduleId ||
-                taskDoc?.schedule;
+                qty: Number(r?.qty || r?.quantity || 1),
+                custom_price: r?.custom_price !== undefined && r?.custom_price !== null 
+                    ? Number(r.custom_price) 
+                    : (r?.price !== undefined && r?.price !== null ? Number(r.price) : (r?.rate !== undefined && r?.rate !== null ? Number(r.rate) : 0))
+            }));
+        };
 
-            if (schedName && erpnextConfig?.url) {
-                fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(schedName)}`, {
-                    credentials: "include",
-                    headers: safeHeaders()
+        const currentItems = taskDoc?.custom_items_used_for_maintenance;
+
+        if (Array.isArray(currentItems)) {
+            // Strictly use custom_items_used_for_maintenance from the Task doctype
+            setItemRows(mapMaintenanceItems(currentItems));
+        } else if (taskDoc?.name && erpnextConfig?.url) {
+            // Fetch Task doc from ERPNext to read custom_items_used_for_maintenance table
+            fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                credentials: "include",
+                headers: safeHeaders()
+            })
+                .then(res => res.ok ? res.json() : null)
+                .then(json => {
+                    if (!isMounted) return;
+                    const doc = json?.data || json || {};
+                    const items = doc?.custom_items_used_for_maintenance || [];
+                    setItemRows(mapMaintenanceItems(items));
                 })
-                    .then(res => res.ok ? res.json() : null)
-                    .then(json => {
-                        if (!isMounted) return;
-                        const sDoc = json?.data || json || {};
-                        const sItems = sDoc?.items || [];
-                        if (sItems.length > 0) {
-                            setItemRows(sItems.map((r) => ({
-                                name: r?.name,
-                                item_code: r?.item_code || "",
-                                item_name: r?.item_name || r?.item_code || "—",
-                                qty: Number(r?.no_of_visits || r?.qty || 1)
-                            })));
-                        } else {
-                            setItemRows([]);
-                        }
-                    })
-                    .catch(() => {
-                        if (isMounted) setItemRows([]);
-                    });
-            } else {
-                setItemRows([]);
-            }
+                .catch(err => {
+                    console.warn("Could not fetch Task custom_items_used_for_maintenance:", err);
+                    if (isMounted) setItemRows([]);
+                });
+        } else {
+            setItemRows([]);
         }
+
         return () => { isMounted = false; };
-    }, [taskDoc?.custom_items_used_for_maintenance, taskDoc?.name, taskDoc?.custom_mantainence_sechedule, taskDoc?.custom_maintenance_schedule, erpnextConfig?.url]);
+    }, [taskDoc?.custom_items_used_for_maintenance, taskDoc?.name, erpnextConfig?.url]);
 
     const [supplierServices, setSupplierServices] = useState([]);
 
@@ -2352,72 +2524,285 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
             .catch(err => console.error("Failed to fetch multi-services:", err));
     }, [erpnextConfig]);
 
+    const [erpSuppliers, setErpSuppliers] = useState([]);
+
+    useEffect(() => {
+        if (!erpnextConfig?.url) return;
+        fetch(`${erpnextConfig.url}/api/resource/Supplier?fields=["name","supplier_name","supplier_type","supplier_group","custom_contact_person","email_id","phone_no"]&limit_page_length=1000`, {
+            credentials: "include",
+            headers: safeHeaders()
+        })
+            .then(res => res.ok ? res.json() : null)
+            .then(json => {
+                if (json && Array.isArray(json.data)) {
+                    setErpSuppliers(json.data.map(s => ({
+                        id: s.name,
+                        name: s.supplier_name || s.name,
+                        type: s.supplier_type || s.supplier_group || 'Services',
+                        group: s.supplier_group || 'Local',
+                        email: s.email_id || '',
+                        phone: s.phone_no || '',
+                        custom_contact_person: s.custom_contact_person || ''
+                    })));
+                }
+            })
+            .catch(err => console.warn("Failed fetching all suppliers in TaskItemsPanel:", err));
+    }, [erpnextConfig?.url]);
+
+    const allVendorsList = useMemo(() => {
+        const map = new Map();
+        (vendorDir || []).forEach(v => {
+            const key = v.id || v.name;
+            if (key) map.set(key, v);
+        });
+        erpSuppliers.forEach(s => {
+            const key = s.id || s.name;
+            if (key && !map.has(key)) {
+                map.set(key, s);
+            }
+        });
+        return Array.from(map.values());
+    }, [vendorDir, erpSuppliers]);
+
     const vendorsWithServices = useMemo(() => {
-        return vendorDir.map(vendor => {
-            const services = supplierServices.filter(s => s.parent === vendor.id);
+        return allVendorsList.map(vendor => {
+            const services = supplierServices.filter(s => s.parent === vendor.id || s.parent === vendor.name);
             return {
                 ...vendor,
                 services_list: services
             };
         });
-    }, [vendorDir, supplierServices]);
+    }, [allVendorsList, supplierServices]);
 
-    const filteredVendorDir = useMemo(() => {
-        if (itemRows.length === 0) {
-            return [];
-        }
-        return vendorsWithServices.filter(vendor => {
-            const vendorServices = vendor.services_list || [];
-            return vendorServices.some(vs => {
-                const serviceGroup = (vs.service_group || '').toLowerCase().trim();
-                const serviceName = (vs.services || '').toLowerCase().trim();
-                return itemRows.some(item => {
-                    const code = (item.item_code || '').toLowerCase().trim();
-                    const name = (item.item_name || '').toLowerCase().trim();
-                    return (
-                        (serviceGroup && (code.includes(serviceGroup) || serviceGroup.includes(code) || name.includes(serviceGroup) || serviceGroup.includes(name))) ||
-                        (serviceName && (code.includes(serviceName) || serviceName.includes(code) || name.includes(serviceName) || serviceName.includes(name)))
-                    );
-                });
-            });
-        });
-    }, [vendorsWithServices, itemRows]);
-
-    const vendorPlaceholder = itemRows.length === 0
-        ? "Please select services first"
-        : `Search & select vendors (${filteredVendorDir.length} matches)…`;
+    const vendorPlaceholder = vendorsWithServices.length > 0
+        ? `Search & select vendors (${vendorsWithServices.length} suppliers)…`
+        : "Search & select vendors…";
 
     const addItemToList = () => {
         if (isLocked) return;
         if (!pendingItem) { showToast?.("Select an item first.", "error"); return; }
         if (pendingQty <= 0) { showToast?.("Quantity must be greater than zero.", "error"); return; }
+        const itemPrice = pendingPrice !== "" ? (Number(pendingPrice) || 0) : (Number(pendingItem.custom_price || pendingItem.standard_rate || pendingItem.rate) || 0);
         setItemRows((prev) => {
             const idx = prev.findIndex((r) => r.item_code === pendingItem.item_code);
-            if (idx >= 0) { const copy = [...prev]; copy[idx] = { ...copy[idx], qty: copy[idx].qty + pendingQty }; return copy; }
-            return [...prev, { item_code: pendingItem.item_code, item_name: pendingItem.item_name, qty: pendingQty }];
+            if (idx >= 0) {
+                const copy = [...prev];
+                copy[idx] = {
+                    ...copy[idx],
+                    qty: copy[idx].qty + pendingQty,
+                    custom_price: itemPrice || copy[idx].custom_price || 0
+                };
+                return copy;
+            }
+            return [...prev, {
+                item_code: pendingItem.item_code,
+                item_name: pendingItem.item_name,
+                qty: pendingQty,
+                custom_price: itemPrice
+            }];
         });
-        setPendingItem(null); setPendingQty(1);
+        setPendingItem(null);
+        setPendingQty(1);
+        setPendingPrice("");
     };
 
     const removeRow = (idx) => { if (isLocked) return; setItemRows((p) => p.filter((_, i) => i !== idx)); };
     const changeRowQty = (idx, delta) => { if (isLocked) return; setItemRows((p) => p.map((r, i) => i === idx ? { ...r, qty: Math.max(1, r.qty + delta) } : r)); };
+    const changeRowPrice = (idx, val) => {
+        if (isLocked) return;
+        setItemRows((p) => p.map((r, i) => i === idx ? { ...r, custom_price: val === "" ? "" : Number(val) } : r));
+    };
 
-    // Update Items: just persists whatever is currently in the list — no
-    // "must have items" validation here. That check only applies on Submit.
+    /**
+     * Unified, robust document saver for the Task DocType in ERPNext.
+     * Persists:
+     * - status (optionally overridden, e.g. "Working")
+     * - custom_items_used_for_maintenance (all services currently in table)
+     * - custom_assign ("Employee" or "Vendor")
+     * - custom_assign_to_ (employee child table)
+     * - custom_assign_to_vendor (vendor child table)
+     * Uses atomic PUT, frappe.client.set_value fallback, re-fetches fresh doc,
+     * calls onSaved and aftersucess.
+     */
+    async function handleSaveDocument(overrideStatus = null) {
+        if (isLocked) return null;
+        if (!erpnextConfig?.url || !taskDoc?.name) {
+            showToast?.("No ERPNext connection.", "error");
+            return null;
+        }
+        setSavingDocument(true);
+        try {
+            const nextStatus = overrideStatus || taskDoc.status || "Open";
+            const assignStr = effectiveAssignType === "employee" ? "Employee" : "Vendor";
+
+            const formattedItems = itemRows.map((r) => ({
+                ...(r.name && !String(r.name).startsWith("temp_") ? { name: r.name } : {}),
+                item_code: r.item_code,
+                item_name: r.item_name,
+                qty: Number(r.qty) || 1,
+                custom_price: Number(r.custom_price) || 0
+            }));
+
+            const formattedEmp = selectedEmpIds.map((id) => {
+                const e = employeeDir.find((x) => x?.id === id || x?.name === id);
+                return {
+                    emp_id: id,
+                    emp_name: e?.name || e?.employee_name || id,
+                    designation: e?.certs || e?.designation || "",
+                    contact_number: e?.phone || e?.cell_number || ""
+                };
+            });
+
+            const formattedVendors = selectedVendorIds.map((id) => {
+                const v = allVendorsList.find((x) => x?.id === id || x?.name === id);
+                return {
+                    vendor_name: id,
+                    supplier_type: v?.type || v?.supplier_type || ""
+                };
+            });
+
+            const savePayload = {
+                status: nextStatus,
+                custom_items_used_for_maintenance: formattedItems,
+                custom_assign: assignStr,
+                ...(effectiveAssignType === "employee"
+                    ? { custom_assign_to_: formattedEmp, custom_assign_to_vendor: [] }
+                    : { custom_assign_to_vendor: formattedVendors, custom_assign_to_: [] })
+            };
+
+            let savedSuccessfully = false;
+
+            // 1. Primary: Single atomic REST PUT with full payload
+            try {
+                const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                    method: "PUT",
+                    credentials: "include",
+                    headers: safeHeaders(),
+                    body: JSON.stringify(savePayload)
+                });
+                if (res.ok) {
+                    savedSuccessfully = true;
+                } else {
+                    const errTxt = await res.text();
+                    console.warn("PUT Task full payload warning:", errTxt);
+                }
+            } catch (putErr) {
+                console.warn("PUT Task full payload failed:", putErr);
+            }
+
+            // 2. Fallback: if atomic PUT was rejected, commit status via frappe.client.set_value & save child tables
+            if (!savedSuccessfully) {
+                if (nextStatus) {
+                    try {
+                        const setValRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                            method: "POST",
+                            credentials: "include",
+                            headers: safeHeaders(),
+                            body: JSON.stringify({
+                                doctype: "Task",
+                                name: taskDoc.name,
+                                fieldname: "status",
+                                value: nextStatus
+                            })
+                        });
+                        if (setValRes.ok) {
+                            savedSuccessfully = true;
+                        }
+                    } catch (rpcErr) {
+                        console.warn("frappe.client.set_value status failed:", rpcErr);
+                    }
+                }
+
+                // Child tables fallback
+                try {
+                    await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                        method: "PUT",
+                        credentials: "include",
+                        headers: safeHeaders(),
+                        body: JSON.stringify({ custom_items_used_for_maintenance: formattedItems })
+                    });
+                } catch (itemErr) {
+                    console.warn("Fallback items PUT failed:", itemErr);
+                }
+
+                try {
+                    await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                        method: "PUT",
+                        credentials: "include",
+                        headers: safeHeaders(),
+                        body: JSON.stringify({
+                            custom_assign: assignStr,
+                            ...(effectiveAssignType === "employee"
+                                ? { custom_assign_to_: formattedEmp, custom_assign_to_vendor: [] }
+                                : { custom_assign_to_vendor: formattedVendors, custom_assign_to_: [] })
+                        })
+                    });
+                } catch (assignErr) {
+                    console.warn("Fallback assignment PUT failed:", assignErr);
+                }
+            }
+
+            // 3. Re-fetch fresh Task doc from ERPNext server for exact sync
+            let freshDoc = null;
+            try {
+                const freshRes = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                    credentials: "include",
+                    headers: safeHeaders()
+                });
+                if (freshRes.ok) {
+                    const freshJson = await freshRes.json();
+                    freshDoc = freshJson?.data || freshJson;
+                }
+            } catch (fetchErr) {
+                console.warn("Could not re-fetch Task doc:", fetchErr);
+            }
+
+            const finalDoc = {
+                ...taskDoc,
+                ...savePayload,
+                status: nextStatus,
+                ...(freshDoc || {})
+            };
+
+            if (freshDoc?.custom_assign_to_vendor) {
+                setVendorRows(freshDoc.custom_assign_to_vendor);
+            } else if (savePayload.custom_assign_to_vendor) {
+                setVendorRows(savePayload.custom_assign_to_vendor);
+            }
+            if (freshDoc?.custom_assign_to_) {
+                setEmpRows(freshDoc.custom_assign_to_);
+            } else if (savePayload.custom_assign_to_) {
+                setEmpRows(savePayload.custom_assign_to_);
+            }
+
+            onSaved?.(finalDoc);
+            aftersucess?.();
+
+            showToast?.(
+                overrideStatus === "Working"
+                    ? "Task status updated to Working & document saved."
+                    : "Task document saved successfully.",
+                "success"
+            );
+            return finalDoc;
+        } catch (err) {
+            console.error("handleSaveDocument error:", err);
+            showToast?.(err?.message || "Failed to save Task document.", "error");
+            return null;
+        } finally {
+            setSavingDocument(false);
+        }
+    }
+
+    // Update Items: persists current items using unified document saver
     const handleUpdateItems = async () => {
         if (isLocked) return;
-        if (!erpnextConfig?.url || !taskDoc?.name) { showToast?.("No ERPNext connection.", "error"); return; }
         setSavingItems(true);
         try {
-            const body = { custom_items_used_for_maintenance: itemRows.map((r) => ({ item_code: r.item_code, item_name: r.item_name, qty: r.qty })) };
-            const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`, { method: "PUT", credentials: "include", headers: safeHeaders(), body: JSON.stringify(body) });
-            const json = await res.json();
-            if (!res.ok) { showToast?.(json?.exception || "Failed to update items.", "error"); return; }
-            console.log("Updated Task doc JSON:", json.data);
-            showToast?.("Items updated successfully.", "success");
-            onSaved?.(json.data);
-        } catch (e) { console.error(e); showToast?.("Error updating items.", "error"); }
-        finally { setSavingItems(false); }
+            await handleSaveDocument();
+        } finally {
+            setSavingItems(false);
+        }
     };
 
     const handleSubmitClick = async () => {
@@ -2689,7 +3074,8 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                         custom_items_used_for_maintenance: itemRows.map((r) => ({
                             item_code: r.item_code,
                             item_name: r.item_name,
-                            qty: r.qty
+                            qty: Number(r.qty) || 1,
+                            custom_price: Number(r.custom_price) || 0
                         }))
                     };
                     await fetch(`${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`, {
@@ -2892,8 +3278,236 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
             setSubmitting(false);
         }
     };
-    const handleCreateQuotation = () => { console.log("Create Quotation — wire up logic here."); };
-    const handleViewQuotation = () => { console.log("View Quotation — wire up logic here."); };
+
+    const [updatingStatus, setUpdatingStatus] = useState(false);
+    const isWorking = (taskDoc?.status || "").toLowerCase() === "working" || (taskDoc?.status || "").toLowerCase() === "in progress";
+
+    const handleProceedToNext = async () => {
+        if (isLocked) return;
+
+        // 1. If not Working yet: Change status to Working in ERPNext and locally, and SAVE the document
+        if (!isWorking) {
+            setUpdatingStatus(true);
+            try {
+                const updated = await handleSaveDocument("Working");
+                if (!updated) {
+                    return;
+                }
+            } finally {
+                setUpdatingStatus(false);
+            }
+        } else {
+            // 2. Status is already Working: save any pending changes, then trigger Submit confirmation modal
+            try {
+                await handleSaveDocument("Working");
+            } catch (err) {
+                console.warn("Pre-submit save warning:", err);
+            }
+            handleSubmitClick();
+        }
+    };
+
+    const handleGoToQuotation = (targetQuotationId) => {
+        const qId = targetQuotationId || currentQuotationId || taskDoc?.custom_quotation_id;
+        if (!qId) return;
+
+        if (typeof frappe !== 'undefined' && typeof frappe.set_route === 'function') {
+            frappe.set_route("Form", "Quotation", qId);
+            return;
+        }
+
+        const baseUrl = (erpnextConfig?.url || '').replace(/\/$/, '');
+        const targetUrl = baseUrl ? `${baseUrl}/app/quotation/${encodeURIComponent(qId)}` : `/app/quotation/${encodeURIComponent(qId)}`;
+        window.open(targetUrl, '_blank');
+    };
+
+    const executeCreateQuotation = async () => {
+        setShowQuotationConfirm(false);
+        if (!taskDoc?.name || !erpnextConfig?.url) {
+            showToast?.("No ERPNext connection or Task ID missing.", "error");
+            return;
+        }
+
+        setCreatingQuotation(true);
+        try {
+            let quotationName = null;
+
+            // 1. If frappe object exists in the environment, use frappe.call
+            if (typeof frappe !== 'undefined' && typeof frappe.call === 'function') {
+                await new Promise((resolve) => {
+                    frappe.call({
+                        method: "create_maintenance_quotation",
+                        args: { task_name: taskDoc.name },
+                        freeze: true,
+                        freeze_message: "Creating Quotation...",
+                        callback: function (r) {
+                            if (r?.message) {
+                                const result = r.message;
+                                if (result.status === "created" || result.status === "exists") {
+                                    quotationName = result.quotation;
+                                }
+                            }
+                            resolve();
+                        }
+                    });
+                });
+            }
+
+            // 2. Try REST API endpoint /api/method/create_maintenance_quotation
+            if (!quotationName) {
+                try {
+                    const apiRes = await fetch(`${erpnextConfig.url}/api/method/create_maintenance_quotation`, {
+                        method: "POST",
+                        credentials: "include",
+                        headers: safeHeaders({ "Content-Type": "application/json" }),
+                        body: JSON.stringify({ task_name: taskDoc.name })
+                    });
+
+                    if (apiRes.ok) {
+                        const apiJson = await apiRes.json();
+                        const msg = apiJson?.message || apiJson;
+                        if (msg && (msg.status === "created" || msg.status === "exists")) {
+                            quotationName = msg.quotation;
+                        }
+                    } else if (apiRes.status !== 404) {
+                        const errJson = await apiRes.json().catch(() => ({}));
+                        const rawMsg = errJson?.exception || errJson?.message || errJson?._server_messages;
+                        if (rawMsg) {
+                            let cleanMsg = typeof rawMsg === 'string' ? rawMsg : JSON.stringify(rawMsg);
+                            try {
+                                const parsed = JSON.parse(cleanMsg);
+                                if (Array.isArray(parsed) && parsed[0]) {
+                                    const inner = JSON.parse(parsed[0]);
+                                    if (inner?.message) cleanMsg = inner.message;
+                                }
+                            } catch {}
+                            showToast?.(cleanMsg.replace(/<[^>]*>/g, ''), "error");
+                            return;
+                        }
+                    }
+                } catch (err) {
+                    console.warn("create_maintenance_quotation API call failed:", err);
+                }
+            }
+
+            // 3. Try /api/method/pms.utils.create_maintenance_quotation
+            if (!quotationName) {
+                try {
+                    const pmsRes = await fetch(`${erpnextConfig.url}/api/method/pms.utils.create_maintenance_quotation`, {
+                        method: "POST",
+                        credentials: "include",
+                        headers: safeHeaders({ "Content-Type": "application/json" }),
+                        body: JSON.stringify({ task_name: taskDoc.name })
+                    });
+                    if (pmsRes.ok) {
+                        const pmsJson = await pmsRes.json();
+                        const msg = pmsJson?.message || pmsJson;
+                        if (msg && (msg.status === "created" || msg.status === "exists")) {
+                            quotationName = msg.quotation;
+                        }
+                    }
+                } catch (err) {
+                    console.warn("pms.utils.create_maintenance_quotation API call failed:", err);
+                }
+            }
+
+            // 4. Fallback: REST creation matching exact Python specification
+            if (!quotationName) {
+                let existingQ = null;
+                try {
+                    const checkFilters = JSON.stringify([["custom_task_reference", "=", taskDoc.name], ["docstatus", "!=", 2]]);
+                    const checkRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation?filters=${encodeURIComponent(checkFilters)}&fields=["name"]&limit=1`, {
+                        credentials: "include",
+                        headers: safeHeaders()
+                    });
+                    if (checkRes.ok) {
+                        const checkJson = await checkRes.json();
+                        if (checkJson?.data?.[0]?.name) {
+                            existingQ = checkJson.data[0].name;
+                        }
+                    }
+                } catch (e) {}
+
+                if (existingQ) {
+                    quotationName = existingQ;
+                } else {
+                    const validTill = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+                    const qItems = (itemRows.length > 0 ? itemRows : (taskDoc?.custom_items_used_for_maintenance || [])).map(r => ({
+                        item_code: r.item_code || r.item || r.name,
+                        qty: Number(r.qty) || 1,
+                        rate: Number(r.custom_price || r.rate || r.price) || 0
+                    }));
+
+                    const qPayload = {
+                        doctype: "Quotation",
+                        quotation_to: "Customer",
+                        party_name: taskDoc?.customer || taskDoc?.custom_customer || taskDoc?.custom_customer_name || taskDoc?.customer_name || "",
+                        company: taskDoc?.company || "CARPENTERS PROPERTIES PTE LIMITED",
+                        custom_service_quotation: 1,
+                        valid_till: validTill,
+                        custom_task_reference: taskDoc.name,
+                        ...(taskDoc?.custom_booking_id ? { booking_id: taskDoc.custom_booking_id } : {}),
+                        items: qItems
+                    };
+
+                    const createQRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+                        method: "POST",
+                        credentials: "include",
+                        headers: safeHeaders({ "Content-Type": "application/json" }),
+                        body: JSON.stringify(qPayload)
+                    });
+
+                    if (createQRes.ok) {
+                        const createQJson = await createQRes.json();
+                        quotationName = createQJson?.data?.name || createQJson?.name;
+                    } else {
+                        const errTxt = await createQRes.text();
+                        console.warn("Quotation REST creation warning:", errTxt);
+                        showToast?.("Failed to create Quotation. Please check items and customer.", "error");
+                        return;
+                    }
+                }
+
+                if (quotationName) {
+                    try {
+                        await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                            method: "PUT",
+                            credentials: "include",
+                            headers: safeHeaders({ "Content-Type": "application/json" }),
+                            body: JSON.stringify({ custom_quotation_id: quotationName })
+                        });
+                    } catch (putErr) {
+                        console.warn("Could not save custom_quotation_id to Task:", putErr);
+                    }
+                }
+            }
+
+            if (quotationName) {
+                setCurrentQuotationId(quotationName);
+                const updatedTask = {
+                    ...taskDoc,
+                    custom_quotation_id: quotationName
+                };
+                onSaved?.(updatedTask);
+
+                showToast?.(`Quotation ${quotationName} is ready.`, "success");
+
+                if (typeof frappe !== 'undefined' && typeof frappe.show_alert === 'function') {
+                    frappe.show_alert({
+                        message: `Quotation ${quotationName} is ready.`,
+                        indicator: "green"
+                    });
+                }
+
+                handleGoToQuotation(quotationName);
+            }
+        } catch (err) {
+            console.error("Create Quotation error:", err);
+            showToast?.(err?.message || "Failed to create Quotation.", "error");
+        } finally {
+            setCreatingQuotation(false);
+        }
+    };
 
     if (!taskDoc) return <div style={emptyMsgStyle}>Loading task…</div>;
 
@@ -2916,6 +3530,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                                 <th style={thStyle}>Item Code</th>
                                 <th style={thStyle}>Item Name</th>
                                 <th style={thStyle}>Qty</th>
+                                <th style={thStyle}>Price</th>
                                 {!isLocked && <th style={thStyle}></th>}
                             </tr></thead>
                             <tbody>
@@ -2929,6 +3544,32 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                                                     <button type="button" onClick={() => changeRowQty(i, -1)} style={stepperBtnStyle}><Minus size={11} /></button>
                                                     <span style={{ minWidth: 18, textAlign: "center" }}>{r?.qty}</span>
                                                     <button type="button" onClick={() => changeRowQty(i, 1)} style={stepperBtnStyle}><Plus size={11} /></button>
+                                                </div>
+                                            )}
+                                        </td>
+                                        <td style={tdStyle}>
+                                            {isLocked ? (
+                                                <span>{r?.custom_price !== undefined && r?.custom_price !== null && r?.custom_price !== "" ? `$${Number(r.custom_price).toLocaleString()}` : "—"}</span>
+                                            ) : (
+                                                <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                                                    <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>$</span>
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        step="any"
+                                                        value={r?.custom_price !== undefined && r?.custom_price !== null ? r.custom_price : ""}
+                                                        onChange={(e) => changeRowPrice(i, e.target.value)}
+                                                        placeholder="0.00"
+                                                        style={{
+                                                            width: 72,
+                                                            padding: "3px 6px",
+                                                            fontSize: 12,
+                                                            borderRadius: 4,
+                                                            border: "1px solid var(--border-color)",
+                                                            background: "var(--bg-primary)",
+                                                            color: "var(--text-primary)"
+                                                        }}
+                                                    />
                                                 </div>
                                             )}
                                         </td>
@@ -2950,19 +3591,47 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                 {!isLocked && (
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                         <div style={sectionLabelStyle}>Add Services</div>
-                        <div style={{ display: "flex", gap: 6 }}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                             <ItemSearchDropdown
                                 erpnextConfig={erpnextConfig}
                                 selectedLabel={pendingItem ? `${pendingItem.item_code}${pendingItem.item_name && pendingItem.item_name !== pendingItem.item_code ? ` — ${pendingItem.item_name}` : ""}` : null}
-                                onSelect={(item) => setPendingItem(item)}
+                                onSelect={(item) => {
+                                    setPendingItem(item);
+                                    const priceVal = item?.custom_price !== undefined && item?.custom_price !== null
+                                        ? item.custom_price
+                                        : (item?.standard_rate !== undefined && item?.standard_rate !== null
+                                            ? item.standard_rate
+                                            : (item?.rate !== undefined && item?.rate !== null ? item.rate : ""));
+                                    if (priceVal !== "") setPendingPrice(priceVal);
+                                }}
                             />
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                                 <button type="button" onClick={() => setPendingQty((q) => Math.max(1, q - 1))} style={stepperBtnStyle}><Minus size={12} /></button>
                                 <span style={{ minWidth: 22, textAlign: "center", fontSize: 12 }}>{pendingQty}</span>
                                 <button type="button" onClick={() => setPendingQty((q) => q + 1)} style={stepperBtnStyle}><Plus size={12} /></button>
                             </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                                <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>$</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="any"
+                                    placeholder="Price"
+                                    value={pendingPrice}
+                                    onChange={(e) => setPendingPrice(e.target.value)}
+                                    style={{
+                                        width: 65,
+                                        padding: "6px 8px",
+                                        fontSize: 12,
+                                        borderRadius: 6,
+                                        border: "1px solid var(--border-color)",
+                                        background: "var(--bg-primary)",
+                                        color: "var(--text-primary)"
+                                    }}
+                                />
+                            </div>
                             <button type="button" onClick={addItemToList} disabled={!pendingItem}
-                                style={{ padding: "0 12px", borderRadius: 6, border: "none", fontSize: 12, fontWeight: 600, cursor: pendingItem ? "pointer" : "not-allowed", background: pendingItem ? "var(--brand-color, #2563eb)" : "var(--bg-tertiary)", color: pendingItem ? "#fff" : "var(--text-muted)" }}
+                                style={{ padding: "0 14px", height: 32, borderRadius: 6, border: "none", fontSize: 12, fontWeight: 600, cursor: pendingItem ? "pointer" : "not-allowed", background: pendingItem ? "var(--brand-color, #2563eb)" : "var(--bg-tertiary)", color: pendingItem ? "#fff" : "var(--text-muted)", whiteSpace: "nowrap" }}
                             >Add</button>
                         </div>
                     </div>
@@ -3036,8 +3705,8 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                                         <th style={thStyle}>Phone</th>
                                     </tr></thead>
                                     <tbody>{vendorRows.map((r, i) => {
-                                        const vKey = r?.vendor_name || r?.vendor;
-                                        const m = vendorDir.find((v) => v?.id === vKey || v?.name === vKey);
+                                        const vKey = r?.vendor_name || r?.vendor || r?.supplier || r?.name;
+                                        const m = allVendorsList.find((v) => v?.id === vKey || v?.name === vKey);
                                         const details = assignedVendorDetails[vKey] || {};
                                         const primaryContact = details.contacts?.[0] || {};
                                         
@@ -3069,8 +3738,8 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
 
                             {/* Services Provided & Linked Contacts Details for each Vendor */}
                             {vendorRows.map((r, i) => {
-                                const vKey = r?.vendor_name || r?.vendor;
-                                const m = vendorDir.find((v) => v?.id === vKey || v?.name === vKey);
+                                const vKey = r?.vendor_name || r?.vendor || r?.supplier || r?.name;
+                                const m = allVendorsList.find((v) => v?.id === vKey || v?.name === vKey);
                                 const details = assignedVendorDetails[vKey] || {};
 
                                 const rawServices = details.custom_services_list || details.service_name || m?.custom_services_list || m?.service_name || [];
@@ -3135,13 +3804,14 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                     {!isLocked && (<>
                         <div style={sectionLabelStyle}>Reassign Vendors</div>
                         <AssignSearchDropdown
-                            items={filteredVendorDir} selected={selectedVendorIds} onToggle={toggleVendor}
+                            items={vendorsWithServices}
+                            selected={selectedVendorIds}
+                            onToggle={toggleVendor}
                             placeholder={vendorPlaceholder}
-                            disabled={itemRows.length === 0}
                             renderOption={(v) => (
                                 <div style={{ display: "flex", flexDirection: "column" }}>
                                     <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{v.name}</span>
-                                    {v.type && <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{v.type}</span>}
+                                    {v.type && <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{v.type}{v.group && v.group !== v.type ? ` · ${v.group}` : ''}</span>}
                                     {v.services_list && v.services_list.length > 0 && (
                                         <span style={{ fontSize: 9, color: "#d97706", fontWeight: 600, marginTop: 2 }}>
                                             Services: {v.services_list.map(sl => `${sl.service_group} (${sl.services})`).join(', ')}
@@ -3164,26 +3834,124 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                 </button>
             )}
 
-            {/* Submit / Quotation Actions */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* Bottom Actions: Save Document & Proced to Next */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
                 {isLocked ? (
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "var(--bg-tertiary)", borderRadius: 7, border: "1px solid var(--border-color)" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#10b981", fontSize: 12, fontWeight: 600 }}>
+                    <>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px 14px", background: "rgba(16,185,129,0.08)", borderRadius: 7, border: "1px solid rgba(16,185,129,0.25)", color: "#10b981", fontSize: 12, fontWeight: 600 }}>
                             <CheckCircle2 size={15} />
                             <span>Task Submitted & Locked</span>
                         </div>
-                        <button type="button" onClick={handleViewQuotation} style={{ ...secondaryActionBtnStyle, flex: "none", padding: "6px 14px" }}>
-                            <FileText size={13} /> View Quotation
-                        </button>
-                    </div>
+
+                        {currentQuotationId ? (
+                            <button
+                                type="button"
+                                onClick={() => handleGoToQuotation()}
+                                style={{
+                                    ...primaryActionBtnStyle,
+                                    width: "100%",
+                                    padding: "10px 0",
+                                    gap: 8,
+                                    background: "#0a6c66"
+                                }}
+                            >
+                                <FileText size={14} />
+                                <span>Go To Quotation</span>
+                                <ExternalLink size={14} />
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => setShowQuotationConfirm(true)}
+                                disabled={creatingQuotation}
+                                style={{
+                                    ...primaryActionBtnStyle,
+                                    width: "100%",
+                                    padding: "10px 0",
+                                    gap: 8,
+                                    background: "#0a6c66"
+                                }}
+                            >
+                                {creatingQuotation ? (
+                                    <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Creating Quotation…</>
+                                ) : (
+                                    <>
+                                        <Plus size={14} />
+                                        <span>Create Quotation</span>
+                                    </>
+                                )}
+                            </button>
+                        )}
+                    </>
                 ) : (
-                    <div style={{ display: "flex", gap: 8 }}>
-                        <button type="button" onClick={handleSubmitClick} disabled={submitting}
-                            style={primaryActionBtnStyle}
+                    <div style={{ display: "flex", gap: 8, width: "100%" }}>
+                        {currentQuotationId ? (
+                            <button
+                                type="button"
+                                onClick={() => handleGoToQuotation()}
+                                style={{
+                                    ...primaryActionBtnStyle,
+                                    flex: 1,
+                                    padding: "10px 0",
+                                    gap: 6,
+                                    background: "#0a6c66",
+                                    whiteSpace: "nowrap"
+                                }}
+                                title={`Quotation: ${currentQuotationId} (Click to open)`}
+                            >
+                                <FileText size={14} />
+                                <span>Go To Quotation</span>
+                                <ExternalLink size={13} />
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => setShowQuotationConfirm(true)}
+                                disabled={creatingQuotation || savingDocument || updatingStatus || submitting}
+                                style={{
+                                    ...primaryActionBtnStyle,
+                                    flex: 1,
+                                    padding: "10px 0",
+                                    gap: 6,
+                                    background: "#0a6c66",
+                                    whiteSpace: "nowrap"
+                                }}
+                            >
+                                {creatingQuotation ? (
+                                    <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Creating…</>
+                                ) : (
+                                    <>
+                                        <Plus size={14} />
+                                        <span>Create Quotation</span>
+                                    </>
+                                )}
+                            </button>
+                        )}
+
+                        <button
+                            type="button"
+                            onClick={handleProceedToNext}
+                            disabled={savingDocument || updatingStatus || submitting || creatingQuotation}
+                            style={{
+                                ...primaryActionBtnStyle,
+                                flex: 1,
+                                padding: "10px 0",
+                                gap: 6,
+                                background: isWorking ? "#10b981" : "var(--brand-color, #2563eb)",
+                                whiteSpace: "nowrap"
+                            }}
                         >
-                            {submitting ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Submitting…</> : <><CheckCircle2 size={13} /> Submit Task</>}
+                            {updatingStatus ? (
+                                <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Updating…</>
+                            ) : submitting ? (
+                                <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Submitting…</>
+                            ) : (
+                                <>
+                                    <span>Proced to Next</span>
+                                    <ArrowRight size={14} />
+                                </>
+                            )}
                         </button>
-                        <button type="button" onClick={handleViewQuotation} style={secondaryActionBtnStyle}><FileText size={13} /> View Quotation</button>
                     </div>
                 )}
             </div>
@@ -3199,6 +3967,23 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                             <div style={{ display: "flex", gap: 8 }}>
                                 <button type="button" onClick={() => setShowConfirm(false)} style={modalCancelBtnStyle}>Cancel</button>
                                 <button type="button" onClick={handleConfirmSubmit} style={modalConfirmBtnStyle}>Yes, Submit</button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {
+                showQuotationConfirm && (
+                    <div style={modalOverlayStyle} onClick={() => setShowQuotationConfirm(false)}>
+                        <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
+                            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8, color: "var(--text-primary)" }}>Create Quotation</div>
+                            <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 18 }}>
+                                Create a service Quotation for Task {taskDoc?.name}?
+                            </div>
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <button type="button" onClick={() => setShowQuotationConfirm(false)} style={modalCancelBtnStyle}>Cancel</button>
+                                <button type="button" onClick={executeCreateQuotation} style={{ ...modalConfirmBtnStyle, background: "#0a6c66" }}>Yes, Create</button>
                             </div>
                         </div>
                     </div>

@@ -2049,7 +2049,11 @@
 // }
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Home, Building2, Plus, Globe, Search, ArrowRight, ShieldCheck, X, Grid, Info, Edit, Upload, Maximize2 } from 'lucide-react';
+import {
+  Home, Building2, Plus, Globe, Search, ArrowRight, ShieldCheck, X, Grid, Info, Edit, Upload, Maximize2,
+  Calendar, User, Phone, Mail, FileText, CheckCircle2, Clock, DollarSign, Tag, ExternalLink,
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, Building, MapPin, Hash, Sparkles, RefreshCw
+} from 'lucide-react';
 import { getAuthHeaders, getUploadHeaders, getCsrfToken } from '../config';
 
 const fallbackImages = {
@@ -2307,7 +2311,7 @@ function buildGeoLocation(lat, lng) {
   });
 }
 
-export default function Properties({ properties, onAddProperty, onToggleListOnline, erpnextConfig, onScheduleMaintenance, tenants = [], owners = [] }) {
+export default function Properties({ properties, onAddProperty, onToggleListOnline, erpnextConfig, onScheduleMaintenance, tenants = [], owners = [], bookings = [] }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -2329,6 +2333,54 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [loadingUnits, setLoadingUnits] = useState(false);
   const [showUiFields, setShowUiFields] = useState([]);
+
+  // Unit Booking & Customer Details State
+  const [unitBookingsMap, setUnitBookingsMap] = useState({});
+  const [loadingUnitBookings, setLoadingUnitBookings] = useState(false);
+  const [selectedBookingIdx, setSelectedBookingIdx] = useState(0);
+
+  // Unit Booking Calendar State
+  const [showBookingCalendar, setShowBookingCalendar] = useState(false);
+  const [calYear, setCalYear] = useState(() => new Date().getFullYear());
+  const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
+  const [selectedCalDateStr, setSelectedCalDateStr] = useState(() => new Date().toISOString().split('T')[0]);
+
+  // Helper date formatting for booking dates
+  const formatBookingDate = (dateStr) => {
+    if (!dateStr) return '—';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    } catch (e) {
+      return dateStr;
+    }
+  };
+
+  // Helper duration calculation
+  const calculateDuration = (startDate, endDate, totalDays) => {
+    if (totalDays) return `${totalDays} Days`;
+    if (!startDate || !endDate) return null;
+    try {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+      const diffTime = end.getTime() - start.getTime();
+      if (diffTime < 0) return null;
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDays >= 360) {
+        const years = (diffDays / 365).toFixed(1);
+        return `${years.endsWith('.0') ? parseInt(years, 10) : years} Year${parseFloat(years) > 1 ? 's' : ''} (${diffDays} days)`;
+      }
+      if (diffDays >= 30) {
+        const months = Math.round(diffDays / 30);
+        return `${months} Month${months > 1 ? 's' : ''} (${diffDays} days)`;
+      }
+      return `${diffDays} Day${diffDays > 1 ? 's' : ''}`;
+    } catch (e) {
+      return null;
+    }
+  };
 
 
 
@@ -3890,6 +3942,360 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     fetchDetailsAndUnits();
   }, [selectedProp?.id, erpnextConfig]);
 
+  // Fetch Booking and Customer details directly from Booking DocType for the selected unit
+  const fetchUnitBookings = useCallback(async (targetUnitId, force = false) => {
+    if (!targetUnitId) return;
+    if (!force && unitBookingsMap[targetUnitId] !== undefined && unitBookingsMap[targetUnitId].length > 0) {
+      return;
+    }
+
+    setLoadingUnitBookings(true);
+    let foundBookings = [];
+
+    try {
+      const authHeaders = getAuthHeaders ? getAuthHeaders({ 'Content-Type': 'application/json' }) : { 'Content-Type': 'application/json' };
+      const baseUrl = erpnextConfig?.url || '';
+
+      const unitSpec = loadedUnitDetails[targetUnitId] || {};
+      const matchedUnitObj = propertyUnits.find(u => u.name === targetUnitId) || {};
+      const targetAliases = new Set([
+        String(targetUnitId).trim().toLowerCase(),
+        String(matchedUnitObj.unit_name || '').trim().toLowerCase(),
+        String(unitSpec.item_name || '').trim().toLowerCase(),
+        String(unitSpec.item_code || '').trim().toLowerCase()
+      ].filter(Boolean));
+
+      if (baseUrl) {
+        // 1. Fetch candidate bookings from Booking DocType
+        let bookingList = [];
+        try {
+          const bookingFields = JSON.stringify([
+            "name", "property", "customer", "customer_name", "booking_date",
+            "starting_date", "ending_date", "total_days", "booking_amount",
+            "workflow_state", "status", "docstatus", "creation"
+          ]);
+          const bListRes = await fetch(
+            `${baseUrl}/api/resource/Booking?fields=${encodeURIComponent(bookingFields)}&limit_page_length=500&order_by=creation desc`,
+            {
+              credentials: 'include',
+              headers: authHeaders
+            }
+          );
+          if (bListRes.ok) {
+            const bJson = await bListRes.json();
+            bookingList = bJson.data || [];
+          }
+        } catch (e) {
+          console.warn('Booking list with specific fields failed, attempting fallback query:', e);
+        }
+
+        // Fallback list query if specific fields query failed or returned empty
+        if (bookingList.length === 0) {
+          try {
+            const bListRes2 = await fetch(
+              `${baseUrl}/api/resource/Booking?limit_page_length=500&order_by=creation desc`,
+              {
+                credentials: 'include',
+                headers: authHeaders
+              }
+            );
+            if (bListRes2.ok) {
+              const bJson2 = await bListRes2.json();
+              bookingList = bJson2.data || [];
+            }
+          } catch (e2) {}
+        }
+
+        // Combine with bookings from props passed from App.jsx
+        const combinedCandidateBookings = [...bookingList];
+        if (Array.isArray(bookings)) {
+          bookings.forEach(pb => {
+            if (!combinedCandidateBookings.some(cb => cb.name === pb.name)) {
+              combinedCandidateBookings.push(pb);
+            }
+          });
+        }
+
+        // Direct property/unit matches on Booking DocType parent fields
+        const directMatches = combinedCandidateBookings.filter(b => {
+          const p = String(b.property || '').trim().toLowerCase();
+          const pu = String(b.property_unit || b.unit || b.unit_code || '').trim().toLowerCase();
+          const customBookingId = unitSpec.custom_booking_id || unitSpec.custom_booking;
+          if (customBookingId && b.name === customBookingId) return true;
+          return targetAliases.has(p) || targetAliases.has(pu);
+        });
+
+        // Also prioritize bookings belonging to this property group/building
+        const propId = String(selectedProp?.id || selectedProp?.name || '').trim().toLowerCase();
+        const propBookings = combinedCandidateBookings.filter(b => {
+          const p = String(b.property || '').trim().toLowerCase();
+          return propId && (p === propId || p.includes(propId));
+        });
+
+        // Assemble candidate bookings to inspect for child items (booking_item)
+        const candidatesToInspectMap = new Map();
+        directMatches.forEach(b => candidatesToInspectMap.set(b.name, b));
+        propBookings.forEach(b => candidatesToInspectMap.set(b.name, b));
+        combinedCandidateBookings.slice(0, 40).forEach(b => candidatesToInspectMap.set(b.name, b));
+
+        const candidatesToInspect = Array.from(candidatesToInspectMap.values());
+
+        // Inspect candidate bookings in parallel by fetching full document to read child table booking_item
+        const inspectedBookings = await Promise.allSettled(
+          candidatesToInspect.map(async (b) => {
+            if (Array.isArray(b.booking_item) && b.booking_item.length > 0) {
+              return b;
+            }
+            try {
+              const docRes = await fetch(`${baseUrl}/api/resource/Booking/${encodeURIComponent(b.name)}`, {
+                credentials: 'include',
+                headers: authHeaders
+              });
+              if (docRes.ok) {
+                const docJson = await docRes.json();
+                return docJson.data || docJson;
+              }
+            } catch (err) {}
+            return b;
+          })
+        );
+
+        // Filter bookings where child table booking_item or parent matches target unit
+        inspectedBookings.forEach(res => {
+          if (res.status !== 'fulfilled' || !res.value) return;
+          const bDoc = res.value;
+          const items = Array.isArray(bDoc.booking_item)
+            ? bDoc.booking_item
+            : (Array.isArray(bDoc.items) ? bDoc.items : []);
+
+          let matchesUnit = false;
+          let matchedItem = null;
+
+          // Check child table items
+          for (const item of items) {
+            const itemCode = String(item.item_code || item.name || '').trim().toLowerCase();
+            const itemName = String(item.item_name || '').trim().toLowerCase();
+            if (targetAliases.has(itemCode) || (itemName && targetAliases.has(itemName))) {
+              matchesUnit = true;
+              matchedItem = item;
+              break;
+            }
+          }
+
+          // Check parent fields
+          if (!matchesUnit) {
+            const p = String(bDoc.property || '').trim().toLowerCase();
+            const pu = String(bDoc.property_unit || bDoc.unit || bDoc.unit_code || '').trim().toLowerCase();
+            const customBookingId = unitSpec.custom_booking_id || unitSpec.custom_booking;
+            if (customBookingId && bDoc.name === customBookingId) {
+              matchesUnit = true;
+            } else if (targetAliases.has(p) || targetAliases.has(pu)) {
+              matchesUnit = true;
+            }
+          }
+
+          if (matchesUnit) {
+            if (!foundBookings.some(existing => existing.name === bDoc.name)) {
+              foundBookings.push({
+                ...bDoc,
+                matched_item_code: matchedItem?.item_code || targetUnitId,
+                matched_item_name: matchedItem?.item_name || matchedUnitObj.unit_name || targetUnitId,
+                matched_item_rate: matchedItem?.rate,
+                matched_item_amount: matchedItem?.amount,
+                booking_amount: matchedItem?.amount || matchedItem?.rate || bDoc.booking_amount || bDoc.per_month_billing_amount || 0
+              });
+            }
+          }
+        });
+
+        // 2. Query Booking Item child table directly if none found yet
+        if (foundBookings.length === 0) {
+          try {
+            const bItemFilter = encodeURIComponent(JSON.stringify([["item_code", "=", targetUnitId]]));
+            const bItemRes = await fetch(
+              `${baseUrl}/api/resource/Booking%20Item?filters=${bItemFilter}&fields=["name","parent","item_code","rate","amount"]&limit_page_length=20`,
+              { credentials: 'include', headers: authHeaders }
+            );
+            if (bItemRes.ok) {
+              const bItemJson = await bItemRes.json();
+              const bItems = bItemJson.data || [];
+              const parentIds = [...new Set(bItems.map(it => it.parent).filter(Boolean))];
+              for (const pId of parentIds) {
+                if (!foundBookings.some(x => x.name === pId)) {
+                  try {
+                    const singleB = await fetch(`${baseUrl}/api/resource/Booking/${encodeURIComponent(pId)}`, {
+                      credentials: 'include',
+                      headers: authHeaders
+                    });
+                    if (singleB.ok) {
+                      const sJson = await singleB.json();
+                      const sDoc = sJson.data || sJson;
+                      foundBookings.push(sDoc);
+                    }
+                  } catch (e) {}
+                }
+              }
+            }
+          } catch (e) {}
+        }
+
+        // 3. Check Tenant Onboarding for this unit if still empty
+        if (foundBookings.length === 0) {
+          try {
+            const onbFilter = encodeURIComponent(JSON.stringify([["item_code", "=", targetUnitId]]));
+            const onbRes = await fetch(
+              `${baseUrl}/api/resource/Onboarding%20Unit?filters=${onbFilter}&fields=["name","parent","item_code"]&limit_page_length=10`,
+              { credentials: 'include', headers: authHeaders }
+            );
+            if (onbRes.ok) {
+              const onbJson = await onbRes.json();
+              const onbList = onbJson.data || [];
+              const onbParents = [...new Set(onbList.map(item => item.parent).filter(Boolean))];
+              for (const pName of onbParents) {
+                try {
+                  const res = await fetch(`${baseUrl}/api/resource/Tenant%20Onboarding/${encodeURIComponent(pName)}`, {
+                    credentials: 'include',
+                    headers: authHeaders
+                  });
+                  if (res.ok) {
+                    const pJson = await res.json();
+                    const d = pJson.data || pJson;
+                    foundBookings.push({
+                      name: d.name,
+                      customer: d.company_name || d.contact_name || 'Tenant',
+                      customer_name: d.company_name || d.contact_name || 'Tenant',
+                      customer_email: d.email_id || '',
+                      customer_phone_no: d.contact_number || '',
+                      booking_date: d.creation ? d.creation.split(' ')[0] : '',
+                      starting_date: d.lease_commencement_date || '',
+                      ending_date: '',
+                      lease_period: d.lease_period || '',
+                      booking_amount: d.rental_charges || d.security_deposit_booking_fee || 0,
+                      workflow_state: d.workflow_state || 'Onboarding',
+                      isOnboarding: true
+                    });
+                  }
+                } catch (e) {}
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // 4. Fallback from unit details specs
+      const directCust = unitSpec.custom_customer || unitSpec.custom_tenant || unitSpec.customer || unitSpec.tenant;
+      const directCustName = unitSpec.custom_customer_name || unitSpec.custom_tenant_name || directCust;
+      const directBookingId = unitSpec.custom_booking_id || unitSpec.custom_booking;
+      const directStartDate = unitSpec.custom_start_date || unitSpec.custom_lease_start_date;
+      const directEndDate = unitSpec.custom_end_date || unitSpec.custom_lease_end_date;
+
+      if ((directCustName || directBookingId || directStartDate) && !foundBookings.some(b => b.name === directBookingId)) {
+        foundBookings.push({
+          name: directBookingId || `BOOK-${targetUnitId}`,
+          customer: directCust || directCustName,
+          customer_name: directCustName || 'Tenant',
+          customer_email: unitSpec.custom_customer_email || unitSpec.custom_tenant_email || '',
+          customer_phone_no: unitSpec.custom_customer_phone || unitSpec.custom_tenant_phone || '',
+          booking_date: unitSpec.custom_booking_date || '',
+          starting_date: directStartDate || '',
+          ending_date: directEndDate || '',
+          booking_amount: unitSpec.standard_rate || unitSpec.rent || unitSpec.valuation_rate || 0,
+          workflow_state: unitSpec.custom_property_status || unitSpec.status || 'Active Lease'
+        });
+      }
+
+      // 5. Enrich and normalize dates on all bookings
+      const enriched = foundBookings.map(b => {
+        const cId = b.customer || b.customer_id;
+        const cName = b.customer_name || cId;
+        const matchedTenant = Array.isArray(tenants) ? tenants.find(t =>
+          (t.name && (t.name === cId || t.name === cName)) ||
+          (t.customer_name && (t.customer_name === cId || t.customer_name === cName)) ||
+          (t.id && (t.id === cId || t.id === cName))
+        ) : null;
+
+        let bDate = b.booking_date || (b.creation ? b.creation.split(' ')[0] : '');
+        let sDate = b.starting_date || b.start_date || b.lease_commencement_date || '';
+        let eDate = b.ending_date || b.end_date || b.lease_end_date || '';
+
+        // If eDate is missing but total_days is present, compute eDate
+        if (!eDate && sDate && b.total_days) {
+          const sObj = new Date(sDate);
+          if (!isNaN(sObj.getTime())) {
+            const eObj = new Date(sObj.getTime() + (Number(b.total_days) - 1) * 24 * 60 * 60 * 1000);
+            eDate = eObj.toISOString().split('T')[0];
+          }
+        }
+
+        // If sDate is present and eDate is still missing, calculate 1-year duration by default
+        if (!eDate && sDate) {
+          const sObj = new Date(sDate);
+          if (!isNaN(sObj.getTime())) {
+            const eObj = new Date(sObj.getFullYear() + 1, sObj.getMonth(), sObj.getDate() - 1);
+            eDate = eObj.toISOString().split('T')[0];
+          }
+        }
+
+        return {
+          ...b,
+          booking_date: bDate,
+          starting_date: sDate,
+          ending_date: eDate,
+          customer_id: cId || matchedTenant?.name || matchedTenant?.id || '—',
+          customer_name: b.customer_name || matchedTenant?.customer_name || matchedTenant?.name || cId || 'N/A',
+          customer_email: b.customer_email || b.contact_email || matchedTenant?.email_id || matchedTenant?.email || matchedTenant?.owner || '',
+          customer_phone: b.customer_phone_no || b.contact_mobile || b.contact_number || b.phone || matchedTenant?.mobile_no || matchedTenant?.phone_no || '',
+          customer_address: b.address || matchedTenant?.address || matchedTenant?.territory || '',
+          customer_group: b.customer_group || matchedTenant?.customer_group || matchedTenant?.customer_type || 'Commercial Tenant',
+          booking_amount: b.booking_amount || b.per_month_billing_amount || b.amount_to_pay || 0
+        };
+      });
+
+      // Sort by starting_date desc or booking_date desc
+      enriched.sort((a, b) => {
+        const tA = new Date(a.starting_date || a.booking_date || a.creation || 0).getTime();
+        const tB = new Date(b.starting_date || b.booking_date || b.creation || 0).getTime();
+        return tB - tA;
+      });
+
+      setUnitBookingsMap(prev => ({
+        ...prev,
+        [targetUnitId]: enriched
+      }));
+      setSelectedBookingIdx(0);
+
+      // If we found a booking date or start date, auto-sync calendar view to that month
+      if (enriched.length > 0) {
+        const primaryBooking = enriched[0];
+        const focusDate = primaryBooking.booking_date || primaryBooking.starting_date;
+        if (focusDate) {
+          const fD = new Date(focusDate);
+          if (!isNaN(fD.getTime())) {
+            setCalYear(fD.getFullYear());
+            setCalMonth(fD.getMonth());
+            setSelectedCalDateStr(focusDate);
+          }
+        }
+      }
+
+    } catch (err) {
+      console.warn('Failed to resolve unit bookings:', err);
+      setUnitBookingsMap(prev => ({
+        ...prev,
+        [targetUnitId]: prev[targetUnitId] || []
+      }));
+    } finally {
+      setLoadingUnitBookings(false);
+    }
+  }, [erpnextConfig?.url, bookings, tenants, loadedUnitDetails, propertyUnits, selectedProp]);
+
+  // Reactive trigger to fetch bookings when selectedUnitId changes
+  useEffect(() => {
+    if (selectedUnitId) {
+      fetchUnitBookings(selectedUnitId, false);
+    }
+  }, [selectedUnitId, fetchUnitBookings]);
+
   // Click handler to expand unit and fetch its individual detail via get_unit API
   const handleUnitToggle = async (unitId) => {
     const isExpanded = expandedUnit === unitId;
@@ -4063,7 +4469,12 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       'standard_rate', 'standard rate',
       'unit_owner', 'unit ownership', 'unit_ownership', 'owner', 'ownership',
       'custom_property_owner', 'custom_property_owned_by', 'custom_property_owner_name',
-      'custom_7average_carpet_area_of_units', '7average_carpet_area_of_units', '7average carpet area of units'
+      'custom_7average_carpet_area_of_units', '7average_carpet_area_of_units', '7average carpet area of units',
+      'custom_customer', 'custom_tenant', 'custom_customer_name', 'custom_tenant_name',
+      'custom_booking_id', 'custom_booking', 'custom_booking_date', 'custom_start_date',
+      'custom_end_date', 'custom_lease_start_date', 'custom_lease_end_date',
+      'custom_customer_email', 'custom_customer_phone', 'custom_tenant_email', 'custom_tenant_phone',
+      'customer', 'tenant', 'customer_name', 'tenant_name', 'booking_id', 'booking_date'
     ];
 
     Object.keys(details).forEach(key => {
@@ -4448,6 +4859,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                 return <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, padding: '16px 0' }}>Loading specs...</div>;
               }
 
+              const unitBookings = unitBookingsMap[selectedUnitId] || [];
+              const activeBooking = unitBookings.length > 0 ? (unitBookings[selectedBookingIdx] || unitBookings[0]) : null;
+
               const isOccupied = details.status === 'occupied' || details.custom_property_status === 'Occupied';
 
               return (
@@ -4482,7 +4896,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                         <span className="badge badge-warning" style={{ fontSize: 9, whiteSpace: 'nowrap' }}>★ Recommended</span>
                       )}
                     </div>
-                    <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                       <span className={`badge ${isOccupied ? 'badge-danger' : 'badge-success'}`}>
                         {(() => {
                           const s = details.custom_property_status || details.status || 'Available';
@@ -4492,6 +4906,58 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                       {details.custom_property_owner && (
                         <span className="badge badge-secondary">{details.custom_property_owner}</span>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          fetchUnitBookings(selectedUnitId, true);
+                          const bookingsForUnit = unitBookingsMap[selectedUnitId] || [];
+                          const primaryB = bookingsForUnit[0] || activeBooking;
+                          const targetDate = primaryB?.booking_date || primaryB?.starting_date;
+                          if (targetDate) {
+                            const d = new Date(targetDate);
+                            if (!isNaN(d.getTime())) {
+                              setCalYear(d.getFullYear());
+                              setCalMonth(d.getMonth());
+                              setSelectedCalDateStr(targetDate);
+                            }
+                          } else {
+                            const today = new Date();
+                            setCalYear(today.getFullYear());
+                            setCalMonth(today.getMonth());
+                            setSelectedCalDateStr(today.toISOString().split('T')[0]);
+                          }
+                          setShowBookingCalendar(true);
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '2px 8px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          borderRadius: '4px',
+                          border: '1px solid var(--border-color, #cbd5e1)',
+                          background: 'var(--bg-secondary, #f8fafc)',
+                          color: 'var(--text-primary, #0f172a)',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          lineHeight: '1.4'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--brand-color, #059669)';
+                          e.currentTarget.style.color = 'var(--brand-color, #059669)';
+                          e.currentTarget.style.background = 'var(--brand-color-alpha, rgba(5, 150, 105, 0.08))';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--border-color, #cbd5e1)';
+                          e.currentTarget.style.color = 'var(--text-primary, #0f172a)';
+                          e.currentTarget.style.background = 'var(--bg-secondary, #f8fafc)';
+                        }}
+                        title="Show Booking Calendar"
+                      >
+                        <Calendar size={11} style={{ color: 'var(--brand-color, #059669)' }} />
+                        <span>Booking Date</span>
+                      </button>
                     </div>
                   </div>
 
@@ -4579,6 +5045,289 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                       Plan: <strong style={{ color: 'var(--text-primary)' }}>{details.custom_subscription_plan}</strong>
                     </div>
                   )}
+
+                  {/* BOOKING & CUSTOMER DETAILS SECTION */}
+                  <div style={{
+                    borderTop: '1px solid var(--border-color, #e2e8f0)',
+                    paddingTop: 12,
+                    marginTop: 4,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10
+                  }}>
+                    {/* Section Header */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: 'var(--text-secondary, #475569)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.5px'
+                      }}>
+                        <Calendar size={13} style={{ color: 'var(--brand-color, #059669)' }} />
+                        <span>Booking & Customer Details</span>
+                      </div>
+
+                      {loadingUnitBookings ? (
+                        <span style={{ fontSize: 10, color: 'var(--text-muted, #94a3b8)' }}>Loading...</span>
+                      ) : unitBookings.length > 0 ? (
+                        <span className="badge badge-success" style={{ fontSize: 9, padding: '2px 8px' }}>
+                          {activeBooking?.workflow_state || activeBooking?.status || 'Active Lease'}
+                        </span>
+                      ) : (
+                        <span className="badge badge-secondary" style={{ fontSize: 9, padding: '2px 8px' }}>
+                          Vacant / Available
+                        </span>
+                      )}
+                    </div>
+
+                    {loadingUnitBookings ? (
+                      <div style={{
+                        padding: '14px 12px',
+                        background: 'var(--bg-secondary, #f8fafc)',
+                        borderRadius: 8,
+                        border: '1px dashed var(--border-color, #cbd5e1)',
+                        textAlign: 'center',
+                        color: 'var(--text-muted, #64748b)',
+                        fontSize: 11,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8
+                      }}>
+                        <Clock size={14} className="spin" />
+                        <span>Checking booking records for this unit...</span>
+                      </div>
+                    ) : unitBookings.length > 0 && activeBooking ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {/* Multiple Bookings Switcher (if > 1) */}
+                        {unitBookings.length > 1 && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            background: 'var(--bg-tertiary, #f1f5f9)',
+                            padding: '4px 8px',
+                            borderRadius: 6,
+                            fontSize: 10
+                          }}>
+                            <span style={{ color: 'var(--text-muted, #64748b)', fontWeight: 500 }}>
+                              {unitBookings.length} Bookings on record:
+                            </span>
+                            <select
+                              value={selectedBookingIdx}
+                              onChange={(e) => setSelectedBookingIdx(Number(e.target.value))}
+                              style={{
+                                padding: '2px 6px',
+                                fontSize: 10,
+                                borderRadius: 4,
+                                border: '1px solid var(--border-color, #cbd5e1)',
+                                background: 'var(--bg-primary, #ffffff)',
+                                color: 'var(--text-primary, #0f172a)',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              {unitBookings.map((b, idx) => (
+                                <option key={b.name || idx} value={idx}>
+                                  {b.name || `Booking #${idx + 1}`} ({b.customer_name || 'Tenant'}) - {b.starting_date || b.booking_date || 'Date N/A'}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        {/* Main Booking Dates Card */}
+                        <div style={{
+                          background: 'var(--bg-secondary, #f8fafc)',
+                          borderRadius: 8,
+                          border: '1px solid var(--border-color, #e2e8f0)',
+                          padding: '10px 12px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 8
+                        }}>
+                          {/* Booking Reference & Rent */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                              <FileText size={12} style={{ color: 'var(--brand-color, #059669)' }} />
+                              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
+                                {activeBooking.name || 'Booking Record'}
+                              </span>
+                            </div>
+                            {activeBooking.booking_amount > 0 && (
+                              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--brand-color, #059669)' }}>
+                                ${Number(activeBooking.booking_amount).toLocaleString()}/mo
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Date Grid */}
+                          <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 1fr',
+                            gap: 6,
+                            background: 'var(--bg-primary, #ffffff)',
+                            borderRadius: 6,
+                            padding: '8px 10px',
+                            border: '1px solid var(--border-color, #e2e8f0)'
+                          }}>
+                            <div>
+                              <div style={{ fontSize: 9, color: 'var(--text-muted, #64748b)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 3 }}>
+                                <Calendar size={10} /> Booking Date
+                              </div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary, #0f172a)', marginTop: 2 }}>
+                                {formatBookingDate(activeBooking.booking_date)}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div style={{ fontSize: 9, color: 'var(--text-muted, #64748b)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 3 }}>
+                                <Clock size={10} /> Term Duration
+                              </div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary, #0f172a)', marginTop: 2 }}>
+                                {calculateDuration(activeBooking.starting_date, activeBooking.ending_date, activeBooking.total_days) || activeBooking.lease_period || '—'}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div style={{ fontSize: 9, color: 'var(--text-muted, #64748b)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 3 }}>
+                                <Clock size={10} /> Starting Date
+                              </div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: '#059669', marginTop: 2 }}>
+                                {formatBookingDate(activeBooking.starting_date)}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div style={{ fontSize: 9, color: 'var(--text-muted, #64748b)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 3 }}>
+                                <Clock size={10} /> Ending Date
+                              </div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: activeBooking.ending_date ? 'var(--text-primary, #0f172a)' : 'var(--text-muted, #64748b)', marginTop: 2 }}>
+                                {formatBookingDate(activeBooking.ending_date)}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Deposit / Advance if available */}
+                          {(activeBooking.advance_amount > 0 || activeBooking.deposit_amount > 0 || activeBooking.security_deposit_booking_fee > 0) && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-secondary, #475569)', padding: '0 2px' }}>
+                              <span>Security Deposit / Advance:</span>
+                              <strong style={{ color: 'var(--text-primary, #0f172a)' }}>
+                                ${Number(activeBooking.advance_amount || activeBooking.deposit_amount || activeBooking.security_deposit_booking_fee).toLocaleString()}
+                              </strong>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Customer Information Card */}
+                        <div style={{
+                          background: 'var(--bg-secondary, #f8fafc)',
+                          borderRadius: 8,
+                          border: '1px solid var(--border-color, #e2e8f0)',
+                          padding: '10px 12px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                              <User size={12} style={{ color: 'var(--brand-color, #059669)' }} />
+                              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary, #475569)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                                Customer Information
+                              </span>
+                            </div>
+                            {activeBooking.customer_group && (
+                              <span style={{ fontSize: 9, color: 'var(--text-muted, #64748b)', background: 'var(--bg-tertiary, #e2e8f0)', padding: '1px 6px', borderRadius: 4 }}>
+                                {activeBooking.customer_group}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Customer Name & ID */}
+                          <div style={{ background: 'var(--bg-primary, #ffffff)', borderRadius: 6, padding: '8px 10px', border: '1px solid var(--border-color, #e2e8f0)', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
+                                {activeBooking.customer_name || 'Customer Name N/A'}
+                              </span>
+                              {activeBooking.customer_id && activeBooking.customer_id !== activeBooking.customer_name && (
+                                <span style={{ fontSize: 10, color: 'var(--text-muted, #64748b)' }}>
+                                  ID: {activeBooking.customer_id}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Contact Phone & Email */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 2, fontSize: 11 }}>
+                              {activeBooking.customer_phone ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <Phone size={11} style={{ color: 'var(--brand-color, #059669)', flexShrink: 0 }} />
+                                  <a
+                                    href={`tel:${activeBooking.customer_phone}`}
+                                    style={{ color: 'var(--brand-color, #059669)', textDecoration: 'none', fontWeight: 500 }}
+                                    title="Call Customer"
+                                  >
+                                    {activeBooking.customer_phone}
+                                  </a>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted, #94a3b8)' }}>
+                                  <Phone size={11} style={{ flexShrink: 0 }} />
+                                  <span>Phone: Not specified</span>
+                                </div>
+                              )}
+
+                              {activeBooking.customer_email ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <Mail size={11} style={{ color: 'var(--brand-color, #059669)', flexShrink: 0 }} />
+                                  <a
+                                    href={`mailto:${activeBooking.customer_email}`}
+                                    style={{ color: 'var(--brand-color, #059669)', textDecoration: 'none', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                    title="Email Customer"
+                                  >
+                                    {activeBooking.customer_email}
+                                  </a>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted, #94a3b8)' }}>
+                                  <Mail size={11} style={{ flexShrink: 0 }} />
+                                  <span>Email: Not specified</span>
+                                </div>
+                              )}
+
+                              {activeBooking.customer_address && (
+                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, color: 'var(--text-secondary, #475569)', marginTop: 2 }}>
+                                  <MapPin size={11} style={{ color: 'var(--text-muted, #64748b)', marginTop: 2, flexShrink: 0 }} />
+                                  <span>{activeBooking.customer_address}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Vacant / Available Card */
+                      <div style={{
+                        background: 'var(--bg-secondary, #f8fafc)',
+                        borderRadius: 8,
+                        border: '1px dashed var(--border-color, #cbd5e1)',
+                        padding: '12px 14px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#059669', fontSize: 11, fontWeight: 600 }}>
+                          <CheckCircle2 size={14} />
+                          <span>Vacant & Available for Lease</span>
+                        </div>
+                        <p style={{ margin: 0, fontSize: 10, color: 'var(--text-muted, #64748b)', lineHeight: 1.4 }}>
+                          No active booking or tenant currently assigned to this unit. Ready for quotation or tenant onboarding.
+                        </p>
+                      </div>
+                    )}
+                  </div>
 
                   {/* Fallback to any remaining generic fields */}
                   {typeof getCleanUnitFields === 'function' && (
@@ -5217,6 +5966,1042 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           </div>
         </div>
       )}
+
+      {/* BOOKING CALENDAR MODAL */}
+      {showBookingCalendar && selectedUnitId && (() => {
+        const details = loadedUnitDetails[selectedUnitId] || {};
+        const matchedUnit = propertyUnits.find(u => u.name === selectedUnitId) || {};
+        const unitBookings = unitBookingsMap[selectedUnitId] || [];
+        const isOccupied = details.status === 'occupied' || details.custom_property_status === 'Occupied' || unitBookings.length > 0;
+
+        const monthNames = [
+          'January', 'February', 'March', 'April', 'May', 'June',
+          'July', 'August', 'September', 'October', 'November', 'December'
+        ];
+
+        const firstDay = new Date(calYear, calMonth, 1).getDay();
+        const totalDays = new Date(calYear, calMonth + 1, 0).getDate();
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        // Calculate booked vs not booked days in the currently viewed month
+        // NOTE: Signed date (b.booking_date) is only the contract signing date, NOT an occupancy/booked day.
+        // Days are only counted as booked if they fall within the active lease duration (starting_date to ending_date).
+        let bookedDaysInMonth = 0;
+        let availableDaysInMonth = 0;
+        for (let d = 1; d <= totalDays; d++) {
+          const dStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+          const isDateBooked = unitBookings.some(b => {
+            if (b.starting_date && b.ending_date) {
+              return dStr >= b.starting_date && dStr <= b.ending_date;
+            }
+            if (b.starting_date && !b.ending_date) {
+              return dStr >= b.starting_date;
+            }
+            return false;
+          });
+          if (isDateBooked) bookedDaysInMonth++;
+          else availableDaysInMonth++;
+        }
+
+        // Bookings active on selectedCalDateStr
+        const selectedDateBookings = unitBookings.filter(b => {
+          if (b.booking_date === selectedCalDateStr) return true;
+          if (b.starting_date && b.ending_date) {
+            return selectedCalDateStr >= b.starting_date && selectedCalDateStr <= b.ending_date;
+          }
+          if (b.starting_date && !b.ending_date) {
+            return selectedCalDateStr >= b.starting_date;
+          }
+          return false;
+        });
+
+        const isExactBookingDateOnSelected = unitBookings.some(b => b.booking_date === selectedCalDateStr);
+
+        return (
+          <div
+            className="modal-overlay"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setShowBookingCalendar(false);
+            }}
+            style={{ zIndex: 100000, backdropFilter: 'blur(4px)', background: 'rgba(15, 23, 42, 0.65)' }}
+          >
+            <div
+              className="modal-content"
+              style={{
+                position: 'relative',
+                maxWidth: 680,
+                width: '94%',
+                maxHeight: '94vh',
+                overflowY: 'auto',
+                padding: '16px 20px',
+                borderRadius: 14,
+                background: '#ffffff',
+                boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(226, 232, 240, 0.8)',
+                color: '#0f172a'
+              }}
+            >
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={() => setShowBookingCalendar(false)}
+                style={{
+                  position: 'absolute',
+                  top: 12,
+                  right: 12,
+                  width: 26,
+                  height: 26,
+                  borderRadius: '50%',
+                  background: '#f1f5f9',
+                  border: 'none',
+                  color: '#64748b',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 14,
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#e2e8f0';
+                  e.currentTarget.style.color = '#0f172a';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#f1f5f9';
+                  e.currentTarget.style.color = '#64748b';
+                }}
+              >
+                ✕
+              </button>
+
+              {/* Modal Header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 10, borderBottom: '1px solid #f1f5f9', marginBottom: 10 }}>
+                <div style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 8,
+                  background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+                  border: '1px solid #a7f3d0',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#047857',
+                  flexShrink: 0,
+                  boxShadow: '0 2px 6px rgba(5, 150, 105, 0.08)'
+                }}>
+                  <Calendar size={18} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.3px' }}>
+                      Unit Booking Calendar
+                    </h3>
+                    <span style={{
+                      fontSize: '10.5px',
+                      fontWeight: 700,
+                      color: '#047857',
+                      background: '#ecfdf5',
+                      border: '1px solid #a7f3d0',
+                      padding: '2px 7px',
+                      borderRadius: 5,
+                      letterSpacing: '0.2px'
+                    }}>
+                      {matchedUnit?.unit_name || details.item_name || selectedUnitId}
+                    </span>
+                    <span style={{
+                      fontSize: '9.5px',
+                      fontWeight: 700,
+                      padding: '2px 7px',
+                      borderRadius: 5,
+                      background: isOccupied ? '#fef2f2' : '#f0fdf4',
+                      color: isOccupied ? '#b91c1c' : '#15803d',
+                      border: isOccupied ? '1px solid #fecaca' : '1px solid #bbf7d0',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4
+                    }}>
+                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: isOccupied ? '#ef4444' : '#22c55e' }} />
+                      {isOccupied ? 'Occupied / Active Lease' : 'Vacant & Available'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => fetchUnitBookings(selectedUnitId, true)}
+                      disabled={loadingUnitBookings}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '2px 7px',
+                        fontSize: 9.5,
+                        fontWeight: 600,
+                        borderRadius: 5,
+                        border: '1px solid #e2e8f0',
+                        background: '#f8fafc',
+                        color: '#334155',
+                        cursor: loadingUnitBookings ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!loadingUnitBookings) {
+                          e.currentTarget.style.borderColor = '#059669';
+                          e.currentTarget.style.color = '#059669';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!loadingUnitBookings) {
+                          e.currentTarget.style.borderColor = '#e2e8f0';
+                          e.currentTarget.style.color = '#334155';
+                        }
+                      }}
+                      title="Sync latest live records from ERPNext Booking DocType"
+                    >
+                      <RefreshCw size={10} style={{ animation: loadingUnitBookings ? 'spin 1s linear infinite' : 'none', color: '#059669' }} />
+                      <span>{loadingUnitBookings ? 'Syncing...' : 'Sync DocType'}</span>
+                    </button>
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: 3, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <span>Unit: <strong style={{ color: '#1e293b' }}>{selectedUnitId}</strong></span>
+                    {details.custom_floor && <span>Floor: <strong style={{ color: '#1e293b' }}>{details.custom_floor}</strong></span>}
+                    {(details.custom_7average_carpet_area_of_units || details.area) && (
+                      <span>Area: <strong style={{ color: '#1e293b' }}>{details.custom_7average_carpet_area_of_units || details.area} Sq Ft</strong></span>
+                    )}
+                    {(details.standard_rate || details.valuation_rate || details.rent) && (
+                      <span>Rent: <strong style={{ color: '#047857' }}>${Number(details.standard_rate || details.valuation_rate || details.rent).toLocaleString()}/mo</strong></span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Month Navigator Toolbar */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '5px 10px',
+                background: '#f8fafc',
+                borderRadius: 8,
+                border: '1px solid #e2e8f0',
+                marginBottom: 8
+              }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (calMonth === 0) {
+                      setCalMonth(11);
+                      setCalYear(y => y - 1);
+                    } else {
+                      setCalMonth(m => m - 1);
+                    }
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 2,
+                    padding: '3px 8px',
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    borderRadius: 5,
+                    border: '1px solid #cbd5e1',
+                    background: '#ffffff',
+                    color: '#334155',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <ChevronLeft size={13} /> Prev
+                </button>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <select
+                    value={calMonth}
+                    onChange={(e) => setCalMonth(Number(e.target.value))}
+                    style={{
+                      padding: '3px 7px',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      borderRadius: 5,
+                      border: '1px solid #cbd5e1',
+                      background: '#ffffff',
+                      color: '#0f172a',
+                      cursor: 'pointer',
+                      outline: 'none'
+                    }}
+                  >
+                    {monthNames.map((m, idx) => (
+                      <option key={m} value={idx}>{m}</option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={calYear}
+                    onChange={(e) => setCalYear(Number(e.target.value))}
+                    style={{
+                      padding: '3px 7px',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      borderRadius: 5,
+                      border: '1px solid #cbd5e1',
+                      background: '#ffffff',
+                      color: '#0f172a',
+                      cursor: 'pointer',
+                      outline: 'none'
+                    }}
+                  >
+                    {[2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030].map(y => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const today = new Date();
+                      setCalYear(today.getFullYear());
+                      setCalMonth(today.getMonth());
+                      setSelectedCalDateStr(today.toISOString().split('T')[0]);
+                    }}
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      borderRadius: 5,
+                      border: '1px solid #cbd5e1',
+                      background: '#ffffff',
+                      color: '#2563eb',
+                      cursor: 'pointer'
+                    }}
+                    title="Jump to current date"
+                  >
+                    Today
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (calMonth === 11) {
+                      setCalMonth(0);
+                      setCalYear(y => y + 1);
+                    } else {
+                      setCalMonth(m => m + 1);
+                    }
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 2,
+                    padding: '3px 8px',
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    borderRadius: 5,
+                    border: '1px solid #cbd5e1',
+                    background: '#ffffff',
+                    color: '#334155',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  Next <ChevronRight size={13} />
+                </button>
+              </div>
+
+              {/* Monthly Executive Analytics Ribbon */}
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+                padding: '6px 10px',
+                background: 'linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%)',
+                borderRadius: 8,
+                border: '1px solid #e2e8f0',
+                marginBottom: 8
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 800, color: '#0f172a' }}>
+                      {monthNames[calMonth]} {calYear} Schedule
+                    </span>
+                    <span style={{
+                      fontSize: 9.5,
+                      fontWeight: 700,
+                      padding: '1.5px 6px',
+                      borderRadius: 10,
+                      background: bookedDaysInMonth > 0 ? '#f1f5f9' : '#f8fafc',
+                      color: bookedDaysInMonth > 0 ? '#334155' : '#64748b',
+                      border: '1px solid #e2e8f0'
+                    }}>
+                      {bookedDaysInMonth > 0 ? `${Math.round((bookedDaysInMonth / totalDays) * 100)}% Booked` : '100% Vacant'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      color: bookedDaysInMonth > 0 ? '#475569' : '#94a3b8',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4
+                    }}>
+                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#64748b' }} />
+                      {bookedDaysInMonth} Days Booked
+                    </span>
+                    <span style={{
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      color: '#475569',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4
+                    }}>
+                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#cbd5e1' }} />
+                      {availableDaysInMonth} Days Available
+                    </span>
+                  </div>
+                </div>
+
+                {/* Visual Progress Bar */}
+                <div style={{
+                  width: '100%',
+                  height: 4,
+                  borderRadius: 3,
+                  background: '#e2e8f0',
+                  overflow: 'hidden',
+                  display: 'flex'
+                }}>
+                  <div style={{
+                    width: `${(bookedDaysInMonth / totalDays) * 100}%`,
+                    height: '100%',
+                    background: '#64748b',
+                    transition: 'width 0.3s ease'
+                  }} />
+                  <div style={{
+                    width: `${(availableDaysInMonth / totalDays) * 100}%`,
+                    height: '100%',
+                    background: '#cbd5e1'
+                  }} />
+                </div>
+              </div>
+
+              {/* Day of Week Headers */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(7, 1fr)',
+                gap: 4,
+                textAlign: 'center',
+                fontWeight: 700,
+                fontSize: 10.5,
+                marginBottom: 3,
+                color: '#64748b'
+              }}>
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                  <div key={d} style={{ padding: '2px 0', letterSpacing: '0.2px' }}>{d}</div>
+                ))}
+              </div>
+
+              {/* Calendar Day Grid */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(7, 1fr)',
+                gap: 4,
+                marginBottom: 8
+              }}>
+                {/* Empty cells for leading days */}
+                {Array.from({ length: firstDay }).map((_, i) => (
+                  <div key={`empty-${i}`} style={{ minHeight: 44, background: 'transparent' }} />
+                ))}
+
+                {/* Day cells */}
+                {Array.from({ length: totalDays }).map((_, i) => {
+                  const day = i + 1;
+                  const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+                  // Only matches active occupancy dates (starting_date to ending_date)
+                  const matchingBookings = unitBookings.filter(b => {
+                    if (b.starting_date && b.ending_date) {
+                      return dateStr >= b.starting_date && dateStr <= b.ending_date;
+                    }
+                    if (b.starting_date && !b.ending_date) {
+                      return dateStr >= b.starting_date;
+                    }
+                    return false;
+                  });
+
+                  const isBooked = matchingBookings.length > 0;
+                  const isExactBookingDate = unitBookings.some(b => b.booking_date === dateStr);
+                  const isStartDate = unitBookings.some(b => b.starting_date === dateStr);
+                  const isEndDate = unitBookings.some(b => b.ending_date === dateStr);
+                  const isLeasePeriod = isBooked && !isExactBookingDate && !isStartDate && !isEndDate;
+                  const isToday = dateStr === todayStr;
+                  const isSelected = dateStr === selectedCalDateStr;
+
+                  // Tenant label
+                  const primaryTenant = matchingBookings[0]?.customer_name || matchingBookings[0]?.customer || '';
+                  const shortTenant = primaryTenant ? primaryTenant.replace(/^(MR\.|MS\.|MRS\.)\s*/i, '').trim().split(' ')[0] : '';
+
+                  // Clean, normal calendar cell styling
+                  let cellBg = '#ffffff';
+                  let cellBorder = '1px solid #e2e8f0';
+
+                  if (isExactBookingDate) {
+                    // Contract signed date: soft blue highlight
+                    cellBg = 'linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%)';
+                    cellBorder = '1px solid #93c5fd';
+                  } else if (isBooked) {
+                    // Booked: unhighlighted neutral slate
+                    cellBg = '#f8fafc';
+                    cellBorder = '1px solid #e2e8f0';
+                  } else if (isToday) {
+                    // Today: clean blue border
+                    cellBg = '#ffffff';
+                    cellBorder = '1.5px solid #3b82f6';
+                  }
+
+                  return (
+                    <div
+                      key={`day-${day}`}
+                      onClick={() => setSelectedCalDateStr(dateStr)}
+                      style={{
+                        minHeight: 44,
+                        borderRadius: 6,
+                        border: isSelected ? '2px solid #2563eb' : cellBorder,
+                        background: cellBg,
+                        padding: '3px 5px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+                        boxShadow: isSelected
+                          ? '0 0 0 3px rgba(37, 99, 235, 0.18), 0 3px 8px rgba(0,0,0,0.06)'
+                          : '0 1px 2px rgba(0,0,0,0.02)',
+                        position: 'relative'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.transform = 'translateY(-1px)';
+                          e.currentTarget.style.boxShadow = '0 3px 8px rgba(0,0,0,0.06)';
+                          if (!isBooked && !isExactBookingDate) {
+                            e.currentTarget.style.borderColor = '#cbd5e1';
+                          }
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.transform = 'none';
+                          e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.02)';
+                          if (!isBooked && !isExactBookingDate) {
+                            e.currentTarget.style.borderColor = isToday ? '#3b82f6' : '#e2e8f0';
+                          }
+                        }
+                      }}
+                    >
+                      {/* Top Row: Day Number & Today Tag */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{
+                          fontSize: 11,
+                          fontWeight: isToday || isSelected ? 800 : (isBooked ? 500 : 600),
+                          color: isSelected
+                            ? '#2563eb'
+                            : (isToday ? '#2563eb' : (isBooked ? '#64748b' : '#1e293b'))
+                        }}>
+                          {day}
+                        </span>
+                        {isToday && (
+                          <span style={{
+                            fontSize: 7.5,
+                            padding: '0.5px 3px',
+                            borderRadius: 3,
+                            background: '#2563eb',
+                            color: '#ffffff',
+                            fontWeight: 700,
+                            letterSpacing: '0.2px'
+                          }}>
+                            Today
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Bottom Row: Key Milestones / Tenant without "Available" or "Leased" words */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 1.5, marginTop: 2 }}>
+                        {isExactBookingDate && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 2,
+                            padding: '1.5px 3px',
+                            borderRadius: 3,
+                            background: '#2563eb',
+                            color: '#ffffff',
+                            fontSize: 7.5,
+                            fontWeight: 700,
+                            lineHeight: 1.1,
+                            boxShadow: '0 1px 2px rgba(37, 99, 235, 0.2)'
+                          }}>
+                            <span>📅 Signed</span>
+                          </div>
+                        )}
+                        {isStartDate && !isExactBookingDate && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 2,
+                            padding: '1.5px 3px',
+                            borderRadius: 3,
+                            background: '#475569',
+                            color: '#ffffff',
+                            fontSize: 7.5,
+                            fontWeight: 700,
+                            lineHeight: 1.1,
+                            boxShadow: '0 1px 2px rgba(71, 85, 105, 0.2)'
+                          }}>
+                            <span>▶ Start</span>
+                          </div>
+                        )}
+                        {isEndDate && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 2,
+                            padding: '1.5px 3px',
+                            borderRadius: 3,
+                            background: '#e11d48',
+                            color: '#ffffff',
+                            fontSize: 7.5,
+                            fontWeight: 700,
+                            lineHeight: 1.1,
+                            boxShadow: '0 1px 2px rgba(225, 29, 72, 0.2)'
+                          }}>
+                            <span>⏹ End</span>
+                          </div>
+                        )}
+                        {isLeasePeriod && shortTenant && (
+                          <div
+                            title={`Tenant: ${primaryTenant || shortTenant}`}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 2.5,
+                              padding: '1.5px 3px',
+                              borderRadius: 3,
+                              background: '#f1f5f9',
+                              border: '1px solid #e2e8f0',
+                              color: '#475569',
+                              fontSize: 7.5,
+                              fontWeight: 600,
+                              letterSpacing: '0.2px'
+                            }}
+                          >
+                            <span style={{ width: 3.5, height: 3.5, borderRadius: '50%', background: '#94a3b8', flexShrink: 0 }} />
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {shortTenant}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Legend Ribbon */}
+              <div style={{
+                display: 'flex',
+                gap: 10,
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '5px 10px',
+                background: '#f8fafc',
+                borderRadius: 6,
+                border: '1px solid #e2e8f0',
+                fontSize: 10,
+                color: '#475569',
+                marginBottom: 8
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#94a3b8', display: 'inline-block' }} />
+                    <span style={{ fontWeight: 600, color: '#475569' }}>Booked / Occupied</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#2563eb', display: 'inline-block' }} />
+                    <span style={{ fontWeight: 600, color: '#1e40af' }}>Contract Signed Date</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 2, border: '1px solid #cbd5e1', background: '#ffffff', display: 'inline-block' }} />
+                    <span style={{ fontWeight: 500, color: '#64748b' }}>Available (Open Date)</span>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9.5, color: '#2563eb', fontWeight: 600 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 2, border: '1.5px solid #2563eb', display: 'inline-block' }} />
+                  <span>Selected Date Focus</span>
+                </div>
+              </div>
+
+              {/* Selected Date Inspector Card */}
+              <div style={{
+                borderRadius: 10,
+                background: selectedDateBookings.length > 0 ? '#ffffff' : '#f8fafc',
+                border: selectedDateBookings.length > 0 ? '1px solid #cbd5e1' : '1px solid #e2e8f0',
+                boxShadow: selectedDateBookings.length > 0 ? '0 3px 12px rgba(15, 23, 42, 0.05)' : 'none',
+                overflow: 'hidden',
+                marginBottom: 8
+              }}>
+                {/* Inspector Banner */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '6px 12px',
+                  background: selectedDateBookings.length > 0
+                    ? '#f8fafc'
+                    : '#f1f5f9',
+                  borderBottom: '1px solid #e2e8f0',
+                  flexWrap: 'wrap',
+                  gap: 6
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Calendar size={13} style={{ color: selectedDateBookings.length > 0 ? '#2563eb' : '#64748b' }} />
+                    <span style={{ fontSize: 11.5, fontWeight: 800, color: '#0f172a' }}>
+                      {formatBookingDate(selectedCalDateStr)}
+                    </span>
+                  </div>
+
+                  {selectedDateBookings.length > 0 ? (
+                    <span style={{
+                      fontSize: 9.5,
+                      fontWeight: 700,
+                      background: isExactBookingDateOnSelected ? '#2563eb' : '#475569',
+                      color: '#ffffff',
+                      padding: '2px 8px',
+                      borderRadius: 10,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
+                    }}>
+                      <span style={{ width: 4, height: 4, borderRadius: '50%', background: '#ffffff' }} />
+                      {isExactBookingDateOnSelected ? 'Contract Signing Date' : 'Active Lease · Unit Occupied'}
+                    </span>
+                  ) : (
+                    <span style={{
+                      fontSize: 9.5,
+                      fontWeight: 700,
+                      background: '#f1f5f9',
+                      color: '#475569',
+                      border: '1px solid #cbd5e1',
+                      padding: '2px 8px',
+                      borderRadius: 10,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4
+                    }}>
+                      ✓ Available Date
+                    </span>
+                  )}
+                </div>
+
+                {/* Inspector Content */}
+                <div style={{ padding: '8px 12px' }}>
+                  {selectedDateBookings.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {selectedDateBookings.map((b, idx) => {
+                        const tenantName = b.customer_name || b.customer || 'Tenant';
+                        const initials = tenantName.split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'TN';
+
+                        return (
+                          <div
+                            key={b.name || idx}
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 8
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <div style={{
+                                  width: 30,
+                                  height: 30,
+                                  borderRadius: '50%',
+                                  background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                                  color: '#ffffff',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  fontWeight: 800,
+                                  fontSize: 11,
+                                  boxShadow: '0 2px 4px rgba(5, 150, 105, 0.2)'
+                                }}>
+                                  {initials}
+                                </div>
+                                <div>
+                                  <div style={{ fontSize: 12, fontWeight: 800, color: '#0f172a' }}>
+                                    {tenantName}
+                                  </div>
+                                  <div style={{ fontSize: 10.5, color: '#64748b', display: 'flex', gap: 8, marginTop: 1 }}>
+                                    {b.customer_phone && (
+                                      <a href={`tel:${b.customer_phone}`} style={{ color: '#047857', textDecoration: 'none', fontWeight: 600 }}>
+                                        📞 {b.customer_phone}
+                                      </a>
+                                    )}
+                                    {b.customer_email && (
+                                      <a href={`mailto:${b.customer_email}`} style={{ color: '#2563eb', textDecoration: 'none' }}>
+                                        ✉ {b.customer_email}
+                                      </a>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                                <div style={{ fontSize: 13, fontWeight: 800, color: '#047857' }}>
+                                  ${Number(b.booking_amount || details.standard_rate || 0).toLocaleString()}
+                                  <span style={{ fontSize: 10, fontWeight: 500, color: '#64748b' }}> / mo</span>
+                                </div>
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                  <span style={{
+                                    fontSize: 9,
+                                    fontWeight: 700,
+                                    padding: '1px 5px',
+                                    borderRadius: 3,
+                                    background: '#f1f5f9',
+                                    color: '#334155',
+                                    border: '1px solid #cbd5e1'
+                                  }}>
+                                    {b.name}
+                                  </span>
+                                  {b.workflow_state && (
+                                    <span style={{
+                                      fontSize: 9,
+                                      fontWeight: 700,
+                                      padding: '1px 5px',
+                                      borderRadius: 3,
+                                      background: '#ecfdf5',
+                                      color: '#047857',
+                                      border: '1px solid #a7f3d0'
+                                    }}>
+                                      {b.workflow_state}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Key Timeline Facts Grid */}
+                            <div style={{
+                              display: 'grid',
+                              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                              gap: 6,
+                              background: '#f8fafc',
+                              borderRadius: 6,
+                              padding: '6px 8px',
+                              border: '1px solid #e2e8f0',
+                              fontSize: 10.5
+                            }}>
+                              <div>
+                                <span style={{ color: '#64748b', fontSize: 9.5, display: 'block' }}>Contract Signed</span>
+                                <strong style={{ color: '#0f172a' }}>{formatBookingDate(b.booking_date)}</strong>
+                              </div>
+                              <div>
+                                <span style={{ color: '#64748b', fontSize: 9.5, display: 'block' }}>Lease Period</span>
+                                <strong style={{ color: '#0f172a' }}>
+                                  {formatBookingDate(b.starting_date)} → {formatBookingDate(b.ending_date)}
+                                </strong>
+                              </div>
+                              <div>
+                                <span style={{ color: '#64748b', fontSize: 9.5, display: 'block' }}>Total Lease Duration</span>
+                                <strong style={{ color: '#047857' }}>
+                                  {calculateDuration(b.starting_date, b.ending_date, b.total_days) || '1 Year Active'}
+                                </strong>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '4px 2px'
+                    }}>
+                      <div style={{
+                        width: 26,
+                        height: 26,
+                        borderRadius: '50%',
+                        background: '#ecfdf5',
+                        color: '#059669',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0
+                      }}>
+                        <CheckCircle2 size={15} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11.5, fontWeight: 700, color: '#0f172a' }}>
+                          Unit {matchedUnit?.unit_name || details.item_name || selectedUnitId} is vacant on this date.
+                        </div>
+                        <div style={{ fontSize: 10.5, color: '#64748b', marginTop: 1 }}>
+                          No active lease contracts or reservations found. Available for immediate tenancy or signing.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* All Bookings on File for this Unit */}
+              {unitBookings.length > 0 ? (
+                <div>
+                  <div style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: '#475569',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                    marginBottom: 4,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5
+                  }}>
+                    <span>Active Contracts on Record</span>
+                    <span style={{ fontSize: 9.5, background: '#e2e8f0', color: '#334155', padding: '0.5px 5px', borderRadius: 8 }}>
+                      {unitBookings.length}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {unitBookings.map((b, idx) => (
+                      <div
+                        key={b.name || idx}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '6px 10px',
+                          background: '#f8fafc',
+                          borderRadius: 6,
+                          border: '1px solid #e2e8f0',
+                          fontSize: 10.5,
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <strong style={{ color: '#0f172a', fontSize: 11 }}>{b.name}</strong>
+                            <span style={{ color: '#047857', fontWeight: 600 }}>{b.customer_name || 'Tenant'}</span>
+                            {b.workflow_state && (
+                              <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: '#ecfdf5', color: '#047857' }}>
+                                {b.workflow_state}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 10, color: '#64748b' }}>
+                            Signed: <strong>{formatBookingDate(b.booking_date)}</strong> · Term: <strong>{formatBookingDate(b.starting_date)} → {formatBookingDate(b.ending_date)}</strong>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const dateToFocus = b.starting_date || b.booking_date;
+                            if (dateToFocus) {
+                              const d = new Date(dateToFocus);
+                              if (!isNaN(d.getTime())) {
+                                setCalYear(d.getFullYear());
+                                setCalMonth(d.getMonth());
+                                setSelectedCalDateStr(dateToFocus);
+                              }
+                            }
+                          }}
+                          style={{
+                            fontSize: 9.5,
+                            fontWeight: 600,
+                            padding: '3px 8px',
+                            borderRadius: 5,
+                            background: '#ffffff',
+                            border: '1px solid #cbd5e1',
+                            color: '#047857',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 3
+                          }}
+                        >
+                          Focus on Calendar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div style={{
+                  padding: '8px 10px',
+                  background: '#f8fafc',
+                  borderRadius: 6,
+                  border: '1px dashed #cbd5e1',
+                  fontSize: 10.5,
+                  color: '#64748b',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginTop: 4
+                }}>
+                  <span>No booking records found in Booking DocType for unit {selectedUnitId}.</span>
+                  <button
+                    type="button"
+                    onClick={() => fetchUnitBookings(selectedUnitId, true)}
+                    disabled={loadingUnitBookings}
+                    style={{
+                      fontSize: 9.5,
+                      fontWeight: 600,
+                      padding: '2px 7px',
+                      borderRadius: 4,
+                      background: '#ffffff',
+                      border: '1px solid #cbd5e1',
+                      color: '#047857',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <RefreshCw size={9} style={{ animation: loadingUnitBookings ? 'spin 1s linear infinite' : 'none' }} /> Re-fetch
+                  </button>
+                </div>
+              )}
+
+              {/* Modal Footer */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8, paddingTop: 8, borderTop: '1px solid #f1f5f9' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setShowBookingCalendar(false)}
+                  style={{
+                    padding: '6px 18px',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    borderRadius: 6,
+                    background: '#059669',
+                    border: 'none',
+                    color: '#ffffff',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 6px rgba(5, 150, 105, 0.25)'
+                  }}
+                >
+                  Close Calendar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ADD UNIT MODAL */}
       {showAddUnitModal && (

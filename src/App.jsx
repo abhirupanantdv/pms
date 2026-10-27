@@ -2963,7 +2963,7 @@ import HRMS, { INITIAL_EMPLOYEES } from './components/HRMS';
 import Reports from './components/Reports';
 import Quotation from './components/Quotation';
 import TenantOnboarding from './components/TenantOnboarding';
-import { ERPNEXT_CONFIG, getCsrfToken, getAuthHeaders, getUploadHeaders } from './config';
+import { ERPNEXT_CONFIG, getCsrfToken, ensureCsrfToken, getAuthHeaders, getUploadHeaders } from './config';
 import MapComponent from './components/MapComponent';
 
 // Sample INITIAL MOCK DATA
@@ -3221,6 +3221,7 @@ export default function App() {
   // Sync with ERPNext server API
   useEffect(() => {
     async function fetchERPNextData() {
+      ensureCsrfToken().catch(() => { });
       if (ERPNEXT_CONFIG && ERPNEXT_CONFIG.url) {
         let finalProps = [];
         let finalBookings = [];
@@ -3403,7 +3404,7 @@ export default function App() {
         // 8. Fetch Sales Invoice for Billing Ledger
         let finalInvoices = [];
         try {
-          const invFields = JSON.stringify(["name", "customer", "customer_name", "posting_date", "due_date", "grand_total", "rounded_total", "outstanding_amount", "status", "creation", "booking_id", "currency"]);
+          const invFields = JSON.stringify(["name", "customer", "customer_name", "posting_date", "due_date", "grand_total", "rounded_total", "outstanding_amount", "status", "creation", "booking_id", "currency", "terms_and_conditions", "terms"]);
           const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Sales%20Invoice?fields=${encodeURIComponent(invFields)}&order_by=creation%20desc&limit_page_length=500`, {
             credentials: 'include',
             headers: {
@@ -3422,6 +3423,7 @@ export default function App() {
                 } else if (statusLower === 'overdue') {
                   mappedStatus = 'overdue';
                 }
+                const activeTerms = inv.terms_and_conditions || inv.terms || '';
                 return {
                   id: inv.name,
                   name: inv.name,
@@ -3435,6 +3437,8 @@ export default function App() {
                   dueDate: inv.due_date || '2026-06-10',
                   creation: inv.creation,
                   currency: inv.currency || 'FJD',
+                  terms_and_conditions: activeTerms,
+                  terms: activeTerms,
                   status: inv.status || mappedStatus
                 };
               }));
@@ -3752,7 +3756,7 @@ export default function App() {
 
         // 7. Fetch Maintenance Schedule
         try {
-          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule?fields=%5B%22name%22%2C%22customer%22%2C%22transaction_date%22%2C%22status%22%2C%22customer_name%22%2C%22company%22%2C%22_assign%22%2C%22custom_property%22%5D`, {
+          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule?fields=%5B%22name%22%2C%22mntc_date%22%2C%22mntc_time%22%2C%22completion_status%22%2C%22customer_name%22%2C%22maintenance_type%22%2C%22company%22%5D&limit_page_length=200&order_by=creation%20desc`, {
             credentials: 'include',
             headers: {
               'Content-Type': 'application/json'
@@ -4694,27 +4698,38 @@ export default function App() {
   const handleUpdateScheduleStatus = async (scheduleName, nextStatus) => {
     setSchedules(prev => prev.map(sch => {
       if (sch.name === scheduleName) {
-        return { ...sch, status: nextStatus };
+        const isSub = nextStatus === 'Submitted' || nextStatus === 'In Progress' || nextStatus === 'Completed';
+        return { ...sch, status: nextStatus, docstatus: isSub ? 1 : (nextStatus === 'Cancelled' ? 2 : 0) };
       }
       return sch;
     }));
 
     if (ERPNEXT_CONFIG) {
       let erpStatus = 'Draft';
-      if (nextStatus === 'In Progress' || nextStatus === 'Completed') {
+      if (nextStatus === 'In Progress' || nextStatus === 'Completed' || nextStatus === 'Submitted') {
         erpStatus = 'Submitted';
       } else if (nextStatus === 'Cancelled') {
         erpStatus = 'Cancelled';
       }
 
       try {
-        await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule/${scheduleName}`, {
+        if (erpStatus === 'Submitted') {
+          try {
+            await fetch(`${ERPNEXT_CONFIG.url}/api/method/approve_reject_doc`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({ doctype_name: 'Maintenance Schedule', docname: scheduleName, state_code: 1 })
+            });
+          } catch (e) { }
+        }
+        await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(scheduleName)}`, {
           method: 'PUT',
           credentials: 'include',
           headers: getAuthHeaders({
             'Content-Type': 'application/json'
           }),
-          body: JSON.stringify({ status: erpStatus })
+          body: JSON.stringify({ status: erpStatus, docstatus: erpStatus === 'Submitted' ? 1 : 0 })
         });
       } catch (err) {
         console.warn('Failed to update ERPNext Maintenance Schedule status:', err);
@@ -5788,6 +5803,7 @@ export default function App() {
             erpnextConfig={ERPNEXT_CONFIG}
             tenants={tenants}
             owners={owners}
+            bookings={bookings}
             onScheduleMaintenance={(prop) => {
               setPreSelectedProperty(prop);
               setCurrentTab('maintenance');

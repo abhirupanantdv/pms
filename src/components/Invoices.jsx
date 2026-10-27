@@ -23,7 +23,7 @@ import {
   ChevronDown,
   Percent
 } from 'lucide-react';
-import { getAuthHeaders } from '../config';
+import { getAuthHeaders, getCsrfToken, ensureCsrfToken } from '../config';
 
 const numberToWords = (num, currency = 'FJD') => {
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
@@ -81,6 +81,30 @@ const formatInvoiceDate = (dateStr) => {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return dateStr;
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+const toErpNextDate = (val) => {
+  if (!val) return '';
+  const str = String(val).trim();
+  if (!str) return '';
+  // Match YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  // Match YYYY-MM-DD HH:mm:ss or ISO timestamp
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+  // Match DD-MM-YYYY or DD/MM/YYYY
+  const dmyMatch = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmyMatch) {
+    const [, day, month, year] = dmyMatch;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  return str;
 };
 
 export default function Invoices({ invoices, accounts = [], glEntries = [], onAddInvoice, onRecordPayment, erpnextConfig, tenants = [], properties = [], bookings = [] }) {
@@ -183,6 +207,28 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     }, 4500);
   };
 
+  // Default Sales Invoice Terms & Conditions fallback matching verified ERPNext template
+  const DEFAULT_INVOICE_TERMS = "Payment Terms: Payment is due on or before the due date stated on this invoice. Unless otherwise agreed in writing, payment is required within the agreed credit period.\nLate Payment: Any overdue amount may be subject to applicable late payment charges or other recovery costs in accordance with the applicable agreement and applicable laws of Fiji.";
+
+  const [defaultInvoiceTerms, setDefaultInvoiceTerms] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('pms_clean_invoice_terms') || sessionStorage.getItem('pms_clean_invoice_terms');
+        if (cached && cached.trim()) return cached.trim();
+      } catch { }
+    }
+    return DEFAULT_INVOICE_TERMS;
+  });
+
+  const [defaultTermsRecordName, setDefaultTermsRecordName] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        return localStorage.getItem('pms_invoice_terms_record_name') || '';
+      } catch { }
+    }
+    return '';
+  });
+
   const initialFormValues = {
     customer: '',
     customer_name: '',
@@ -199,6 +245,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     against_income_account: 'Sales - CFPL',
     selling_price_list: 'Standard Selling For Property Management',
     taxes_and_charges: 'Fiji Tax - CFPL',
+    terms_and_conditions: (typeof window !== 'undefined' && localStorage.getItem('pms_clean_invoice_terms')) || DEFAULT_INVOICE_TERMS,
     additional_discount_percentage: 0,
     discount_amount: 0,
     po_no: '',
@@ -354,15 +401,55 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
             }
           }
 
+          // Resolve terms & conditions for the invoice
+          let termsStr = doc.terms_and_conditions || doc.terms || targetInvoice.terms_and_conditions || targetInvoice.terms || '';
+
+          if (!termsStr || !termsStr.trim()) {
+            termsStr = defaultInvoiceTerms || (typeof window !== 'undefined' && localStorage.getItem('pms_clean_invoice_terms')) || DEFAULT_INVOICE_TERMS;
+
+            // Auto-sync terms into ERPNext in background if this invoice is Draft (docstatus === 0)
+            if (doc.docstatus === 0 && erpnextConfig?.url && targetInvoice.id) {
+              const syncPayload = {
+                terms_and_conditions: termsStr,
+                terms: termsStr,
+                ...(defaultTermsRecordName ? { tc_name: defaultTermsRecordName } : {})
+              };
+
+              fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice/${encodeURIComponent(targetInvoice.id)}`, {
+                method: 'PUT',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify(syncPayload)
+              }).catch(() => { });
+
+              fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({
+                  doctype: 'Sales Invoice',
+                  name: targetInvoice.id,
+                  fieldname: 'terms_and_conditions',
+                  value: termsStr
+                })
+              }).catch(() => { });
+            }
+          }
+
           if (isMounted) {
             setInvoiceDetailsExtra({
-              rawDoc: doc,
+              rawDoc: {
+                ...doc,
+                terms_and_conditions: termsStr,
+                terms: termsStr
+              },
               unitName: unitNameStr,
               unitAddress: unitAddressStr,
               customerAddress: customerAddressStr || 'Suva, Fiji',
               currency: doc.currency || 'FJD',
               billingItems: doc.items || [],
-              taxes: doc.taxes || []
+              taxes: doc.taxes || [],
+              terms_and_conditions: termsStr
             });
           }
         }
@@ -612,8 +699,157 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     }
   };
 
+  // Helper to extract clean text from HTML content matching user's ERPNext script
+  const extractCleanTerms = (rawHtml) => {
+    if (!rawHtml) return '';
+    try {
+      const tempDiv = document.createElement("div");
+      tempDiv.innerHTML = rawHtml;
+      const text = tempDiv.innerText || tempDiv.textContent || '';
+      return text.trim();
+    } catch {
+      return String(rawHtml).replace(/<[^>]*>/g, '').trim();
+    }
+  };
+
+  const applyLoadedTerms = (cleanTerms, recordName) => {
+    if (!cleanTerms) return;
+    setDefaultInvoiceTerms(cleanTerms);
+    if (recordName) setDefaultTermsRecordName(recordName);
+    try {
+      localStorage.setItem('pms_clean_invoice_terms', cleanTerms);
+      if (recordName) localStorage.setItem('pms_invoice_terms_record_name', recordName);
+    } catch { }
+
+    setFormValues(prev => ({
+      ...prev,
+      terms_and_conditions: (!prev.terms_and_conditions || prev.terms_and_conditions === DEFAULT_INVOICE_TERMS)
+        ? cleanTerms
+        : prev.terms_and_conditions
+    }));
+
+    setInvoiceDetailsExtra(prev => {
+      if (prev && (!prev.terms_and_conditions || !prev.terms_and_conditions.trim())) {
+        return {
+          ...prev,
+          terms_and_conditions: cleanTerms,
+          rawDoc: {
+            ...(prev.rawDoc || {}),
+            terms_and_conditions: cleanTerms,
+            terms: cleanTerms
+          }
+        };
+      }
+      return prev;
+    });
+
+    console.log("Clean Sales Invoice Terms loaded from ERPNext:", recordName || 'Terms and Conditions');
+  };
+
+  // Fetch active default Terms and Conditions from ERPNext matching exact client script
+  const fetchDefaultInvoiceTerms = async () => {
+    if (!erpnextConfig?.url) return;
+    try {
+      const fields = JSON.stringify(["name", "terms", "custom_apply_for", "selling", "disabled"]);
+
+      // 1. Exact client script query: custom_apply_for = "Sales Invoice", disabled = 0, selling = 1
+      const filters1 = JSON.stringify([
+        ["custom_apply_for", "=", "Sales Invoice"],
+        ["disabled", "=", 0],
+        ["selling", "=", 1]
+      ]);
+      const res1 = await fetch(`${erpnextConfig.url}/api/resource/Terms%20and%20Conditions?filters=${encodeURIComponent(filters1)}&fields=${encodeURIComponent(fields)}&order_by=modified%20desc&limit_page_length=1`, {
+        credentials: 'include',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+      });
+
+      if (res1.ok) {
+        const json1 = await res1.json();
+        const list1 = json1.data || json1;
+        if (Array.isArray(list1) && list1.length > 0 && list1[0].terms) {
+          const cleanTerms = extractCleanTerms(list1[0].terms);
+          if (cleanTerms) {
+            applyLoadedTerms(cleanTerms, list1[0].name);
+            return cleanTerms;
+          }
+        }
+      }
+
+      // 2. Exact frappe.client.get_list equivalent with object filters
+      const objFilters = JSON.stringify({
+        custom_apply_for: "Sales Invoice",
+        disabled: 0,
+        selling: 1
+      });
+      const res2 = await fetch(`${erpnextConfig.url}/api/method/frappe.client.get_list?doctype=Terms%20and%20Conditions&filters=${encodeURIComponent(objFilters)}&fields=${encodeURIComponent(fields)}&order_by=modified%20desc&limit_page_length=1`, {
+        credentials: 'include',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+      });
+
+      if (res2.ok) {
+        const json2 = await res2.json();
+        const list2 = json2.message || json2.data || [];
+        if (Array.isArray(list2) && list2.length > 0 && list2[0].terms) {
+          const cleanTerms = extractCleanTerms(list2[0].terms);
+          if (cleanTerms) {
+            applyLoadedTerms(cleanTerms, list2[0].name);
+            return cleanTerms;
+          }
+        }
+      }
+
+      // 3. Fallback query if custom_apply_for has different casing or general selling terms
+      const fallbackFilters = JSON.stringify([
+        ["disabled", "=", 0],
+        ["selling", "=", 1]
+      ]);
+      const res3 = await fetch(`${erpnextConfig.url}/api/resource/Terms%20and%20Conditions?filters=${encodeURIComponent(fallbackFilters)}&fields=${encodeURIComponent(fields)}&order_by=modified%20desc&limit_page_length=5`, {
+        credentials: 'include',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+      });
+      if (res3.ok) {
+        const json3 = await res3.json();
+        const list3 = json3.data || [];
+        const matched = list3.find(t => (t.name || '').toLowerCase().includes('invoice') || (t.custom_apply_for || '').toLowerCase().includes('invoice')) || list3[0];
+        if (matched && matched.terms) {
+          const cleanTerms = extractCleanTerms(matched.terms);
+          if (cleanTerms) {
+            applyLoadedTerms(cleanTerms, matched.name);
+            return cleanTerms;
+          }
+        }
+      }
+
+      // 4. Broader search for any active terms
+      const res4 = await fetch(`${erpnextConfig.url}/api/resource/Terms%20and%20Conditions?filters=[["disabled","=",0]]&fields=${encodeURIComponent(fields)}&order_by=modified%20desc&limit_page_length=10`, {
+        credentials: 'include',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+      });
+      if (res4.ok) {
+        const json4 = await res4.json();
+        const list4 = json4.data || [];
+        const matched = list4.find(t => (t.name || '').toLowerCase().includes('invoice') || (t.custom_apply_for || '').toLowerCase().includes('invoice')) || list4[0];
+        if (matched && matched.terms) {
+          const cleanTerms = extractCleanTerms(matched.terms);
+          if (cleanTerms) {
+            applyLoadedTerms(cleanTerms, matched.name);
+            return cleanTerms;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load Sales Invoice Terms and Conditions:", err);
+    }
+  };
+
+  // Auto-fetch active terms on component mount
+  useEffect(() => {
+    fetchDefaultInvoiceTerms();
+  }, [erpnextConfig?.url]);
+
   useEffect(() => {
     if (showAddModal) {
+      fetchDefaultInvoiceTerms();
       fetchLinkOptions('Customer');
       fetchLinkOptions('Booking');
       fetchLinkOptions('Item');
@@ -746,8 +982,8 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
         customer: custVal || prev.customer,
         customer_name: custName || prev.customer_name,
         customer_address: '',
-        ...(bStart ? { start_date: bStart } : {}),
-        ...(bEnd ? { end_date: bEnd } : {})
+        ...(bStart ? { start_date: toErpNextDate(bStart) } : {}),
+        ...(bEnd ? { end_date: toErpNextDate(bEnd) } : {})
       }));
       if (custVal && !passedCustomerId) {
         fetchCustomerAddresses(custVal);
@@ -788,8 +1024,8 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
             customer: response.customer,
             customer_name: response.customer_name || response.customer || prev.customer_name
           } : {}),
-          ...(bStartRes ? { start_date: bStartRes } : {}),
-          ...(bEndRes ? { end_date: bEndRes } : {})
+          ...(bStartRes ? { start_date: toErpNextDate(bStartRes) } : {}),
+          ...(bEndRes ? { end_date: toErpNextDate(bEndRes) } : {})
         }));
         if (response.customer && response.customer !== resolvedCust) {
           fetchCustomerAddresses(response.customer);
@@ -805,16 +1041,50 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       }
 
       // Clear existing Sales Invoice Items and add child rows
-      const newItems = bookingItems.map(item => {
+      const newItems = await Promise.all(bookingItems.map(async (item) => {
         // Booking uses quantity, Sales Invoice Item uses qty
         const qty = Number(item.quantity || item.qty) || 1;
         const rate = Number(item.rate) || 0;
         const priceListRate = Number(item.price_list_rate || item.rate) || 0;
         const discountPercentage = Number(item.discount_percentage) || 0;
         const discountAmount = Number(item.discount_amount) || 0;
-        const customArea = Number(item.area || item.custom_area) || 0;
         const customPropertyGroup = item.property_group || item.custom_property_group || '';
         const amount = qty * rate;
+
+        const isFee = (item.item_name || item.item_code || '').toLowerCase().match(/fee|charge|service|deposit|tax/);
+        let resolvedArea = '';
+
+        if (!isFee) {
+          const directArea = item.area || item.custom_area || item.total_areasqm || item.custom_total_area || item.total_area || item.carpet_area || item.custom_7average_carpet_area_of_units || item.custom_total_area_sqft || item.area_sqft;
+          if (directArea !== undefined && directArea !== null && directArea !== '' && directArea !== 0) {
+            resolvedArea = directArea;
+          } else {
+            const matchedProp = properties.find(p =>
+              (p.id && (p.id.toLowerCase() === (item.item_code || '').toLowerCase() || p.id.toLowerCase() === (item.item_name || '').toLowerCase())) ||
+              (p.name && (p.name.toLowerCase() === (item.item_code || '').toLowerCase() || p.name.toLowerCase() === (item.item_name || '').toLowerCase())) ||
+              (p.item_code && (p.item_code.toLowerCase() === (item.item_code || '').toLowerCase() || p.item_code.toLowerCase() === (item.item_name || '').toLowerCase()))
+            );
+            if (matchedProp && (matchedProp.custom_7average_carpet_area_of_units || matchedProp.area || matchedProp.total_area)) {
+              resolvedArea = matchedProp.custom_7average_carpet_area_of_units || matchedProp.area || matchedProp.total_area;
+            } else if (item.item_code && erpnextConfig?.url) {
+              try {
+                const itemRes = await fetch(`${erpnextConfig.url}/api/resource/Item/${encodeURIComponent(item.item_code)}?fields=["name","item_name","custom_7average_carpet_area_of_units","stock_uom"]`, {
+                  credentials: 'include',
+                  headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+                });
+                if (itemRes.ok) {
+                  const itemJson = await itemRes.json();
+                  const itemDoc = itemJson.data || itemJson;
+                  if (itemDoc.custom_7average_carpet_area_of_units) {
+                    resolvedArea = itemDoc.custom_7average_carpet_area_of_units;
+                  }
+                }
+              } catch (e) {
+                console.warn('Could not fetch unit item area:', e);
+              }
+            }
+          }
+        }
 
         return {
           item_code: item.item_code || '',
@@ -827,14 +1097,15 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
           price_list_rate: priceListRate,
           discount_percentage: discountPercentage,
           discount_amount: discountAmount,
-          custom_area: customArea,
+          area: resolvedArea !== '' ? resolvedArea : '',
+          custom_area: resolvedArea !== '' ? resolvedArea : 0,
           custom_property_group: customPropertyGroup,
           amount: amount,
           income_account: formValues.against_income_account || 'Sales - CFPL',
           cost_center: formValues.cost_center || 'Main - CFPL',
           expense_account: 'Cost of Goods Sold - CFPL'
         };
-      });
+      }));
 
       setItems(newItems);
       console.log('Booking Items added to Sales Invoice:', bookingItems);
@@ -1001,9 +1272,28 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       }
       if (field === 'item_code') {
         row.item_name = value;
-        if (!row.description || row.description === 'Gb009') {
+        if (!row.description || row.description === 'Gb009' || row.description.includes('Rent Space')) {
           row.description = `${value} - Rent Space`;
         }
+        const isFee = (value || '').toLowerCase().match(/fee|charge|service|deposit|tax/);
+        if (!isFee) {
+          const matchedProp = properties.find(p =>
+            (p.id && p.id.toLowerCase() === value.toLowerCase()) ||
+            (p.name && p.name.toLowerCase() === value.toLowerCase()) ||
+            (p.item_code && p.item_code.toLowerCase() === value.toLowerCase())
+          );
+          if (matchedProp) {
+            const foundArea = matchedProp.custom_7average_carpet_area_of_units || matchedProp.area || matchedProp.total_area || '';
+            if (foundArea && !row.area) {
+              row.area = foundArea;
+              row.custom_area = foundArea;
+            }
+          }
+        }
+      }
+      if (field === 'area') {
+        row.area = value;
+        row.custom_area = value;
       }
       updated[index] = row;
       return updated;
@@ -1020,6 +1310,8 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
         qty: 1,
         rate: 0,
         amount: 0,
+        area: '',
+        custom_area: '',
         stock_uom: 'Sq Ft',
         uom: 'Sq Ft',
         income_account: formValues.against_income_account || 'Sales - CFPL',
@@ -1031,6 +1323,26 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
 
   const handleRemoveItemRow = (index) => {
     setItems(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Helper to determine unit area for display in invoice tables
+  const getItemArea = (item) => {
+    if (!item) return '—';
+    const isFee = (item.item_name || item.item_code || '').toLowerCase().match(/fee|charge|service|deposit|tax/);
+    if (isFee) return '—';
+    if (item.area !== undefined && item.area !== null && item.area !== '') return item.area;
+    if (item.custom_area !== undefined && item.custom_area !== null && item.custom_area !== '' && item.custom_area !== 0) return item.custom_area;
+    if (item.total_areasqm !== undefined && item.total_areasqm !== null && item.total_areasqm !== '') return item.total_areasqm;
+    if (item.custom_7average_carpet_area_of_units !== undefined && item.custom_7average_carpet_area_of_units !== null && item.custom_7average_carpet_area_of_units !== '') return item.custom_7average_carpet_area_of_units;
+    const code = (item.item_code || item.item_name || '').toLowerCase();
+    const matchedProp = properties.find(p =>
+      (p.id && p.id.toLowerCase() === code) ||
+      (p.name && p.name.toLowerCase() === code) ||
+      (p.item_code && p.item_code.toLowerCase() === code)
+    );
+    if (matchedProp?.custom_7average_carpet_area_of_units) return matchedProp.custom_7average_carpet_area_of_units;
+    if (matchedProp?.area) return matchedProp.area;
+    return item.qty || '—';
   };
 
   // Submit Dynamic Sales Invoice to ERPNext
@@ -1054,29 +1366,57 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       resolvedTaxTemplate = 'Fiji Tax - CFPL';
     }
 
-    // Resolve valid customer_address link (must be undefined if empty string to avoid link validation failure)
-    const resolvedCustomerAddress = formValues.customer_address && formValues.customer_address.trim()
-      ? formValues.customer_address.trim()
-      : undefined;
+    // Resolve valid customer_address link (must be valid address ID or undefined if empty/unmatched)
+    let resolvedCustomerAddress = undefined;
+    if (formValues.customer_address && formValues.customer_address.trim()) {
+      const trimmed = formValues.customer_address.trim();
+      const matchedAddr = customerAddresses.find(a => a.name === trimmed || trimmed.startsWith(a.name));
+      if (matchedAddr) {
+        resolvedCustomerAddress = matchedAddr.name;
+      } else if (!trimmed.includes(' ') || trimmed.includes('-')) {
+        resolvedCustomerAddress = trimmed.split(' ')[0].trim();
+      } else {
+        resolvedCustomerAddress = trimmed;
+      }
+    }
 
+    // Normalize dates to standard YYYY-MM-DD
+    const resolvedPostingDate = toErpNextDate(formValues.posting_date) || getTodayStr();
+    const resolvedDueDate = toErpNextDate(formValues.due_date) || getTodayStr();
+    const resolvedStartDate = toErpNextDate(formValues.start_date);
+    const resolvedEndDate = toErpNextDate(formValues.end_date);
+
+    const resolvedTerms = (formValues.terms_and_conditions && formValues.terms_and_conditions.trim())
+      ? formValues.terms_and_conditions.trim()
+      : (defaultInvoiceTerms || DEFAULT_INVOICE_TERMS);
+
+    // Build payload matching exact ERPNext Sales Invoice DocType specification
     const payload = {
       doctype: 'Sales Invoice',
       customer: formValues.customer,
       customer_name: formValues.customer_name || formValues.customer,
-      customer_address: resolvedCustomerAddress,
+      customer_address: resolvedCustomerAddress || undefined,
       company: 'CARPENTERS PROPERTIES PTE LIMITED',
+      company_address: 'Mailing Address-Billing',
       booking_id: formValues.booking_id || undefined,
-      start_date: formValues.start_date || undefined,
-      end_date: formValues.end_date || undefined,
+      start_date: resolvedStartDate || undefined,
+      end_date: resolvedEndDate || undefined,
       create_manual_invoice: 1,
-      posting_date: formValues.posting_date || getTodayStr(),
-      due_date: formValues.due_date || getTodayStr(),
+      posting_date: resolvedPostingDate,
+      due_date: resolvedDueDate,
       currency: 'FJD',
+      conversion_rate: 1,
+      plc_conversion_rate: 1,
+      price_list_currency: 'FJD',
       cost_center: 'Main - CFPL',
       debit_to: 'Debtors - CFPL',
       against_income_account: 'Sales - CFPL',
       selling_price_list: 'Standard Selling For Property Management',
-      taxes_and_charges: resolvedTaxTemplate,
+      territory: 'All Territories',
+      taxes_and_charges: resolvedTaxTemplate || 'Fiji Tax - CFPL',
+      terms_and_conditions: resolvedTerms,
+      terms: resolvedTerms,
+      ...(defaultTermsRecordName ? { tc_name: defaultTermsRecordName } : {}),
       taxes: computedTaxes.map((tax, idx) => ({
         doctype: 'Sales Taxes and Charges',
         idx: idx + 1,
@@ -1084,15 +1424,11 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
         account_head: tax.account_head || 'VAT - CFPL',
         description: tax.description || `${tax.account_head || 'VAT'} @ ${tax.rate}%`,
         rate: Number(tax.rate) || 0,
-        tax_amount: Number(tax.tax_amount) || 0,
-        tax_amount_after_discount_amount: Number(tax.tax_amount) || 0,
-        total: Number(tax.total) || 0,
         cost_center: 'Main - CFPL'
       })),
-      total_taxes_and_charges: totalTaxesAndCharges,
       additional_discount_percentage: Number(formValues.additional_discount_percentage) || 0,
       discount_amount: Number(formValues.discount_amount) || 0,
-      po_no: formValues.po_no || undefined,
+      po_no: formValues.po_no ? String(formValues.po_no).trim() : undefined,
       items: items.map((it, idx) => ({
         doctype: 'Sales Invoice Item',
         idx: idx + 1,
@@ -1105,32 +1441,38 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
         price_list_rate: Number(it.price_list_rate || it.rate) || 0,
         discount_percentage: Number(it.discount_percentage) || 0,
         discount_amount: Number(it.discount_amount) || 0,
-        custom_area: it.custom_area ? Number(it.custom_area) : undefined,
-        custom_property_group: it.custom_property_group || undefined,
-        stock_uom: it.stock_uom || it.uom || 'Sq Ft',
-        uom: it.uom || 'Sq Ft',
         income_account: it.income_account || 'Sales - CFPL',
         cost_center: it.cost_center || 'Main - CFPL',
-        expense_account: 'Cost of Goods Sold - CFPL'
-      })),
-      net_total: netTotal,
-      total: subtotal,
-      grand_total: grandTotal,
-      rounded_total: Math.round(grandTotal),
-      outstanding_amount: grandTotal,
-      status: 'Draft',
-      docstatus: 0
+        ...(it.area !== undefined && it.area !== '' ? { area: Number(it.area) || it.area, custom_area: Number(it.area) || it.area } : {}),
+        ...(it.uom ? { uom: it.uom } : {}),
+        ...(it.stock_uom ? { stock_uom: it.stock_uom } : (it.uom ? { stock_uom: it.uom } : {}))
+      }))
     };
+
+    // Ensure valid CSRF token is available
+    let csrfToken = getCsrfToken();
+    if (!csrfToken && typeof ensureCsrfToken === 'function') {
+      try {
+        csrfToken = await ensureCsrfToken();
+      } catch (e) {
+        console.warn('Could not auto-fetch CSRF token:', e);
+      }
+    }
+
+    if (csrfToken) {
+      payload.csrf_token = csrfToken;
+    }
 
     let createdDoc = null;
     let fallbackId = `ACC-SINV-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
 
     if (erpnextConfig?.url) {
       try {
+        const headers = getAuthHeaders({ 'Content-Type': 'application/json' }, csrfToken);
         const res = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice`, {
           method: 'POST',
           credentials: 'include',
-          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          headers,
           body: JSON.stringify(payload)
         });
 
@@ -1138,22 +1480,87 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
           const json = await res.json();
           createdDoc = json.data || json;
         } else {
-          let errorMsg = `HTTP ${res.status}`;
+          // If 400 or 403 CSRF error, automatically refresh CSRF token and retry once
+          let retrySuccess = false;
+          let rawText = '';
           try {
-            const errJson = await res.json();
-            if (errJson._server_messages) {
-              const msgs = JSON.parse(errJson._server_messages);
-              errorMsg = msgs.map(m => {
-                try { return JSON.parse(m).message; } catch { return m; }
-              }).join('; ');
-            } else if (errJson.exception || errJson.message) {
-              errorMsg = errJson.exception || errJson.message;
-            }
+            rawText = await res.text();
           } catch { }
-          console.error('ERPNext Sales Invoice POST error:', errorMsg);
-          showToast(`ERPNext Error: ${errorMsg}`, 'error');
-          setSubmittingInvoice(false);
-          return;
+
+          if ((res.status === 400 || res.status === 403) && (rawText.includes('Invalid Request') || rawText.includes('CSRFTokenError'))) {
+            console.warn('Potential CSRF error detected, refreshing CSRF token and retrying Sales Invoice POST...');
+            try {
+              const freshToken = await ensureCsrfToken();
+              if (freshToken) {
+                payload.csrf_token = freshToken;
+                const retryHeaders = getAuthHeaders({ 'Content-Type': 'application/json' }, freshToken);
+                const retryRes = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: retryHeaders,
+                  body: JSON.stringify(payload)
+                });
+                if (retryRes.ok) {
+                  const retryJson = await retryRes.json();
+                  createdDoc = retryJson.data || retryJson;
+                  retrySuccess = true;
+                } else {
+                  rawText = await retryRes.text();
+                }
+              }
+            } catch (retryErr) {
+              console.warn('CSRF refresh retry failed:', retryErr);
+            }
+          }
+
+          if (!retrySuccess && !createdDoc) {
+            let errorMsg = `HTTP ${res.status}`;
+            let errJson = null;
+            try {
+              errJson = rawText ? JSON.parse(rawText) : null;
+            } catch { }
+
+            console.error('ERPNext Sales Invoice POST raw error response:', { status: res.status, errJson, rawText });
+
+            if (errJson?._server_messages) {
+              try {
+                const msgs = JSON.parse(errJson._server_messages);
+                errorMsg = msgs.map(m => {
+                  try {
+                    const parsed = JSON.parse(m);
+                    return parsed.message || parsed.error || m;
+                  } catch { return m; }
+                }).join('; ');
+              } catch {
+                errorMsg = errJson._server_messages;
+              }
+            } else if (errJson?.exception) {
+              errorMsg = errJson.exception;
+            } else if (errJson?.message) {
+              errorMsg = typeof errJson.message === 'string' ? errJson.message : JSON.stringify(errJson.message);
+            } else if (errJson?.exc) {
+              try {
+                const excArr = JSON.parse(errJson.exc);
+                errorMsg = Array.isArray(excArr) ? excArr[0] : errJson.exc;
+              } catch {
+                errorMsg = errJson.exc;
+              }
+            } else if (rawText) {
+              errorMsg = rawText;
+            }
+
+            if (errorMsg.includes('Traceback')) {
+              const lines = errorMsg.split('\n').map(l => l.trim()).filter(Boolean);
+              const errLine = lines.reverse().find(l => l.includes('Error:') || l.includes('Exception:'));
+              if (errLine) errorMsg = errLine;
+            }
+            errorMsg = errorMsg.replace(/<[^>]*>/g, '').trim();
+
+            console.error('ERPNext Sales Invoice POST error:', errorMsg);
+            showToast(`ERPNext Error: ${errorMsg}`, 'error');
+            setSubmittingInvoice(false);
+            return;
+          }
         }
       } catch (err) {
         console.warn('Network error posting Sales Invoice:', err);
@@ -1164,6 +1571,24 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     }
 
     const finalName = createdDoc?.name || fallbackId;
+    const finalGrandTotal = Number(createdDoc?.grand_total || createdDoc?.rounded_total || grandTotal) || grandTotal;
+    const finalOutstanding = Number(createdDoc?.outstanding_amount !== undefined ? createdDoc.outstanding_amount : finalGrandTotal) || finalGrandTotal;
+
+    // Explicitly guarantee terms_and_conditions custom field is saved on the document in ERPNext DB
+    if (createdDoc?.name && erpnextConfig?.url) {
+      fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          doctype: 'Sales Invoice',
+          name: createdDoc.name,
+          fieldname: 'terms_and_conditions',
+          value: resolvedTerms
+        })
+      }).catch(() => { });
+    }
+
     const newInv = {
       id: finalName,
       name: finalName,
@@ -1171,16 +1596,32 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
       customer: formValues.customer,
       propertyId: formValues.booking_id || (items[0]?.item_code) || 'Unit-N/A',
       booking_id: formValues.booking_id,
-      amount: grandTotal,
-      outstandingAmount: grandTotal,
-      issuedDate: formValues.posting_date,
-      dueDate: formValues.due_date,
-      startDate: formValues.start_date,
-      endDate: formValues.end_date,
+      amount: finalGrandTotal,
+      outstandingAmount: finalOutstanding,
+      issuedDate: resolvedPostingDate,
+      dueDate: resolvedDueDate,
+      startDate: resolvedStartDate,
+      endDate: resolvedEndDate,
+      terms_and_conditions: resolvedTerms,
+      terms: resolvedTerms,
       create_manual_invoice: 1,
       status: 'pending',
       creation: createdDoc?.creation || new Date().toISOString(),
-      rawDoc: createdDoc
+      rawDoc: {
+        ...(createdDoc || {}),
+        terms_and_conditions: resolvedTerms,
+        terms: resolvedTerms,
+        items: (createdDoc?.items && createdDoc.items.length > 0)
+          ? createdDoc.items.map((ci, idx) => ({
+              ...ci,
+              area: ci.area || ci.custom_area || items[idx]?.area,
+              custom_area: ci.custom_area || ci.area || items[idx]?.area
+            }))
+          : items.map(it => ({
+              ...it,
+              amount: (Number(it.qty) || 1) * (Number(it.rate) || 0)
+            }))
+      }
     };
 
     onAddInvoice(newInv);
@@ -1527,7 +1968,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                   <thead>
                     <tr style={{ background: '#1f2937', color: '#ffffff', borderBottom: '1px solid #374151' }}>
                       <th style={{ padding: '8px 10px', color: '#ffffff' }}>Item & Description</th>
-                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'center', width: 50 }}>Qty</th>
+                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'center', width: 50 }}>Area</th>
                       <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'right', width: 90 }}>Rate</th>
                       <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'right', width: 100 }}>Amount ({activeCurrency})</th>
                     </tr>
@@ -1542,7 +1983,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           )}
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'center', color: '#4b5563' }}>
-                          {item.qty || 1}
+                          {getItemArea(item)}
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'right', color: '#4b5563' }}>
                           $ {(Number(item.rate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -1738,10 +2179,16 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
               {/* Terms and Conditions */}
               <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 'var(--radius-md)', padding: 12, fontSize: 9, color: '#4b5563' }}>
                 <strong style={{ color: '#111827', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>Terms & Conditions</strong>
-                <p>1. Settle all invoice amounts on or before the specified due date.</p>
-                <p>2. Overdue payments will incur interest as per commercial tenancy agreement.</p>
-                <p>3. Payments are subject to Carpenters Properties commercial leasing terms.</p>
-                <p>4. Billing disputes must be raised in writing within 5 business days of receipt.</p>
+                {(() => {
+                  const rawTerms = doc?.terms_and_conditions || doc?.terms || selectedInvoice.terms_and_conditions || selectedInvoice.terms || invoiceDetailsExtra?.terms_and_conditions || selectedInvoice.rawDoc?.terms_and_conditions || selectedInvoice.rawDoc?.terms;
+                  const finalTerms = (rawTerms && String(rawTerms).trim()) ? String(rawTerms).trim() : (defaultInvoiceTerms || DEFAULT_INVOICE_TERMS);
+
+                  return (
+                    <div style={{ whiteSpace: 'pre-wrap', margin: 0, lineHeight: 1.5, color: '#374151' }}>
+                      {finalTerms}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Action buttons */}
@@ -2342,6 +2789,14 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                             </h4>
                           </div>
                         </div>
+                        <button
+                          type="button"
+                          onClick={handleAddItemRow}
+                          className="btn btn-secondary"
+                          style={{ padding: '4px 10px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '5px' }}
+                        >
+                          <Plus size={13} /> Add Unit
+                        </button>
                       </div>
 
                       <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', overflow: 'hidden' }}>
@@ -2355,6 +2810,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                                 <th style={{ padding: '8px 10px', width: '75px' }}>Period(Monthly)</th>
                                 <th style={{ padding: '8px 10px', width: '110px' }}>Rate ({formValues.currency})</th>
                                 <th style={{ padding: '8px 10px', width: '100px' }}>Amount</th>
+                                <th style={{ padding: '8px 10px', width: '80px', textAlign: 'center' }}>Area</th>
                                 <th style={{ padding: '8px 10px', width: '85px' }}>UOM</th>
                                 <th style={{ padding: '8px 10px', width: '40px' }}></th>
                               </tr>
@@ -2362,7 +2818,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                             <tbody>
                               {loadingBookingItems ? (
                                 <tr>
-                                  <td colSpan={8} style={{ padding: '28px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12.5px' }}>
+                                  <td colSpan={9} style={{ padding: '28px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12.5px' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                                       <Loader2 size={16} className="spin" style={{ color: '#0a6c66' }} />
                                       <span>Loading Booking Items from Booking {formValues.booking_id}...</span>
@@ -2371,7 +2827,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                                 </tr>
                               ) : items.length === 0 ? (
                                 <tr>
-                                  <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12.5px' }}>
+                                  <td colSpan={9} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12.5px' }}>
                                     No unit items selected. Please select a Customer and Booking ID above to load units.
                                   </td>
                                 </tr>
@@ -2430,6 +2886,16 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                                     </td>
                                     <td style={{ padding: '8px 10px', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
                                       ${(Number(row.amount) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td style={{ padding: '6px 10px' }}>
+                                      <input
+                                        type="text"
+                                        value={row.area ?? ''}
+                                        onChange={(e) => handleItemChange(idx, 'area', e.target.value)}
+                                        placeholder={((row.item_code || row.item_name || '').toLowerCase().match(/fee|charge|service|deposit|tax/)) ? '—' : 'Area'}
+                                        className="form-input"
+                                        style={{ height: '32px', fontSize: '12px', padding: '4px 6px', textAlign: 'center' }}
+                                      />
                                     </td>
                                     <td style={{ padding: '6px 10px' }}>
                                       <select
@@ -2683,6 +3149,29 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                         </div>
                       </div>
                       */}
+                    </div>
+
+                    {/* SECTION 4: Terms and Conditions */}
+                    <div style={{ background: 'var(--bg-secondary)', borderRadius: '10px', border: '1px solid var(--border-color)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ width: '26px', height: '26px', borderRadius: '6px', background: 'rgba(10, 108, 102, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0a6c66' }}>
+                            <FileText size={15} />
+                          </div>
+                          <div>
+                            <h4 style={{ margin: 0, fontSize: '13.5px', fontWeight: 700, color: 'var(--text-primary)' }}>Terms & Conditions</h4>
+                          </div>
+                        </div>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Auto-loaded from ERPNext Terms and Conditions</span>
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={formValues.terms_and_conditions || ''}
+                        onChange={(e) => setFormValues(prev => ({ ...prev, terms_and_conditions: e.target.value }))}
+                        placeholder="Invoice terms and conditions..."
+                        className="form-input"
+                        style={{ fontSize: '12px', lineHeight: 1.4, resize: 'vertical' }}
+                      />
                     </div>
 
                     {/* Discounts & Grand Total Summary */}
@@ -3110,7 +3599,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                   <thead>
                     <tr style={{ background: '#1f2937', color: '#ffffff', borderBottom: '1px solid #374151' }}>
                       <th style={{ padding: '8px 10px', color: '#ffffff' }}>Item & Description</th>
-                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'center', width: 50 }}>Qty</th>
+                      <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'center', width: 50 }}>Area</th>
                       <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'right', width: 90 }}>Rate</th>
                       <th style={{ padding: '8px 10px', color: '#ffffff', textAlign: 'right', width: 100 }}>Amount ({activeCurrency})</th>
                     </tr>
@@ -3125,7 +3614,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           )}
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'center', color: '#4b5563' }}>
-                          {item.qty || 1}
+                          {getItemArea(item)}
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'right', color: '#4b5563' }}>
                           $ {(Number(item.rate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -3316,6 +3805,21 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                     })()}
                   </div>
                 </div>
+              </div>
+
+              {/* Terms and Conditions in Receipt Modal */}
+              <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, padding: '10px 12px', fontSize: 9, color: '#4b5563', marginBottom: 16 }}>
+                <strong style={{ color: '#111827', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>Terms & Conditions</strong>
+                {(() => {
+                  const rawTerms = doc?.terms_and_conditions || doc?.terms || activeReceipt.terms_and_conditions || activeReceipt.terms || invoiceDetailsExtra?.terms_and_conditions;
+                  const finalTerms = (rawTerms && String(rawTerms).trim()) ? String(rawTerms).trim() : (defaultInvoiceTerms || DEFAULT_INVOICE_TERMS);
+
+                  return (
+                    <div style={{ whiteSpace: 'pre-wrap', margin: 0, lineHeight: 1.5, color: '#374151' }}>
+                      {finalTerms}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div style={{ display: 'flex', gap: 12 }}>

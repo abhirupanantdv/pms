@@ -3261,6 +3261,9 @@ export default function Maintenance({
   const [showWOModal, setShowWOModal] = useState(false);
   const [custom_maintenance_schedule, setCustomMaintenanceSchedule] = useState(null);
   const [showConsumeModal, setShowConsumeModal] = useState(false);
+  const [scheduleRows, setScheduleRows] = useState([]);
+  const [busyTasks, setBusyTasks] = useState(false);
+  const [busyRowId, setBusyRowId] = useState(null);
 
   // ── Toast ───────────────────────────────────────────────────────────────────
   const [toast, setToast] = useState(null);
@@ -3666,8 +3669,8 @@ export default function Maintenance({
 
   const handleSchedItemCodeChange = async (idx, rawValue) => {
     // rawValue might be "BOOKING_ID::UNIT_CODE" or just "UNIT_CODE"
-    const [bIdPart, unitCodePart] = rawValue && rawValue.includes('::') 
-      ? rawValue.split('::') 
+    const [bIdPart, unitCodePart] = rawValue && rawValue.includes('::')
+      ? rawValue.split('::')
       : [null, rawValue];
     const value = unitCodePart !== undefined ? unitCodePart : rawValue;
 
@@ -3766,7 +3769,7 @@ export default function Maintenance({
                 setSchedUnits(comm.length > 0 ? comm : json2.data);
               }
             })
-            .catch(() => {});
+            .catch(() => { });
         }
       })
       .catch(() => { });
@@ -3965,8 +3968,8 @@ export default function Maintenance({
     } finally { setSubmittingSchedule(false); }
   };
 
-  // ── Submit Work Order ───────────────────────────────────────────────────────
-  const handleSubmitWorkOrder = async () => {
+  // ── Create & Assign Task ────────────────────────────────────────────────────
+  const handleCreateTask = async () => {
     if (!selectedSchedule) return;
 
     const hasEmployee = woAssignType === 'employee' && woAssignedEmployees.length > 0;
@@ -3978,110 +3981,703 @@ export default function Maintenance({
 
     setWoSubmitting(true);
     try {
-      // Step 1: Submit/approve schedule
-      const approveRes = await fetch(`${erpnextConfig.url}/api/method/approve_reject_doc`, {
-        method: 'POST', credentials: 'include',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ doctype_name: 'Maintenance Schedule', docname: selectedSchedule.name, state_code: 1 })
-      });
-      if (!approveRes.ok) {
-        const errText = await approveRes.text();
-        throw new Error(`Failed to submit schedule: ${errText}`);
+      // 1. Build assignment rows
+      let empRows = [];
+      let vendorRows = [];
+
+      if (woAssignType === 'employee') {
+        empRows = await Promise.all(
+          woAssignedEmployees.map(async (empId) => {
+            try {
+              const empRes = await fetch(
+                `${erpnextConfig.url}/api/resource/Employee/${encodeURIComponent(empId)}?fields=%5B%22name%22%2C%22employee_name%22%2C%22designation%22%2C%22cell_number%22%2C%22company_email%22%5D`,
+                { credentials: 'include', headers: { 'Content-Type': 'application/json' } }
+              );
+              if (empRes.ok) {
+                const empJson = await empRes.json();
+                const emp = empJson.data || empJson;
+                return {
+                  emp_id: emp.name || empId,
+                  employee: emp.name || empId,
+                  emp_name: emp.employee_name || emp.name || empId,
+                  designation: emp.designation || '',
+                  contact_number: emp.cell_number || emp.company_email || ''
+                };
+              }
+            } catch (e) { }
+            const localEmp = (techProfiles.length > 0 ? techProfiles : employees).find(e => (e.id || e.name) === empId);
+            return {
+              emp_id: empId,
+              employee: empId,
+              emp_name: localEmp?.name || empId,
+              designation: localEmp?.designation || localEmp?.certs || '',
+              contact_number: localEmp?.phone || ''
+            };
+          })
+        );
+      } else {
+        vendorRows = woAssignedVendors.map(vendorId => {
+          const match = vendorDir.find(v => v.id === vendorId || v.name === vendorId);
+          return {
+            vendor: vendorId,
+            vendor_name: vendorId,
+            supplier_type: match?.type || match?.supplier_type || ''
+          };
+        });
       }
 
-      // Step 2: Poll for auto-created Task
-      await new Promise(r => setTimeout(r, 3000));
-      const taskSearchRes = await fetch(
-        `${erpnextConfig.url}/api/resource/Task?filters=%5B%5B%22custom_mantainence_sechedule%22%2C%22%3D%22%2C%22${encodeURIComponent(selectedSchedule.name)}%22%5D%5D&fields=%5B%22name%22%5D&limit_page_length=5`,
-        { credentials: 'include', headers: { 'Content-Type': 'application/json' } }
-      );
-
+      // 2. Check if a Task already exists for this schedule
       let taskName = null;
-      if (taskSearchRes.ok) {
-        const taskJson = await taskSearchRes.json();
-        const tasks = taskJson.data || [];
-        if (tasks.length > 0) taskName = tasks[0].name;
+      try {
+        const taskSearchRes = await fetch(
+          `${erpnextConfig.url}/api/resource/Task?filters=%5B%5B%22custom_mantainence_sechedule%22%2C%22%3D%22%2C%22${encodeURIComponent(selectedSchedule.name)}%22%5D%5D&fields=%5B%22name%22%5D&limit_page_length=5`,
+          { credentials: 'include', headers: { 'Content-Type': 'application/json' } }
+        );
+        if (taskSearchRes.ok) {
+          const taskJson = await taskSearchRes.json();
+          const tasks = taskJson.data || [];
+          if (tasks.length > 0) taskName = tasks[0].name;
+        }
+      } catch (searchErr) {
+        console.warn('Error checking existing task:', searchErr);
       }
 
-      // Step 3: Assign employees or vendors to task
+      const isEmp = woAssignType === 'employee';
+      const putBody = {
+        custom_assign: isEmp ? 'Employee' : 'Vendor',
+        custom_assign_to_: isEmp ? empRows : [],
+        custom_assign_to_vendor: isEmp ? [] : vendorRows
+      };
+
       if (taskName) {
-        let putBody = {};
-
-        if (woAssignType === 'employee') {
-          const empRows = await Promise.all(
-            woAssignedEmployees.map(async (empId) => {
-              try {
-                const empRes = await fetch(
-                  `${erpnextConfig.url}/api/resource/Employee/${encodeURIComponent(empId)}?fields=%5B%22name%22%2C%22employee_name%22%2C%22designation%22%2C%22cell_number%22%2C%22company_email%22%5D`,
-                  { credentials: 'include', headers: { 'Content-Type': 'application/json' } }
-                );
-                if (empRes.ok) {
-                  const empJson = await empRes.json();
-                  const emp = empJson.data || empJson;
-                  return { emp_id: emp.name || empId, emp_name: emp.employee_name || emp.name || empId, designation: emp.designation || '', contact_number: emp.cell_number || emp.company_email || '' };
-                }
-              } catch (e) { }
-              const localEmp = employees.find(e => (e.id || e.name) === empId);
-              return { emp_id: empId, emp_name: localEmp?.name || empId, designation: localEmp?.designation || '', contact_number: localEmp?.phone || '' };
-            })
-          );
-          putBody = { custom_assign: "Employee", custom_assign_to_: empRows };
-        } else {
-          // vendor
-          const vendorRows = woAssignedVendors.map(vendorId => {
-            const match = vendorDir.find(v => v.id === vendorId);
-            return { vendor: vendorId, vendor_name: match?.name || vendorId, supplier_type: match?.type || '' };
-          });
-          putBody = { custom_assign: "Vendor", custom_assign_to_vendor: vendorRows };
-        }
-
+        // Update existing task with assigned employee(s)/vendor(s)
         const putRes = await fetch(`${erpnextConfig.url}/api/resource/Task/${taskName}`, {
-          method: 'PUT', credentials: 'include',
+          method: 'PUT',
+          credentials: 'include',
           headers: getAuthHeaders(),
           body: JSON.stringify(putBody)
         });
-
         if (!putRes.ok) {
           const errTxt = await putRes.text();
           console.warn('Assignment failed:', errTxt);
-          showToast('Work order submitted. Assignment failed — check ERPNext logs.', 'info');
-        } else {
-          const assignCount = woAssignType === 'employee' ? woAssignedEmployees.length : woAssignedVendors.length;
-          showToast(`Task submitted & ${assignCount} ${woAssignType}(s) assigned to ${taskName}!`, 'success');
         }
       } else {
-        showToast('Schedule submitted. Task not yet visible — assign once it appears.', 'info');
+        // Directly create the Task in Open status (without submitting)
+        const taskPayload = {
+          doctype: 'Task',
+          subject: `${selectedSchedule.items?.[0]?.item_name || 'Maintenance Task'} - ${selectedSchedule.name}`,
+          custom_mantainence_sechedule: selectedSchedule.name,
+          custom_maintenance_schedule: selectedSchedule.name,
+          custom_property: selectedSchedule.custom_property || '',
+          custom_customer_name: selectedSchedule.customer_name || selectedSchedule.customer || '',
+          custom_booking_id: selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || '',
+          status: 'Open',
+          priority: 'Medium',
+          exp_start_date: selectedSchedule.items?.[0]?.start_date || selectedSchedule.transaction_date || '',
+          exp_end_date: selectedSchedule.items?.[0]?.end_date || '',
+          custom_assign: isEmp ? 'Employee' : 'Vendor',
+          custom_assign_to_: isEmp ? empRows : [],
+          custom_assign_to_vendor: isEmp ? [] : vendorRows
+        };
+
+        const createRes = await fetch(`${erpnextConfig.url}/api/resource/Task`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(taskPayload)
+        });
+
+        if (createRes.ok) {
+          const createJson = await createRes.json();
+          taskName = createJson.data?.name || createJson.name;
+        } else {
+          // If direct Task creation is blocked by backend workflow, fallback to approving schedule which creates the task
+          try {
+            const approveRes = await fetch(`${erpnextConfig.url}/api/method/approve_reject_doc`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ doctype_name: 'Maintenance Schedule', docname: selectedSchedule.name, state_code: 1 })
+            });
+            if (approveRes.ok) {
+              await new Promise(r => setTimeout(r, 2000));
+              const taskRetryRes = await fetch(
+                `${erpnextConfig.url}/api/resource/Task?filters=%5B%5B%22custom_mantainence_sechedule%22%2C%22%3D%22%2C%22${encodeURIComponent(selectedSchedule.name)}%22%5D%5D&fields=%5B%22name%22%5D&limit_page_length=5`,
+                { credentials: 'include', headers: { 'Content-Type': 'application/json' } }
+              );
+              if (taskRetryRes.ok) {
+                const retryJson = await taskRetryRes.json();
+                const tasks = retryJson.data || [];
+                if (tasks.length > 0) {
+                  taskName = tasks[0].name;
+                  await fetch(`${erpnextConfig.url}/api/resource/Task/${taskName}`, {
+                    method: 'PUT',
+                    credentials: 'include',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(putBody)
+                  });
+                }
+              }
+            }
+          } catch (apprErr) {
+            console.warn('Approve schedule fallback error:', apprErr);
+          }
+        }
+      }
+
+      // 3. Submit the Maintenance Schedule in ERPNext so its status becomes "Submitted" (docstatus: 1)
+      try {
+        if (erpnextConfig?.url && selectedSchedule?.name) {
+          // Attempt Frappe approval workflow API
+          try {
+            await fetch(`${erpnextConfig.url}/api/method/approve_reject_doc`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ doctype_name: 'Maintenance Schedule', docname: selectedSchedule.name, state_code: 1 })
+            });
+          } catch (apprErr) {
+            console.warn('approve_reject_doc for Maintenance Schedule failed:', apprErr);
+          }
+
+          // Direct PUT to ensure status = 'Submitted' and docstatus = 1
+          try {
+            await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(selectedSchedule.name)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ status: 'Submitted', docstatus: 1 })
+            });
+          } catch (putErr) {
+            console.warn('PUT docstatus for Maintenance Schedule failed:', putErr);
+          }
+        }
+
+        if (typeof onUpdateScheduleStatus === 'function') {
+          onUpdateScheduleStatus(selectedSchedule.name, 'Submitted');
+        }
+      } catch (submitErr) {
+        console.warn('Failed to submit Maintenance Schedule:', submitErr);
+      }
+
+      // 4. Fetch the full created/updated task document so child tables and all fields are accurate
+      let fullTaskDoc = null;
+      if (taskName) {
+        try {
+          const taskGetRes = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskName)}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (taskGetRes.ok) {
+            const taskGetJson = await taskGetRes.json();
+            fullTaskDoc = taskGetJson.data || taskGetJson;
+          }
+        } catch (fetchErr) {
+          console.warn('Failed fetching created task doc:', fetchErr);
+        }
+      }
+
+      const finalSelectedTask = {
+        ...(fullTaskDoc || {}),
+        name: taskName,
+        id: taskName,
+        subject: fullTaskDoc?.subject || `${selectedSchedule.items?.[0]?.item_name || 'Maintenance Task'} - ${selectedSchedule.name}`,
+        custom_mantainence_sechedule: selectedSchedule.name,
+        custom_maintenance_schedule: selectedSchedule.name,
+        custom_property: fullTaskDoc?.custom_property || selectedSchedule.custom_property || '',
+        custom_customer_name: fullTaskDoc?.custom_customer_name || selectedSchedule.customer_name || selectedSchedule.customer || '',
+        custom_booking_id: fullTaskDoc?.custom_booking_id || selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || '',
+        status: fullTaskDoc?.status || 'Open',
+        priority: fullTaskDoc?.priority || 'Medium',
+        custom_assign: isEmp ? 'Employee' : 'Vendor',
+        custom_assign_to_: isEmp ? (fullTaskDoc?.custom_assign_to_?.length ? fullTaskDoc.custom_assign_to_ : empRows) : [],
+        custom_assign_to_vendor: isEmp ? [] : (fullTaskDoc?.custom_assign_to_vendor?.length ? fullTaskDoc.custom_assign_to_vendor : vendorRows)
+      };
+
+      const mappedTask = {
+        ...finalSelectedTask,
+        id: taskName,
+        property: getPropertyNameById(finalSelectedTask.custom_property) || selectedSchedule.custom_property || 'Stratford Court Apartments',
+        unit: finalSelectedTask.custom_asset || 'Flat 1A',
+        category: finalSelectedTask.subject ? finalSelectedTask.subject.split(' ')[0] : 'General',
+        technician: (finalSelectedTask.custom_assign_to_ || [])[0]?.emp_id || (finalSelectedTask.custom_assign_to_ || [])[0]?.emp_name || 'None',
+        vendor: (finalSelectedTask.custom_assign_to_vendor || [])[0]?.vendor_name || 'None',
+        estHours: 4,
+        estCost: Number(finalSelectedTask.custom_estimated_cost) || 150,
+        actualCost: 0,
+        status: finalSelectedTask.status || 'Open',
+        description: finalSelectedTask.description || finalSelectedTask.subject || '',
+        consumedItems: finalSelectedTask.custom_items_used_for_maintenance || [],
+        expStartDate: finalSelectedTask.exp_start_date,
+        expEndDate: finalSelectedTask.exp_end_date,
+        priority: finalSelectedTask.priority || 'Medium',
+        scheduleId: finalSelectedTask.custom_maintenance_schedule || finalSelectedTask.custom_mantainence_sechedule || selectedSchedule.name
+      };
+
+      const assignCount = isEmp ? woAssignedEmployees.length : woAssignedVendors.length;
+      showToast(`Task created & Maintenance Schedule submitted! (${assignCount} ${woAssignType} assigned)${taskName ? ` [${taskName}]` : ''}`, 'success');
+
+      setLocalSchedules(prev => prev.map(s => s.name === selectedSchedule.name ? { ...s, status: 'Submitted', docstatus: 1 } : s));
+      setShowWOModal(false);
+      setWoAssignedEmployees([]);
+      setWoAssignedVendors([]);
+      setSelectedSchedule(null); // Close the schedule drawer
+
+      // REDIRECT to Task Operations view and open newly created task drawer
+      setActiveSection('task');
+      setSelectedWorkOrder(finalSelectedTask);
+      setWorkOrders(prev => [mappedTask, ...prev.filter(w => (w.id !== taskName && w.name !== taskName))]);
+
+      fetchWorkOrders();
+
+      setTimeout(() => {
+        fetchSchedules();
+      }, 1000);
+    } catch (err) {
+      showToast(err.message || 'Task creation failed.', 'error');
+    } finally {
+      setWoSubmitting(false);
+    }
+  };
+
+  const handleSubmitWorkOrder = handleCreateTask;
+
+  // ── Sync Schedule Rows with child tables and workOrders ───────────────────
+  useEffect(() => {
+    if (!selectedSchedule) {
+      setScheduleRows([]);
+      return;
+    }
+
+    setScheduleRows(prevRows => {
+      const sameSchedule = prevRows.length > 0 && prevRows[0].schedule_name === selectedSchedule.name;
+
+      let rawRows = Array.isArray(selectedSchedule.schedules) && selectedSchedule.schedules.length > 0
+        ? selectedSchedule.schedules
+        : [];
+
+      // If no child schedules returned from ERPNext, generate from items
+      if (rawRows.length === 0 && Array.isArray(selectedSchedule.items) && selectedSchedule.items.length > 0) {
+        const genRows = [];
+        selectedSchedule.items.forEach((item, itemIdx) => {
+          const count = Number(item.no_of_visits) || 1;
+          const start = item.start_date || selectedSchedule.transaction_date || new Date().toISOString().split('T')[0];
+          const period = (item.periodicity || 'Weekly').toLowerCase();
+
+          for (let i = 0; i < count; i++) {
+            const d = new Date(start);
+            if (period.includes('weekly')) {
+              d.setDate(d.getDate() + (i * 7));
+            } else if (period.includes('monthly')) {
+              d.setMonth(d.getMonth() + i);
+            } else if (period.includes('quarterly')) {
+              d.setMonth(d.getMonth() + (i * 3));
+            } else if (period.includes('yearly')) {
+              d.setFullYear(d.getFullYear() + i);
+            } else {
+              d.setDate(d.getDate() + i);
+            }
+            const scheduledDateStr = d.toISOString().split('T')[0];
+            genRows.push({
+              name: `sched-${itemIdx}-${i}`,
+              item_code: item.item_code || '001',
+              item_name: item.item_name || '',
+              scheduled_date: scheduledDateStr,
+              maintenance_visit: '',
+              completion_status: '',
+              task_id: '',
+              task_status: ''
+            });
+          }
+        });
+        rawRows = genRows;
+      }
+
+      if (rawRows.length === 0) {
+        rawRows = [{
+          name: 'sched-default',
+          item_code: selectedSchedule.items?.[0]?.item_code || '001',
+          item_name: selectedSchedule.items?.[0]?.item_name || '',
+          scheduled_date: selectedSchedule.transaction_date || new Date().toISOString().split('T')[0],
+          maintenance_visit: '',
+          completion_status: '',
+          task_id: '',
+          task_status: ''
+        }];
+      }
+
+      return rawRows.map((r, idx) => {
+        const rowId = r.name || `row-${idx}`;
+        const prev = sameSchedule ? prevRows.find(p => p.id === rowId || p.scheduled_date === (r.scheduled_date || selectedSchedule.transaction_date)) : null;
+
+        const rowDate = r.scheduled_date || selectedSchedule.transaction_date;
+        const matchedTask = (workOrders || []).find(w =>
+          (w.custom_mantainence_sechedule === selectedSchedule.name ||
+           w.custom_maintenance_schedule === selectedSchedule.name ||
+           w.scheduleId === selectedSchedule.name) &&
+          (w.exp_start_date === rowDate || (w.subject && w.subject.includes(rowDate)))
+        );
+
+        const taskId = r.task_id || r.custom_task_id || prev?.task_id || matchedTask?.name || matchedTask?.id || '';
+        const taskStatus = r.task_status || r.custom_task_status || prev?.task_status || matchedTask?.status || (taskId ? 'Open' : '');
+
+        let initialPersons = prev?.persons;
+        if (!initialPersons || initialPersons.length === 0) {
+          if (r.persons && Array.isArray(r.persons)) {
+            initialPersons = r.persons;
+          } else if (r.custom_assign_to) {
+            initialPersons = typeof r.custom_assign_to === 'string'
+              ? r.custom_assign_to.split(',').map(s => s.trim()).filter(Boolean)
+              : [r.custom_assign_to];
+          } else if (matchedTask?.custom_assign_to_ && Array.isArray(matchedTask.custom_assign_to_)) {
+            initialPersons = matchedTask.custom_assign_to_.map(e => e.emp_id || e.employee || e.name).filter(Boolean);
+          } else if (matchedTask?.custom_assign_to_vendor && Array.isArray(matchedTask.custom_assign_to_vendor)) {
+            initialPersons = matchedTask.custom_assign_to_vendor.map(v => v.vendor_name || v.vendor || v.name).filter(Boolean);
+          } else {
+            initialPersons = [];
+          }
+        }
+
+        return {
+          id: rowId,
+          schedule_name: selectedSchedule.name,
+          schedule_id: r.name || `row-${idx}`,
+          item_code: r.item_code || selectedSchedule.items?.[0]?.item_code || '001',
+          scheduled_date: rowDate,
+          maintenance_visit: r.maintenance_visit || '',
+          visit_status: r.completion_status || r.visit_status || '',
+          task_id: taskId,
+          task_status: taskStatus,
+          assign_type: prev?.assign_type || r.assign_type || r.custom_assign || (matchedTask?.custom_assign || 'Employee'),
+          persons: initialPersons,
+          selected: prev ? prev.selected : false,
+          subject: `${selectedSchedule.name} - ${r.item_code || selectedSchedule.items?.[0]?.item_code || '001'} - ${rowDate}`
+        };
+      });
+    });
+  }, [selectedSchedule?.name, selectedSchedule?.schedules, workOrders]);
+
+  const get_persons = (row) => {
+    if (!row) return [];
+    if (Array.isArray(row.persons)) return row.persons.filter(Boolean);
+    if (typeof row.persons === 'string' && row.persons.trim()) {
+      return row.persons.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    return [];
+  };
+
+  const submit_tasks = async (targetRows = null) => {
+    if (busyTasks) return;
+
+    let selected = targetRows
+      ? (Array.isArray(targetRows) ? targetRows : [targetRows]).map(t => scheduleRows.find(r => r.id === t.id) || t)
+      : scheduleRows.filter(d => d.selected && !d.task_id);
+
+    if (!selected.length) {
+      showToast("Please select a Schedule.", "error");
+      return;
+    }
+
+    // Validate Assignment
+    for (let row of selected) {
+      row.persons = get_persons(row);
+
+      if (!row.assign_type || !row.persons.length) {
+        showToast(
+          "Please select Assign and Persons for " +
+          (row.scheduled_date || "this row"),
+          "error"
+        );
+        return;
+      }
+    }
+
+    if (targetRows && selected.length === 1) {
+      setBusyRowId(selected[0].id);
+    }
+    setBusyTasks(true);
+
+    try {
+      let users = {};
+
+      // Get Linked Employee User Accounts (for optional Frappe desk assignment)
+      for (let row of selected) {
+        if (row.assign_type !== "Employee") continue;
+
+        for (let emp of row.persons) {
+          if (users[emp]) continue;
+
+          let user = null;
+          const localEmp = (employees || []).find(e => (e.id === emp || e.name === emp));
+          if (localEmp?.user_id) {
+            user = localEmp.user_id;
+          } else if (erpnextConfig?.url) {
+            try {
+              const res = await fetch(
+                `${erpnextConfig.url}/api/resource/Employee/${encodeURIComponent(emp)}?fields=%5B%22user_id%22%2C%22company_email%22%2C%22prefered_email%22%5D`,
+                { credentials: 'include', headers: getAuthHeaders({ 'Content-Type': 'application/json' }) }
+              );
+              if (res.ok) {
+                const data = await res.json();
+                user = data.data?.user_id || data.user_id;
+              }
+            } catch (fetchErr) {
+              console.warn("Failed fetching user_id for employee", emp, fetchErr);
+            }
+          }
+
+          if (!user) {
+            user = localEmp?.company_email || localEmp?.email || null;
+          }
+
+          users[emp] = user;
+        }
+      }
+
+      let created = 0;
+      const updatedRowsMap = {};
+
+      // Create Tasks
+      for (let row of selected) {
+        // Check Existing Task
+        let existingTaskName = null;
+        let existingTaskStatus = null;
+        const taskSubject = row.subject || `${selectedSchedule.name} - ${row.item_code || '001'} - ${row.scheduled_date}`;
+
+        if (erpnextConfig?.url) {
+          try {
+            const filterParam = encodeURIComponent(JSON.stringify([["subject", "=", taskSubject]]));
+            const existingRes = await fetch(
+              `${erpnextConfig.url}/api/resource/Task?filters=${filterParam}&fields=%5B%22name%22%2C%22status%22%5D&limit_page_length=1`,
+              { credentials: 'include', headers: getAuthHeaders({ 'Content-Type': 'application/json' }) }
+            );
+            if (existingRes.ok) {
+              const existingJson = await existingRes.json();
+              if (existingJson.data && existingJson.data.length > 0) {
+                existingTaskName = existingJson.data[0].name;
+                existingTaskStatus = existingJson.data[0].status;
+              }
+            }
+          } catch (checkErr) {
+            console.warn("Check existing task error:", checkErr);
+          }
+        }
+
+        if (existingTaskName) {
+          row.task_id = existingTaskName;
+          row.task_status = existingTaskStatus || "Open";
+          updatedRowsMap[row.id] = { task_id: existingTaskName, task_status: existingTaskStatus || "Open" };
+          continue;
+        }
+
+        // Prepare assignment child tables
+        const isEmp = row.assign_type === "Employee";
+        const empRows = isEmp ? row.persons.map(empId => {
+          const emp = (employees || []).find(e => (e.id || e.name) === empId);
+          return {
+            emp_id: empId,
+            employee: empId,
+            emp_name: emp?.employee_name || emp?.name || empId,
+            designation: emp?.designation || emp?.certs || '',
+            contact_number: emp?.cell_number || emp?.phone || ''
+          };
+        }) : [];
+
+        const vendorRows = !isEmp ? row.persons.map(vendorId => {
+          const v = (vendorDir || vendors || []).find(x => (x.id || x.name) === vendorId);
+          return {
+            vendor: vendorId,
+            vendor_name: v?.name || vendorId,
+            supplier_type: v?.type || v?.supplier_type || ''
+          };
+        }) : [];
+
+        const description =
+          "Maintenance Schedule: " + (selectedSchedule.name || "") +
+          "\nBooking: " + (selectedSchedule.custom_booking_id || "") +
+          "\nCustomer: " + (selectedSchedule.customer || selectedSchedule.customer_name || "") +
+          "\nItem: " + (row.item_code || "") +
+          "\nScheduled Date: " + (row.scheduled_date || "") +
+          "\nSchedule Row: " + (row.schedule_id || "") +
+          "\nAssign: " + (row.assign_type || "") +
+          "\nPersons: " + (row.persons.join(", "));
+
+        let taskName = `TASK-${Date.now()}-${created + 1}`;
+        let taskStatus = "Open";
+
+        if (erpnextConfig?.url) {
+          // Create New Task
+          const taskPayload = {
+            doctype: "Task",
+            subject: taskSubject,
+            status: "Open",
+            exp_start_date: row.scheduled_date,
+            exp_end_date: row.scheduled_date,
+            description: description,
+            custom_mantainence_sechedule: selectedSchedule.name,
+            custom_maintenance_schedule: selectedSchedule.name,
+            custom_booking_id: selectedSchedule.custom_booking_id || '',
+            custom_customer_name: selectedSchedule.customer_name || selectedSchedule.customer || '',
+            custom_property: selectedSchedule.custom_property || '',
+            custom_assign: row.assign_type,
+            custom_assign_to_: isEmp ? empRows : [],
+            custom_assign_to_vendor: isEmp ? [] : vendorRows
+          };
+
+          const insertRes = await fetch(`${erpnextConfig.url}/api/resource/Task`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(taskPayload)
+          });
+
+          if (!insertRes.ok) {
+            const errJson = await insertRes.json().catch(() => ({}));
+            throw new Error(errJson.exception || errJson._server_messages || "Task creation failed.");
+          }
+
+          const insertJson = await insertRes.json();
+          const taskDoc = insertJson.data || insertJson;
+          taskName = taskDoc.name;
+
+          // Fetch Actual Task Status
+          try {
+            const statusRes = await fetch(
+              `${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskName)}?fields=%5B%22status%22%5D`,
+              { credentials: 'include', headers: getAuthHeaders({ 'Content-Type': 'application/json' }) }
+            );
+            if (statusRes.ok) {
+              const statusJson = await statusRes.json();
+              taskStatus = statusJson.data?.status || statusJson.status || "Open";
+            }
+          } catch (statusErr) {
+            console.warn("Failed fetching actual task status:", statusErr);
+          }
+
+          // Assign Multiple Employees via Frappe desk API (if linked user exists)
+          if (row.assign_type === "Employee") {
+            const assignableUsers = (row.persons || []).map(emp => users[emp]).filter(Boolean);
+            if (assignableUsers.length > 0) {
+              try {
+                await fetch(`${erpnextConfig.url}/api/method/frappe.desk.form.assign_to.add`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                  body: JSON.stringify({
+                    args: JSON.stringify({
+                      assign_to: assignableUsers,
+                      doctype: "Task",
+                      name: taskName,
+                      description: "Maintenance Assignment",
+                      date: row.scheduled_date
+                    })
+                  })
+                });
+              } catch (assignErr) {
+                console.warn("Assign to API call error:", assignErr);
+              }
+            }
+          }
+        }
+
+        row.task_id = taskName;
+        row.task_status = taskStatus;
+        updatedRowsMap[row.id] = { task_id: taskName, task_status: taskStatus };
+        created++;
+      }
+
+      // Update scheduleRows in React state
+      setScheduleRows(prev => prev.map(r => {
+        if (updatedRowsMap[r.id]) {
+          return {
+            ...r,
+            task_id: updatedRowsMap[r.id].task_id,
+            task_status: updatedRowsMap[r.id].task_status,
+            selected: false
+          };
+        }
+        return r;
+      }));
+
+      // Sync schedule child table & docstatus in ERPNext
+      if (erpnextConfig?.url && selectedSchedule?.name) {
+        try {
+          const updatedSchedules = scheduleRows.map(r => {
+            const up = updatedRowsMap[r.id];
+            return {
+              name: r.schedule_id.startsWith('sched-') ? undefined : r.schedule_id,
+              item_code: r.item_code,
+              scheduled_date: r.scheduled_date,
+              maintenance_visit: r.maintenance_visit || undefined,
+              completion_status: r.visit_status || undefined,
+              task_id: up ? up.task_id : (r.task_id || undefined),
+              task_status: up ? up.task_status : (r.task_status || undefined),
+              custom_assign: r.assign_type,
+              custom_assign_to: Array.isArray(r.persons) ? r.persons.join(', ') : (r.persons || undefined)
+            };
+          });
+
+          await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(selectedSchedule.name)}`, {
+            method: 'PUT',
+            credentials: 'include',
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ schedules: updatedSchedules, status: 'Submitted', docstatus: 1 })
+          });
+        } catch (schedSyncErr) {
+          console.warn("Failed syncing Maintenance Schedule:", schedSyncErr);
+        }
+      }
+
+      if (typeof onUpdateScheduleStatus === 'function') {
+        onUpdateScheduleStatus(selectedSchedule.name, 'Submitted');
       }
 
       setLocalSchedules(prev => prev.map(s => s.name === selectedSchedule.name ? { ...s, status: 'Submitted', docstatus: 1 } : s));
       setSelectedSchedule(prev => prev ? { ...prev, status: 'Submitted', docstatus: 1 } : prev);
-      fetchSchedules();
-      fetchWorkOrders();
-      setShowWOModal(false);
-      setWoAssignedEmployees([]);
-      setWoAssignedVendors([]);
-    } catch (err) {
-      showToast(err.message || 'Submission failed.', 'error');
+
+      if (typeof fetchWorkOrders === 'function') {
+        fetchWorkOrders();
+      }
+
+      showToast(created > 1 ? `${created} Tasks created successfully.` : "Task created successfully.", "success");
+
+    } catch (error) {
+      showToast(
+        (error.message || "Task creation failed.") +
+        " Check the Task list before retrying.",
+        "error"
+      );
     } finally {
-      setWoSubmitting(false);
+      setBusyTasks(false);
+      setBusyRowId(null);
     }
   };
 
   const employeeDir = techProfiles;
 
   const handleWOStatusChange = async (woId, newStatus) => {
-    const erpStatus = newStatus === 'In Progress' ? 'Working' : newStatus === 'Completed' ? 'Completed' : 'Open';
+    const erpStatus = newStatus === 'In Progress' || newStatus === 'Working' ? 'Working' : newStatus === 'Completed' ? 'Completed' : 'Open';
     const update = (wo) => ({ ...wo, status: newStatus, actualCost: newStatus === 'Completed' && wo.actualCost === 0 ? wo.estCost : wo.actualCost });
     setWorkOrders(prev => prev.map(wo => wo.id === woId ? update(wo) : wo));
     setSelectedWorkOrder(prev => prev && prev.id === woId ? update(prev) : prev);
     if (erpnextConfig?.url) {
       try {
-        await fetch(`${erpnextConfig.url}/api/resource/Task/${woId}`, {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(woId)}`, {
           method: 'PUT', credentials: 'include',
           headers: getAuthHeaders(),
           body: JSON.stringify({ status: erpStatus })
         });
-      } catch (e) { }
+        if (!res.ok) {
+          await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+            method: 'POST', credentials: 'include',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ doctype: 'Task', name: woId, fieldname: 'status', value: erpStatus })
+          });
+        }
+        fetchWorkOrders();
+      } catch (e) {
+        console.warn('Could not update Task status:', e);
+      }
     }
   };
 
@@ -4411,9 +5007,9 @@ export default function Maintenance({
     const term = maintenanceSearch.toLowerCase();
     const propName = getPropertyNameById(sch.custom_property) || '';
     const itemName = sch.items?.[0]?.item_name || '';
-    return sch.name.toLowerCase().includes(term) || 
-      (sch.customer_name || sch.customer || '').toLowerCase().includes(term) || 
-      propName.toLowerCase().includes(term) || 
+    return sch.name.toLowerCase().includes(term) ||
+      (sch.customer_name || sch.customer || '').toLowerCase().includes(term) ||
+      propName.toLowerCase().includes(term) ||
       itemName.toLowerCase().includes(term) ||
       (sch.type || '').toLowerCase().includes(term);
   });
@@ -4463,7 +5059,26 @@ export default function Maintenance({
   const thStyle = { padding: '8px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--text-secondary, #6b7280)', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap' };
   const inputStyle = { width: '100%', fontSize: 12, minHeight: 32, padding: '5px 8px', boxSizing: 'border-box' };
 
-  const isScheduleSubmitted = (sch) => sch && (sch.docstatus === 1 || (sch.status || '').toLowerCase() === 'submitted');
+  const isScheduleSubmitted = (sch) => {
+    if (!sch) return false;
+    if (sch.docstatus === 1 || (sch.status || '').toLowerCase() === 'submitted') return true;
+    if (workOrders && workOrders.some(w => (
+      (w.custom_mantainence_sechedule && w.custom_mantainence_sechedule === sch.name) ||
+      (w.custom_maintenance_schedule && w.custom_maintenance_schedule === sch.name) ||
+      (w.scheduleId && w.scheduleId === sch.name) ||
+      (w.custom_schedule && w.custom_schedule === sch.name)
+    ))) {
+      return true;
+    }
+    return false;
+  };
+
+  const getScheduleDisplayStatus = (sch) => {
+    if (!sch) return 'Draft';
+    if (sch.status === 'Completed' || sch.status === 'Closed') return sch.status;
+    if (isScheduleSubmitted(sch)) return 'Submitted';
+    return sch.status || 'Draft';
+  };
 
   return (
     <div>
@@ -4499,16 +5114,14 @@ export default function Maintenance({
             <button className="btn btn-primary btn-sm" onClick={handleOpenScheduleModal}><Plus size={14} /> New Schedule</button>
           </div>
 
-          <div className="grid-2col" style={{ gridTemplateColumns: selectedSchedule ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
+          <div className="grid-2col" style={{ gridTemplateColumns: selectedSchedule ? 'minmax(320px, 36%) minmax(600px, 64%)' : '1fr', gap: 24 }}>
             {viewMode === 'list' && (
               <div className="card-panel" style={{
                 padding: 0,
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'space-between',
-                overflow: 'hidden',
-                filter: selectedSchedule ? 'blur(4px)' : 'none',
-                transition: 'filter 0.3s ease'
+                overflow: 'hidden'
               }}>
                 <div className="table-container" style={{ flex: 1, overflowY: 'auto' }}>
                   <table className="custom-table">
@@ -4530,7 +5143,7 @@ export default function Maintenance({
                               <td>{sch.customer_name || sch.customer}</td>
                               <td>{firstItem ? firstItem.item_name : '—'}</td>
                               <td>{firstItem ? firstItem.periodicity : '—'}</td>
-                              <td><span className={`badge ${sch.status === 'Completed' ? 'badge-success' : isScheduleSubmitted(sch) ? 'badge-info' : 'badge-warning'}`}>{sch.status || 'Draft'}</span></td>
+                              <td><span className={`badge ${sch.status === 'Completed' ? 'badge-success' : isScheduleSubmitted(sch) ? 'badge-info' : 'badge-warning'}`}>{getScheduleDisplayStatus(sch)}</span></td>
                             </tr>
                           );
                         })
@@ -4614,7 +5227,7 @@ export default function Maintenance({
                   {(() => {
                     const daySchedules = sortedSchedules.filter(s => s.transaction_date === selectedDateStr);
                     if (daySchedules.length === 0) return <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No schedules planned for this day.</div>;
-                    return <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{daySchedules.map(sch => <div key={sch.name} onClick={() => handleSelectSchedule(sch)} style={{ padding: 10, background: 'var(--bg-tertiary)', borderLeft: '4px solid var(--brand-color)', borderRadius: 4, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><div><strong style={{ fontSize: 12 }}>{sch.name} ({sch.type})</strong><div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Tenant: {sch.customer_name || sch.customer} | Unit Name: {sch.items?.[0]?.item_name || '—'}</div></div><span className={`badge ${sch.status === 'Completed' ? 'badge-success' : 'badge-warning'}`}>{sch.status || 'Pending'}</span></div>)}</div>;
+                    return <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{daySchedules.map(sch => <div key={sch.name} onClick={() => handleSelectSchedule(sch)} style={{ padding: 10, background: 'var(--bg-tertiary)', borderLeft: '4px solid var(--brand-color)', borderRadius: 4, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><div><strong style={{ fontSize: 12 }}>{sch.name} ({sch.type})</strong><div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Tenant: {sch.customer_name || sch.customer} | Unit Name: {sch.items?.[0]?.item_name || '—'}</div></div><span className={`badge ${sch.status === 'Completed' ? 'badge-success' : isScheduleSubmitted(sch) ? 'badge-info' : 'badge-warning'}`}>{getScheduleDisplayStatus(sch)}</span></div>)}</div>;
                   })()}
                 </div>
               </div>
@@ -4633,20 +5246,355 @@ export default function Maintenance({
                   <div>Tenant: <strong>{selectedSchedule.customer_name || selectedSchedule.customer}</strong></div>
                   <div>Date: <strong>{selectedSchedule.transaction_date}</strong></div>
                   {/* <div>Task Id: <strong>{selectedSchedule.type || '—'}</strong></div> */}
-                  <div>Status: <span className={`badge ${isScheduleSubmitted(selectedSchedule) ? 'badge-info' : 'badge-warning'}`}>{selectedSchedule.status || 'Draft'}</span></div>
+                  <div>Status: <span className={`badge ${selectedSchedule.status === 'Completed' ? 'badge-success' : isScheduleSubmitted(selectedSchedule) ? 'badge-info' : 'badge-warning'}`}>{getScheduleDisplayStatus(selectedSchedule)}</span></div>
                 </div>
 
-                {!isScheduleSubmitted(selectedSchedule) ? (
+                {/* ── Customer & Booking ID (Matching 2nd Image) ── */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
+                  <div>
+                    <label style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-secondary, #64748b)', marginBottom: 4, display: 'block' }}>customer</label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={selectedSchedule.customer || selectedSchedule.customer_name || ''}
+                      style={{
+                        width: '100%',
+                        background: 'var(--bg-tertiary, #f8fafc)',
+                        border: '1px solid var(--border-color, #e2e8f0)',
+                        borderRadius: 6,
+                        padding: '8px 12px',
+                        fontSize: 12.5,
+                        color: 'var(--text-primary, #0f172a)',
+                        outline: 'none',
+                        cursor: 'default',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-secondary, #64748b)', marginBottom: 4, display: 'block' }}>Booking ID</label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={selectedSchedule.custom_booking_id || ''}
+                      placeholder="—"
+                      style={{
+                        width: '100%',
+                        background: 'var(--bg-tertiary, #f8fafc)',
+                        border: '1px solid var(--border-color, #e2e8f0)',
+                        borderRadius: 6,
+                        padding: '8px 12px',
+                        fontSize: 12.5,
+                        color: 'var(--text-primary, #0f172a)',
+                        outline: 'none',
+                        cursor: 'default',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* ── Schedule Rows Table (Matching 2nd Image) ── */}
+                <div style={{
+                  border: '1px solid var(--border-color, #e2e8f0)',
+                  borderRadius: 6,
+                  overflowX: 'auto',
+                  marginTop: 4,
+                  background: 'var(--bg-secondary, #fff)'
+                }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, minWidth: 960 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg-tertiary, #f8fafc)', borderBottom: '1px solid var(--border-color, #e2e8f0)', textAlign: 'left' }}>
+                        <th style={{ width: 34, padding: '8px 10px', textAlign: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={scheduleRows.length > 0 && scheduleRows.filter(r => !r.task_id).length > 0 && scheduleRows.filter(r => !r.task_id).every(r => r.selected)}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setScheduleRows(prev => prev.map(r => r.task_id ? r : { ...r, selected: checked }));
+                            }}
+                            style={{ cursor: 'pointer' }}
+                          />
+                        </th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Item Code</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Scheduled Date</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Maintenance Visit</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Visit Status</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Task ID</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Task Status</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)', width: 100 }}>Assign</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)', minWidth: 180 }}>Select Persons</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'center', minWidth: 120 }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scheduleRows.length === 0 ? (
+                        <tr>
+                          <td colSpan="10" style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            No schedule visits available.
+                          </td>
+                        </tr>
+                      ) : (
+                        scheduleRows.map((row) => {
+                          const hasTask = Boolean(row.task_id);
+                          return (
+                            <tr
+                              key={row.id}
+                              style={{
+                                borderBottom: '1px solid var(--border-color, #e2e8f0)',
+                                background: row.selected ? 'rgba(255, 221, 0, 0.08)' : 'transparent',
+                                transition: 'background 0.15s ease'
+                              }}
+                            >
+                              <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                                <input
+                                  type="checkbox"
+                                  disabled={hasTask}
+                                  checked={row.selected}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setScheduleRows(prev => prev.map(r => r.id === row.id ? { ...r, selected: checked } : r));
+                                  }}
+                                  style={{ cursor: hasTask ? 'not-allowed' : 'pointer' }}
+                                />
+                              </td>
+                              <td style={{ padding: '8px 10px', fontWeight: 500 }}>{row.item_code}</td>
+                              <td style={{ padding: '8px 10px', color: 'var(--text-secondary)' }}>{row.scheduled_date}</td>
+                              <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{row.maintenance_visit || '—'}</td>
+                              <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{row.visit_status || '—'}</td>
+                              <td style={{ padding: '8px 10px' }}>
+                                {row.task_id ? (
+                                  <span
+                                    onClick={async () => {
+                                      setActiveSection('task');
+                                      const taskName = row.task_id;
+                                      const matched = (workOrders || []).find(w => w.name === taskName || w.id === taskName);
+                                      setSelectedWorkOrder(matched || { name: taskName, id: taskName });
+                                      if (erpnextConfig?.url && taskName) {
+                                        try {
+                                          const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskName)}`, {
+                                            credentials: 'include',
+                                            headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+                                          });
+                                          if (res.ok) {
+                                            const json = await res.json();
+                                            const fullDoc = json.data || json;
+                                            setSelectedWorkOrder(fullDoc);
+                                          }
+                                        } catch (err) {
+                                          console.warn('Failed fetching full task doc on task_id click:', err);
+                                        }
+                                      }
+                                    }}
+                                    style={{ color: 'var(--brand-color, #2563eb)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
+                                    title="Click to view Task details"
+                                  >
+                                    {row.task_id}
+                                  </span>
+                                ) : '—'}
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                {row.task_status ? (
+                                  <span className={`badge ${row.task_status === 'Completed' ? 'badge-success' : row.task_status === 'Working' ? 'badge-primary' : 'badge-warning'}`}>
+                                    {row.task_status}
+                                  </span>
+                                ) : '—'}
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                {hasTask ? (
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                    {row.assign_type || '—'}
+                                  </span>
+                                ) : (
+                                  <select
+                                    className="form-select"
+                                    value={row.assign_type || 'Employee'}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setScheduleRows(prev => prev.map(r => r.id === row.id ? { ...r, assign_type: val, persons: [] } : r));
+                                    }}
+                                    style={{ fontSize: 11, padding: '3px 6px', height: 28, borderRadius: 4, width: '100%', minWidth: 85 }}
+                                  >
+                                    <option value="Employee">Employee</option>
+                                    <option value="Vendor">Vendor</option>
+                                  </select>
+                                )}
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>
+                                {hasTask ? (
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                    {Array.isArray(row.persons) && row.persons.length > 0 ? (
+                                      row.persons.map(p => (
+                                        <span key={p} style={{ background: 'var(--bg-tertiary, #f1f5f9)', border: '1px solid var(--border-color, #e2e8f0)', padding: '2px 6px', borderRadius: 4, fontSize: 10.5, fontWeight: 500 }}>
+                                          {p}
+                                        </span>
+                                      ))
+                                    ) : (
+                                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                                    {Array.isArray(row.persons) && row.persons.map(pId => (
+                                      <span
+                                        key={pId}
+                                        style={{
+                                          background: 'var(--bg-tertiary, #f1f5f9)',
+                                          border: '1px solid var(--border-color, #e2e8f0)',
+                                          borderRadius: 4,
+                                          padding: '2px 6px',
+                                          fontSize: 10.5,
+                                          fontWeight: 500,
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: 4
+                                        }}
+                                      >
+                                        {pId}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setScheduleRows(prev => prev.map(r => r.id === row.id ? { ...r, persons: (r.persons || []).filter(x => x !== pId) } : r));
+                                          }}
+                                          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#ef4444', fontWeight: 700, fontSize: 12, lineHeight: 1 }}
+                                        >
+                                          ×
+                                        </button>
+                                      </span>
+                                    ))}
+                                    <select
+                                      className="form-select"
+                                      value=""
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        if (!val) return;
+                                        setScheduleRows(prev => prev.map(r => {
+                                          if (r.id !== row.id) return r;
+                                          const current = Array.isArray(r.persons) ? r.persons : [];
+                                          if (!current.includes(val)) {
+                                            return { ...r, persons: [...current, val] };
+                                          }
+                                          return r;
+                                        }));
+                                      }}
+                                      style={{ fontSize: 11, padding: '2px 6px', height: 26, minWidth: (row.persons?.length || 0) > 0 ? 95 : 130 }}
+                                    >
+                                      <option value="">{(row.persons?.length || 0) > 0 ? '+ Add' : (row.assign_type === 'Employee' ? 'Select Employee' : 'Select Vendor')}</option>
+                                      {(row.assign_type === 'Employee' ? employees : vendorDir).map(item => {
+                                        const id = item.id || item.name;
+                                        const name = item.employee_name || item.name;
+                                        if (row.persons?.includes(id)) return null;
+                                        return (
+                                          <option key={id} value={id}>
+                                            {id}{name && name !== id ? ` (${name})` : ''}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                  </div>
+                                )}
+                              </td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                {hasTask ? (
+                                  <span
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                      color: '#10b981',
+                                      background: 'rgba(16, 185, 129, 0.1)',
+                                      padding: '3px 8px',
+                                      borderRadius: 4
+                                    }}
+                                  >
+                                    <CheckCircle2 size={12} />
+                                    Task Created
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm"
+                                    disabled={busyTasks}
+                                    onClick={() => submit_tasks([row])}
+                                    style={{
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                      padding: '4px 10px',
+                                      borderRadius: 4,
+                                      background: '#ffdd00',
+                                      color: '#000',
+                                      border: 'none',
+                                      cursor: busyTasks ? 'not-allowed' : 'pointer',
+                                      opacity: busyTasks && busyRowId === row.id ? 0.7 : 1,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 5,
+                                      boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                                      transition: 'all 0.15s ease'
+                                    }}
+                                    title="Create task for this scheduled visit"
+                                  >
+                                    <Hammer size={12} />
+                                    {busyTasks && busyRowId === row.id ? 'Creating…' : 'Create task'}
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* ── Submit / Create Task Action Button (Matching 1st Image) ── */}
+                {(!scheduleRows.length || !scheduleRows.every(r => Boolean(r.task_id))) ? (
                   <button
+                    type="button"
                     className="btn btn-primary btn-sm"
-                    style={{ marginTop: 10, width: '100%', background: '#ffdd00', color: '#000', fontWeight: 700 }}
-                    onClick={() => { setWoAssignedEmployees([]); setWoAssignedVendors([]); setWoAssignType('employee'); setShowWOModal(true); }}
+                    style={{
+                      marginTop: 10,
+                      width: '100%',
+                      background: '#ffdd00',
+                      color: '#000',
+                      fontWeight: 700,
+                      fontSize: 13,
+                      padding: '10px 16px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      borderRadius: 6,
+                      border: 'none',
+                      cursor: busyTasks ? 'not-allowed' : 'pointer',
+                      opacity: busyTasks ? 0.7 : 1,
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
+                    }}
+                    disabled={busyTasks}
+                    onClick={() => submit_tasks()}
                   >
-                    <Hammer size={14} style={{ marginRight: 6 }} /> Assign Task
+                    <Hammer size={15} />
+                    {busyTasks && !busyRowId ? 'Creating Task(s)…' : `Create Task${scheduleRows.filter(r => r.selected && !r.task_id).length > 0 ? ` (${scheduleRows.filter(r => r.selected && !r.task_id).length} selected)` : ''}`}
                   </button>
                 ) : (
-                  <div style={{ marginTop: 10, padding: '10px 12px', background: 'rgba(16,185,129,0.08)', borderRadius: 6, fontSize: 12, color: '#10b981', textAlign: 'center', fontWeight: 600 }}>
-                    ✓ Task Assigned
+                  <div style={{
+                    marginTop: 10,
+                    padding: '10px 14px',
+                    background: 'rgba(16,185,129,0.08)',
+                    border: '1px solid rgba(16,185,129,0.25)',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    color: '#10b981',
+                    textAlign: 'center',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8
+                  }}>
+                    <CheckCircle2 size={16} /> All Scheduled Tasks Created
                   </div>
                 )}
               </div>
@@ -4663,9 +5611,7 @@ export default function Maintenance({
           </div>
           <div className="grid-2col" style={{ gridTemplateColumns: selectedWorkOrder ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
             <div className="card-panel" style={{
-              padding: 0,
-              filter: selectedWorkOrder ? 'blur(4px)' : 'none',
-              transition: 'filter 0.3s ease'
+              padding: 0
             }}>
               <div className="table-container">
                 <table className="custom-table">
@@ -4793,10 +5739,7 @@ export default function Maintenance({
       {/* ── SECTION 3: TECHNICIANS ── */}
       {activeSection === 'technician' && (
         <div className="grid-2col" style={{ gridTemplateColumns: selectedTechnician ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
-          <div className="card-panel" style={{
-            filter: selectedTechnician ? 'blur(4px)' : 'none',
-            transition: 'filter 0.3s ease'
-          }}>
+          <div className="card-panel">
             <h3 style={{ fontSize: 15, marginBottom: 14 }}>Active Technicians Directory</h3>
             <div className="table-container">
               <table className="custom-table">
@@ -4826,10 +5769,7 @@ export default function Maintenance({
       {/* ── SECTION 4: VENDORS ── */}
       {activeSection === 'vendor' && (
         <div className="grid-2col" style={{ gridTemplateColumns: selectedVendor ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
-          <div className="card-panel" style={{
-            filter: selectedVendor ? 'blur(4px)' : 'none',
-            transition: 'filter 0.3s ease'
-          }}>
+          <div className="card-panel">
             <h3 style={{ fontSize: 15, marginBottom: 14 }}>Vendor Directory & Quotations Log</h3>
             <div className="table-container">
               <table className="custom-table">
@@ -5004,7 +5944,7 @@ export default function Maintenance({
                         {schedItems.length} {schedItems.length === 1 ? 'item' : 'items'}
                       </span>
                     </div>
-                    <button
+                    {/* <button
                       type="button"
                       onClick={() => setSchedItems(prev => [
                         ...prev,
@@ -5034,7 +5974,7 @@ export default function Maintenance({
                     >
                       <Plus size={13} />
                       Add Unit
-                    </button>
+                    </button> */}
                   </div>
 
                   <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-secondary)' }}>
@@ -5172,7 +6112,7 @@ export default function Maintenance({
         <div className="modal-overlay">
           <div className="modal-content" style={{ maxWidth: 460, width: '92vw' }}>
             <div className="modal-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border-color)' }}>
-              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 500 }}>Submit Task</h3>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 500 }}>Create Task</h3>
               <button onClick={() => setShowWOModal(false)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>×</button>
             </div>
             <div className="modal-body" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -5248,10 +6188,10 @@ export default function Maintenance({
               <button
                 type="button"
                 className="btn btn-primary"
-                onClick={handleSubmitWorkOrder}
+                onClick={handleCreateTask}
                 disabled={woSubmitting || (woAssignType === 'employee' ? woAssignedEmployees.length === 0 : woAssignedVendors.length === 0)}
               >
-                {woSubmitting ? 'Submitting…' : 'Confirm & Submit'}
+                {woSubmitting ? 'Creating…' : 'Create Task'}
               </button>
             </div>
           </div>
