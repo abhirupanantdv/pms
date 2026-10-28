@@ -3072,6 +3072,19 @@ export default function App() {
   const [preSelectedProperty, setPreSelectedProperty] = useState(null);
   const [preSelectedIssue, setPreSelectedIssue] = useState(null);
   const [bookingSearchFromQuotation, setBookingSearchFromQuotation] = useState('');
+  const [selectedQuotationId, setSelectedQuotationId] = useState('');
+
+  useEffect(() => {
+    const handleNavigateQuotation = (e) => {
+      const qId = e.detail?.quotationId;
+      if (qId) {
+        setSelectedQuotationId(qId);
+      }
+      setCurrentTab('quotation');
+    };
+    window.addEventListener('pms:navigate-quotation', handleNavigateQuotation);
+    return () => window.removeEventListener('pms:navigate-quotation', handleNavigateQuotation);
+  }, []);
 
   // PMS Portal Selection State ('admin' | 'operation')
   const [selectedPortal, setSelectedPortal] = useState(() => {
@@ -5840,6 +5853,10 @@ export default function App() {
             vendors={owners}
             onAssignResource={handleAssignScheduleResource}
             onCreateVisit={handleCreateMaintenanceVisit}
+            onNavigateToQuotation={(qId) => {
+              if (qId) setSelectedQuotationId(qId);
+              setCurrentTab('quotation');
+            }}
           />
         );
       case 'invoices':
@@ -5868,7 +5885,15 @@ export default function App() {
           />
         );
       case 'quotation':
-        return <Quotation erpnextConfig={ERPNEXT_CONFIG} properties={properties} onGoToBooking={handleGoToBooking} />;
+        return (
+          <Quotation
+            erpnextConfig={ERPNEXT_CONFIG}
+            properties={properties}
+            onGoToBooking={handleGoToBooking}
+            initialQuotationId={selectedQuotationId}
+            onClearInitialQuotation={() => setSelectedQuotationId('')}
+          />
+        );
       default:
         return renderDashboardOverview();
     }

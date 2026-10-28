@@ -2825,7 +2825,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Hammer, User, Clock, CheckCircle, CheckCircle2, AlertTriangle, Plus, X, Calendar as CalendarIcon, List, BarChart3, ClipboardList, Building, Search, Activity, Settings, DollarSign, PenTool, Archive, Check, ArrowRight, UserCheck, ShieldCheck, Mail, Phone, MapPin, Award, Trash, Save, RefreshCw, Users, Briefcase } from 'lucide-react';
 import TaskItemsPanel from './TaskItemsPanel';
-import { getAuthHeaders, getCsrfToken } from '../config';
+import { getAuthHeaders, getCsrfToken, ensureCsrfToken } from '../config';
 
 // ── Toast ────────────────────────────────────────────────────────────────────
 function Toast({ message, type, onClose }) {
@@ -3221,7 +3221,8 @@ export default function Maintenance({
   employees = [],
   vendors = [],
   onAssignResource,
-  onCreateVisit
+  onCreateVisit,
+  onNavigateToQuotation
 }) {
   const [activeSection, setActiveSection] = useState('schedule');
   const [viewMode, setViewMode] = useState('list');
@@ -4066,11 +4067,14 @@ export default function Maintenance({
         const taskPayload = {
           doctype: 'Task',
           subject: `${selectedSchedule.items?.[0]?.item_name || 'Maintenance Task'} - ${selectedSchedule.name}`,
+          company: selectedSchedule.company || 'CARPENTERS PROPERTIES PTE LIMITED',
           custom_mantainence_sechedule: selectedSchedule.name,
           custom_maintenance_schedule: selectedSchedule.name,
           custom_property: selectedSchedule.custom_property || '',
           custom_customer_name: selectedSchedule.customer_name || selectedSchedule.customer || '',
           custom_booking_id: selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || '',
+          custom_booking_number: selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || '',
+          custom_customer_contact: selectedSchedule.custom_customer_contact || selectedSchedule.contact_no || '',
           status: 'Open',
           priority: 'Medium',
           exp_start_date: selectedSchedule.items?.[0]?.start_date || selectedSchedule.transaction_date || '',
@@ -4398,6 +4402,9 @@ export default function Maintenance({
     setBusyTasks(true);
 
     try {
+      // Ensure active CSRF token is available before mutations
+      let activeCsrfToken = await ensureCsrfToken();
+
       let users = {};
 
       // Get Linked Employee User Accounts (for optional Frappe desk assignment)
@@ -4415,7 +4422,7 @@ export default function Maintenance({
             try {
               const res = await fetch(
                 `${erpnextConfig.url}/api/resource/Employee/${encodeURIComponent(emp)}?fields=%5B%22user_id%22%2C%22company_email%22%2C%22prefered_email%22%5D`,
-                { credentials: 'include', headers: getAuthHeaders({ 'Content-Type': 'application/json' }) }
+                { credentials: 'include', headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken) }
               );
               if (res.ok) {
                 const data = await res.json();
@@ -4449,7 +4456,7 @@ export default function Maintenance({
             const filterParam = encodeURIComponent(JSON.stringify([["subject", "=", taskSubject]]));
             const existingRes = await fetch(
               `${erpnextConfig.url}/api/resource/Task?filters=${filterParam}&fields=%5B%22name%22%2C%22status%22%5D&limit_page_length=1`,
-              { credentials: 'include', headers: getAuthHeaders({ 'Content-Type': 'application/json' }) }
+              { credentials: 'include', headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken) }
             );
             if (existingRes.ok) {
               const existingJson = await existingRes.json();
@@ -4476,7 +4483,6 @@ export default function Maintenance({
           const emp = (employees || []).find(e => (e.id || e.name) === empId);
           return {
             emp_id: empId,
-            employee: empId,
             emp_name: emp?.employee_name || emp?.name || empId,
             designation: emp?.designation || emp?.certs || '',
             contact_number: emp?.cell_number || emp?.phone || ''
@@ -4494,7 +4500,7 @@ export default function Maintenance({
 
         const description =
           "Maintenance Schedule: " + (selectedSchedule.name || "") +
-          "\nBooking: " + (selectedSchedule.custom_booking_id || "") +
+          "\nBooking: " + (selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || "") +
           "\nCustomer: " + (selectedSchedule.customer || selectedSchedule.customer_name || "") +
           "\nItem: " + (row.item_code || "") +
           "\nScheduled Date: " + (row.scheduled_date || "") +
@@ -4511,40 +4517,126 @@ export default function Maintenance({
             doctype: "Task",
             subject: taskSubject,
             status: "Open",
+            company: selectedSchedule.company || "CARPENTERS PROPERTIES PTE LIMITED",
             exp_start_date: row.scheduled_date,
             exp_end_date: row.scheduled_date,
             description: description,
             custom_mantainence_sechedule: selectedSchedule.name,
             custom_maintenance_schedule: selectedSchedule.name,
-            custom_booking_id: selectedSchedule.custom_booking_id || '',
+            custom_booking_id: selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || '',
+            custom_booking_number: selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || '',
+            custom_customer_contact: selectedSchedule.custom_customer_contact || selectedSchedule.contact_no || '',
             custom_customer_name: selectedSchedule.customer_name || selectedSchedule.customer || '',
             custom_property: selectedSchedule.custom_property || '',
             custom_assign: row.assign_type,
             custom_assign_to_: isEmp ? empRows : [],
-            custom_assign_to_vendor: isEmp ? [] : vendorRows
+            custom_assign_to_vendor: isEmp ? [] : vendorRows,
+            csrf_token: activeCsrfToken
           };
 
-          const insertRes = await fetch(`${erpnextConfig.url}/api/resource/Task`, {
+          let insertRes = await fetch(`${erpnextConfig.url}/api/resource/Task`, {
             method: 'POST',
             credentials: 'include',
-            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
             body: JSON.stringify(taskPayload)
           });
 
-          if (!insertRes.ok) {
-            const errJson = await insertRes.json().catch(() => ({}));
-            throw new Error(errJson.exception || errJson._server_messages || "Task creation failed.");
+          // Check if failed due to CSRF token (Invalid Request / 400 / 403)
+          if (!insertRes.ok && (insertRes.status === 400 || insertRes.status === 403)) {
+            const rawErrText = await insertRes.clone().text().catch(() => '');
+            if (rawErrText.includes('Invalid Request') || rawErrText.includes('CSRFTokenError') || rawErrText.includes('CSRF')) {
+              console.warn('Potential CSRF error detected in Task creation, force-refreshing CSRF token...');
+              try {
+                activeCsrfToken = await ensureCsrfToken(true);
+                taskPayload.csrf_token = activeCsrfToken;
+                insertRes = await fetch(`${erpnextConfig.url}/api/resource/Task`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                  body: JSON.stringify(taskPayload)
+                });
+              } catch (retryErr) {
+                console.warn('CSRF refresh retry failed:', retryErr);
+              }
+            }
           }
 
-          const insertJson = await insertRes.json();
-          const taskDoc = insertJson.data || insertJson;
-          taskName = taskDoc.name;
+          // If still not ok, try 2-step create: create core Task doc first, then update child tables via PUT
+          if (!insertRes.ok) {
+            console.warn('Direct Task creation with child tables failed, attempting core Task creation followed by PUT...');
+            const { custom_assign_to_, custom_assign_to_vendor, ...corePayload } = taskPayload;
+            corePayload.csrf_token = activeCsrfToken;
+            let coreRes = await fetch(`${erpnextConfig.url}/api/resource/Task`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+              body: JSON.stringify(corePayload)
+            });
+
+            // If coreRes also failed due to CSRF, force-refresh and retry coreRes
+            if (!coreRes.ok && (coreRes.status === 400 || coreRes.status === 403)) {
+              const rawCoreErr = await coreRes.clone().text().catch(() => '');
+              if (rawCoreErr.includes('Invalid Request') || rawCoreErr.includes('CSRFTokenError') || rawCoreErr.includes('CSRF')) {
+                console.warn('CSRF error detected on core Task creation, force-refreshing CSRF token...');
+                try {
+                  activeCsrfToken = await ensureCsrfToken(true);
+                  corePayload.csrf_token = activeCsrfToken;
+                  coreRes = await fetch(`${erpnextConfig.url}/api/resource/Task`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                    body: JSON.stringify(corePayload)
+                  });
+                } catch (retryErr) {
+                  console.warn('CSRF refresh retry failed on core Task:', retryErr);
+                }
+              }
+            }
+
+            if (coreRes.ok) {
+              const coreJson = await coreRes.json();
+              const taskDoc = coreJson.data || coreJson;
+              taskName = taskDoc.name;
+
+              // Attach assignments via PUT
+              try {
+                await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskName)}`, {
+                  method: 'PUT',
+                  credentials: 'include',
+                  headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                  body: JSON.stringify({
+                    custom_assign: row.assign_type,
+                    custom_assign_to_: isEmp ? empRows : [],
+                    custom_assign_to_vendor: isEmp ? [] : vendorRows,
+                    csrf_token: activeCsrfToken
+                  })
+                });
+              } catch (putErr) {
+                console.warn('Failed attaching assignments via PUT:', putErr);
+              }
+            } else {
+              const errJson = await coreRes.json().catch(() => ({}));
+              let rawMsg = errJson.exception || errJson._server_messages || errJson.message || "Task creation failed.";
+              try {
+                const parsed = JSON.parse(rawMsg);
+                if (Array.isArray(parsed) && parsed[0]) {
+                  const inner = JSON.parse(parsed[0]);
+                  if (inner?.message) rawMsg = inner.message;
+                }
+              } catch {}
+              throw new Error(typeof rawMsg === 'string' ? rawMsg.replace(/<[^>]*>/g, '') : "Task creation failed.");
+            }
+          } else {
+            const insertJson = await insertRes.json();
+            const taskDoc = insertJson.data || insertJson;
+            taskName = taskDoc.name;
+          }
 
           // Fetch Actual Task Status
           try {
             const statusRes = await fetch(
               `${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskName)}?fields=%5B%22status%22%5D`,
-              { credentials: 'include', headers: getAuthHeaders({ 'Content-Type': 'application/json' }) }
+              { credentials: 'include', headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken) }
             );
             if (statusRes.ok) {
               const statusJson = await statusRes.json();
@@ -4562,8 +4654,9 @@ export default function Maintenance({
                 await fetch(`${erpnextConfig.url}/api/method/frappe.desk.form.assign_to.add`, {
                   method: 'POST',
                   credentials: 'include',
-                  headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                  headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
                   body: JSON.stringify({
+                    csrf_token: activeCsrfToken,
                     args: JSON.stringify({
                       assign_to: assignableUsers,
                       doctype: "Task",
@@ -4620,8 +4713,8 @@ export default function Maintenance({
           await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(selectedSchedule.name)}`, {
             method: 'PUT',
             credentials: 'include',
-            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ schedules: updatedSchedules, status: 'Submitted', docstatus: 1 })
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+            body: JSON.stringify({ schedules: updatedSchedules, status: 'Submitted', docstatus: 1, csrf_token: activeCsrfToken })
           });
         } catch (schedSyncErr) {
           console.warn("Failed syncing Maintenance Schedule:", schedSyncErr);
@@ -4642,9 +4735,20 @@ export default function Maintenance({
       showToast(created > 1 ? `${created} Tasks created successfully.` : "Task created successfully.", "success");
 
     } catch (error) {
+      let rawMsg = error.message || "Task creation failed.";
+      try {
+        const parsed = JSON.parse(rawMsg);
+        if (Array.isArray(parsed) && parsed[0]) {
+          const inner = JSON.parse(parsed[0]);
+          if (inner?.message) rawMsg = inner.message;
+        }
+      } catch {}
+      let cleanMsg = typeof rawMsg === 'string' ? rawMsg.replace(/<[^>]*>/g, '').trim() : "Task creation failed.";
+      if (cleanMsg === "Invalid Request" || cleanMsg.includes("CSRF")) {
+        cleanMsg = "Session or authentication token expired. Please refresh the page and try again.";
+      }
       showToast(
-        (error.message || "Task creation failed.") +
-        " Check the Task list before retrying.",
+        cleanMsg,
         "error"
       );
     } finally {
@@ -5703,6 +5807,7 @@ export default function Maintenance({
                     erpnextConfig={erpnextConfig}
                     getCsrfToken={getCsrfToken}
                     showToast={showToast}
+                    onNavigateToQuotation={onNavigateToQuotation}
                     // onSaved={(updatedData) => {
                     //   setSelectedWorkOrder(updatedData);
                     //   setWorkOrders(prev => prev.map(wo => wo.id === updatedData.name ? { ...wo, technician: (updatedData.custom_assign_to_ || [])[0]?.employee || wo.technician, vendor: (updatedData.custom_assign_to_vendor || [])[0]?.vendor || wo.vendor } : wo));
@@ -5720,6 +5825,7 @@ export default function Maintenance({
                             status: updatedData.status || wo.status,
                             docstatus: updatedData.docstatus ?? wo.docstatus,
                             itemsUsed: updatedData.custom_items_used_for_maintenance || wo.itemsUsed,
+                            custom_items_used_for_maintenance: updatedData.custom_items_used_for_maintenance || wo.custom_items_used_for_maintenance,
                           }
                           : wo
                       ));

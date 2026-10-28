@@ -40,58 +40,110 @@ export const getCsrfToken = () => {
 
 /**
  * Asynchronously ensures a valid CSRF token is available.
- * If missing, pings /pms or /app to extract the session's active CSRF token from the server response.
+ * If missing or if forceRefresh is true, purges existing token and queries the server.
  */
-export const ensureCsrfToken = async () => {
-  let token = getCsrfToken();
-  if (token) return token;
-
-  const baseUrl = getApiBaseUrl();
-
-  // 1. Try /pms which renders pms.html with window.csrf_token
-  try {
-    const res = await fetch(`${baseUrl}/pms`, { credentials: 'include' });
-    if (res.ok) {
-      const html = await res.text();
-      const match = html.match(/window\.csrf_token\s*=\s*["']([^"']+)["']/i) ||
-        html.match(/["']?csrf_token["']?\s*[:=]\s*["']([^"']+)["']/i);
-      if (match && match[1] && match[1] !== 'None' && match[1] !== 'null') {
-        token = match[1].trim();
-        if (typeof window !== 'undefined') {
-          window.csrf_token = token;
-          try {
-            localStorage.setItem('frappe_csrf_token', token);
-            sessionStorage.setItem('frappe_csrf_token', token);
-          } catch { }
-        }
-        return token;
-      }
-    }
-  } catch (err) {
-    console.warn('Failed fetching CSRF token from /pms:', err);
+export const ensureCsrfToken = async (forceRefresh = false) => {
+  if (!forceRefresh) {
+    let token = getCsrfToken();
+    if (token) return token;
   }
 
-  // 2. Try /app which renders desk with csrf_token
+  // If forceRefresh, clear cached/stale tokens
+  if (typeof window !== 'undefined') {
+    window.csrf_token = '';
+    if (window.frappe) window.frappe.csrf_token = '';
+    if (window.frappe?.session) window.frappe.session.csrf_token = '';
+    try {
+      localStorage.removeItem('frappe_csrf_token');
+      sessionStorage.removeItem('frappe_csrf_token');
+      localStorage.removeItem('pms_csrf_token');
+    } catch { }
+  }
+
+  const baseUrl = getApiBaseUrl();
+  let token = '';
+
+  // 1. Try custom whitelisted endpoint in PMS
   try {
-    const resApp = await fetch(`${baseUrl}/app`, { credentials: 'include' });
-    if (resApp.ok) {
-      const htmlApp = await resApp.text();
-      const matchApp = htmlApp.match(/csrf_token["']?\s*[:=]\s*["']([^"']+)["']/i) ||
-        htmlApp.match(/window\.csrf_token\s*=\s*["']([^"']+)["']/i);
-      if (matchApp && matchApp[1] && matchApp[1] !== 'None' && matchApp[1] !== 'null') {
-        token = matchApp[1].trim();
-        if (typeof window !== 'undefined') {
-          window.csrf_token = token;
-          try {
-            localStorage.setItem('frappe_csrf_token', token);
-            sessionStorage.setItem('frappe_csrf_token', token);
-          } catch { }
-        }
-        return token;
+    const res = await fetch(`${baseUrl}/api/method/pms.utils.get_csrf_token`, { credentials: 'include' });
+    if (res.ok) {
+      const json = await res.json();
+      const cand = json.message?.csrf_token || json.csrf_token;
+      if (cand && cand !== 'None' && cand !== 'null') {
+        token = String(cand).trim();
       }
     }
-  } catch (err) {
-    console.warn('Failed fetching CSRF token from /app:', err);
+  } catch (err) { }
+
+  // 2. Try standard Frappe bootinfo (whitelisted GET endpoint in all Frappe instances)
+  if (!token) {
+    try {
+      const res = await fetch(`${baseUrl}/api/method/frappe.boot.get_bootinfo`, { credentials: 'include' });
+      if (res.ok) {
+        const json = await res.json();
+        const cand = json.message?.csrf_token;
+        if (cand && cand !== 'None' && cand !== 'null') {
+          token = String(cand).trim();
+        }
+      }
+    } catch (err) { }
+  }
+
+  // 3. Try /pms which renders pms.html with window.csrf_token
+  if (!token) {
+    try {
+      const res = await fetch(`${baseUrl}/pms`, { credentials: 'include' });
+      if (res.ok) {
+        const html = await res.text();
+        const match = html.match(/window\.csrf_token\s*=\s*["']([^"']+)["']/i) ||
+          html.match(/["']?csrf_token["']?\s*[:=]\s*["']([^"']+)["']/i);
+        if (match && match[1] && match[1] !== 'None' && match[1] !== 'null') {
+          token = match[1].trim();
+        }
+      }
+    } catch (err) {
+      console.warn('Failed fetching CSRF token from /pms:', err);
+    }
+  }
+
+  // 4. Try /app which renders desk with csrf_token
+  if (!token) {
+    try {
+      const resApp = await fetch(`${baseUrl}/app`, { credentials: 'include' });
+      if (resApp.ok) {
+        const htmlApp = await resApp.text();
+        const matchApp = htmlApp.match(/csrf_token["']?\s*[:=]\s*["']([^"']+)["']/i) ||
+          htmlApp.match(/window\.csrf_token\s*=\s*["']([^"']+)["']/i);
+        if (matchApp && matchApp[1] && matchApp[1] !== 'None' && matchApp[1] !== 'null') {
+          token = matchApp[1].trim();
+        }
+      }
+    } catch (err) {
+      console.warn('Failed fetching CSRF token from /app:', err);
+    }
+  }
+
+  // 5. Try document.cookie
+  if (!token && typeof document !== 'undefined') {
+    try {
+      const match = document.cookie.match(/(?:^|;\s*)(?:csrf_token|XSRF-TOKEN|CSRF-TOKEN)=([^;]*)/i);
+      if (match && match[1]) {
+        const decoded = decodeURIComponent(match[1]).trim();
+        if (decoded && decoded !== 'None' && decoded !== 'null') {
+          token = decoded;
+        }
+      }
+    } catch { }
+  }
+
+  if (token && typeof window !== 'undefined') {
+    window.csrf_token = token;
+    if (window.frappe) window.frappe.csrf_token = token;
+    if (window.frappe?.session) window.frappe.session.csrf_token = token;
+    try {
+      localStorage.setItem('frappe_csrf_token', token);
+      sessionStorage.setItem('frappe_csrf_token', token);
+    } catch { }
   }
 
   return token || '';

@@ -74,36 +74,43 @@ export default defineConfig({
         target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
+        cookieDomainRewrite: "",
       },
       '/assets/apps': {
         target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
+        cookieDomainRewrite: "",
       },
       '/apps': {
         target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
+        cookieDomainRewrite: "",
       },
       '/api': {
         target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
+        cookieDomainRewrite: "",
       },
       '/printview': {
         target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
+        cookieDomainRewrite: "",
       },
       '/files': {
         target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
+        cookieDomainRewrite: "",
       },
       '/private': {
         target: 'https://cfpl.anantdv.com',
         changeOrigin: true,
         secure: false,
+        cookieDomainRewrite: "",
       }
     }
   }

@@ -2094,7 +2094,7 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
                         const name = (it.item_name || code).trim();
                         const sGroup = (it.custom_service_group || "").trim();
                         const iGroup = (it.item_group || "").trim();
-                        const rate = Number(it.standard_rate || it.charges || 0) || 0;
+                        const rate = Number(it.standard_rate || it.charges || it.custom_rate || it.custom_price || 0) || 0;
                         return {
                             name: it.name || code,
                             item_code: code,
@@ -2102,6 +2102,7 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
                             item_group: iGroup,
                             custom_service_group: sGroup,
                             standard_rate: rate,
+                            custom_rate: rate,
                             custom_price: rate
                         };
                     })
@@ -2192,8 +2193,8 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
                                     <span style={{ fontWeight: 600, color: "var(--brand-color)" }}>{opt.item_code}</span>
                                     {opt.item_name && opt.item_name !== opt.item_code && <span style={{ fontSize: 10, color: "var(--text-secondary)" }}>{opt.item_name}</span>}
                                 </div>
-                                {opt.custom_price > 0 && (
-                                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>${opt.custom_price}</span>
+                                {(opt.custom_rate > 0 || opt.custom_price > 0) && (
+                                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>${opt.custom_rate || opt.custom_price}</span>
                                 )}
                             </div>
                         ))}
@@ -2204,8 +2205,34 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
     );
 }
 
+export const mapMaintenanceItems = (rawList) => {
+    if (!Array.isArray(rawList)) return [];
+    return rawList.map((r, idx) => {
+        const rateVal = r?.custom_rate !== undefined && r?.custom_rate !== null && r?.custom_rate !== ""
+            ? Number(r.custom_rate)
+            : (r?.custom_price !== undefined && r?.custom_price !== null && r?.custom_price !== ""
+                ? Number(r.custom_price)
+                : (r?.price !== undefined && r?.price !== null && r?.price !== ""
+                    ? Number(r.price)
+                    : (r?.rate !== undefined && r?.rate !== null && r?.rate !== "" ? Number(r.rate) : 0)));
+        const finalRate = isNaN(rateVal) ? 0 : rateVal;
+        return {
+            name: r?.name,
+            doctype: r?.doctype || "Items used for maintenance",
+            parentfield: "custom_items_used_for_maintenance",
+            parenttype: "Task",
+            idx: r?.idx || (idx + 1),
+            item_code: r?.item_code || r?.item || r?.service || r?.service_name || r?.name || "",
+            item_name: r?.item_name || r?.item_description || r?.description || r?.service_name || r?.item_code || "—",
+            qty: Number(r?.qty || r?.quantity || 1),
+            custom_rate: finalRate,
+            custom_price: finalRate
+        };
+    });
+};
+
 // ---------- Main component ----------
-function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextConfig, getCsrfToken, showToast, onSaved, aftersucess }) {
+function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextConfig, getCsrfToken, showToast, onSaved, aftersucess, onNavigateToQuotation }) {
 
     // A task is "locked" (read-only) once its status is "Completed" (or "Cancelled")
     // or when the user has just successfully submitted the task locally.
@@ -2261,6 +2288,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     const [selectedVendorIds, setSelectedVendorIds] = useState([]);
     const [empRows, setEmpRows] = useState(() => taskDoc?.custom_assign_to_ || []);
     const [vendorRows, setVendorRows] = useState(() => taskDoc?.custom_assign_to_vendor || []);
+    const [itemRows, setItemRows] = useState(() => mapMaintenanceItems(taskDoc?.custom_items_used_for_maintenance));
 
     const effectiveAssignType = useMemo(() => {
         const raw = (taskDoc?.custom_assign || assignType || "").toLowerCase().trim();
@@ -2290,7 +2318,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
         else if (Array.isArray(currentEmps) && currentEmps.length > 0) setAssignType("employee");
         else if (Array.isArray(currentVendors) && currentVendors.length > 0) setAssignType("vendor");
 
-        // Fetch full Task doc to guarantee child tables (custom_assign_to_vendor, custom_assign_to_) are loaded
+        // Fetch full Task doc to guarantee child tables (custom_assign_to_vendor, custom_assign_to_, custom_items_used_for_maintenance) are loaded
         if (taskDoc?.name && erpnextConfig?.url) {
             fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
                 credentials: "include",
@@ -2302,12 +2330,17 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                     const doc = json?.data || json || {};
                     const fetchedVendors = Array.isArray(doc?.custom_assign_to_vendor) ? doc.custom_assign_to_vendor : [];
                     const fetchedEmps = Array.isArray(doc?.custom_assign_to_) ? doc.custom_assign_to_ : [];
+                    const fetchedItems = Array.isArray(doc?.custom_items_used_for_maintenance) ? doc.custom_items_used_for_maintenance : [];
 
                     setVendorRows(fetchedVendors);
                     setSelectedVendorIds(fetchedVendors.map((r) => r?.vendor_name || r?.vendor || r?.supplier || r?.name).filter(Boolean));
 
                     setEmpRows(fetchedEmps);
                     setSelectedEmpIds(fetchedEmps.map((r) => r?.emp_id || r?.employee || r?.id || r?.name).filter(Boolean));
+
+                    if (fetchedItems.length > 0 || !Array.isArray(taskDoc?.custom_items_used_for_maintenance)) {
+                        setItemRows(mapMaintenanceItems(fetchedItems));
+                    }
 
                     if (doc?.custom_assign) {
                         setAssignType(doc.custom_assign.toLowerCase().trim());
@@ -2456,7 +2489,6 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     };
 
     // ── ITEMS ──
-    const [itemRows, setItemRows] = useState([]);
     const [pendingItem, setPendingItem] = useState(null);
     const [pendingQty, setPendingQty] = useState(1);
     const [pendingPrice, setPendingPrice] = useState("");
@@ -2467,20 +2499,6 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
 
     useEffect(() => {
         let isMounted = true;
-
-        const mapMaintenanceItems = (rawList) => {
-            if (!Array.isArray(rawList)) return [];
-            return rawList.map((r) => ({
-                name: r?.name,
-                item_code: r?.item_code || r?.item || r?.service || r?.service_name || r?.name || "",
-                item_name: r?.item_name || r?.item_description || r?.description || r?.service_name || r?.item_code || "—",
-                qty: Number(r?.qty || r?.quantity || 1),
-                custom_price: r?.custom_price !== undefined && r?.custom_price !== null 
-                    ? Number(r.custom_price) 
-                    : (r?.price !== undefined && r?.price !== null ? Number(r.price) : (r?.rate !== undefined && r?.rate !== null ? Number(r.rate) : 0))
-            }));
-        };
-
         const currentItems = taskDoc?.custom_items_used_for_maintenance;
 
         if (Array.isArray(currentItems)) {
@@ -2582,7 +2600,9 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
         if (isLocked) return;
         if (!pendingItem) { showToast?.("Select an item first.", "error"); return; }
         if (pendingQty <= 0) { showToast?.("Quantity must be greater than zero.", "error"); return; }
-        const itemPrice = pendingPrice !== "" ? (Number(pendingPrice) || 0) : (Number(pendingItem.custom_price || pendingItem.standard_rate || pendingItem.rate) || 0);
+        const itemPrice = pendingPrice !== ""
+            ? (Number(pendingPrice) || 0)
+            : (Number(pendingItem.custom_rate !== undefined && pendingItem.custom_rate !== null ? pendingItem.custom_rate : (pendingItem.custom_price || pendingItem.standard_rate || pendingItem.rate)) || 0);
         setItemRows((prev) => {
             const idx = prev.findIndex((r) => r.item_code === pendingItem.item_code);
             if (idx >= 0) {
@@ -2590,14 +2610,19 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                 copy[idx] = {
                     ...copy[idx],
                     qty: copy[idx].qty + pendingQty,
-                    custom_price: itemPrice || copy[idx].custom_price || 0
+                    custom_rate: itemPrice || copy[idx].custom_rate || copy[idx].custom_price || 0,
+                    custom_price: itemPrice || copy[idx].custom_rate || copy[idx].custom_price || 0
                 };
                 return copy;
             }
             return [...prev, {
+                doctype: "Items used for maintenance",
+                parentfield: "custom_items_used_for_maintenance",
+                parenttype: "Task",
                 item_code: pendingItem.item_code,
                 item_name: pendingItem.item_name,
                 qty: pendingQty,
+                custom_rate: itemPrice,
                 custom_price: itemPrice
             }];
         });
@@ -2610,7 +2635,8 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     const changeRowQty = (idx, delta) => { if (isLocked) return; setItemRows((p) => p.map((r, i) => i === idx ? { ...r, qty: Math.max(1, r.qty + delta) } : r)); };
     const changeRowPrice = (idx, val) => {
         if (isLocked) return;
-        setItemRows((p) => p.map((r, i) => i === idx ? { ...r, custom_price: val === "" ? "" : Number(val) } : r));
+        const numVal = val === "" ? "" : Number(val);
+        setItemRows((p) => p.map((r, i) => i === idx ? { ...r, custom_rate: numVal, custom_price: numVal } : r));
     };
 
     /**
@@ -2635,13 +2661,29 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
             const nextStatus = overrideStatus || taskDoc.status || "Open";
             const assignStr = effectiveAssignType === "employee" ? "Employee" : "Vendor";
 
-            const formattedItems = itemRows.map((r) => ({
-                ...(r.name && !String(r.name).startsWith("temp_") ? { name: r.name } : {}),
-                item_code: r.item_code,
-                item_name: r.item_name,
-                qty: Number(r.qty) || 1,
-                custom_price: Number(r.custom_price) || 0
-            }));
+            const formattedItems = itemRows.map((r, idx) => {
+                const rateVal = Number(
+                    r.custom_rate !== undefined && r.custom_rate !== null && r.custom_rate !== ""
+                        ? r.custom_rate
+                        : (r.custom_price !== undefined && r.custom_price !== null && r.custom_price !== ""
+                            ? r.custom_price
+                            : (r.rate !== undefined && r.rate !== null && r.rate !== ""
+                                ? r.rate
+                                : (r.price !== undefined && r.price !== null && r.price !== "" ? r.price : 0)))
+                ) || 0;
+                return {
+                    ...(r.name && !String(r.name).startsWith("temp_") ? { name: r.name } : {}),
+                    doctype: "Items used for maintenance",
+                    parentfield: "custom_items_used_for_maintenance",
+                    parenttype: "Task",
+                    idx: idx + 1,
+                    item_code: r.item_code,
+                    item_name: r.item_name,
+                    qty: Number(r.qty) || 1,
+                    custom_rate: rateVal,
+                    custom_price: rateVal
+                };
+            });
 
             const formattedEmp = selectedEmpIds.map((id) => {
                 const e = employeeDir.find((x) => x?.id === id || x?.name === id);
@@ -2773,6 +2815,11 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                 setEmpRows(freshDoc.custom_assign_to_);
             } else if (savePayload.custom_assign_to_) {
                 setEmpRows(savePayload.custom_assign_to_);
+            }
+            if (freshDoc?.custom_items_used_for_maintenance) {
+                setItemRows(mapMaintenanceItems(freshDoc.custom_items_used_for_maintenance));
+            } else if (savePayload.custom_items_used_for_maintenance) {
+                setItemRows(mapMaintenanceItems(savePayload.custom_items_used_for_maintenance));
             }
 
             onSaved?.(finalDoc);
@@ -3071,12 +3118,21 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
             if (itemRows.length > 0) {
                 try {
                     const saveItemsBody = {
-                        custom_items_used_for_maintenance: itemRows.map((r) => ({
-                            item_code: r.item_code,
-                            item_name: r.item_name,
-                            qty: Number(r.qty) || 1,
-                            custom_price: Number(r.custom_price) || 0
-                        }))
+                        custom_items_used_for_maintenance: itemRows.map((r, idx) => {
+                            const rateVal = Number(r.custom_rate !== undefined && r.custom_rate !== null ? r.custom_rate : (r.custom_price || 0)) || 0;
+                            return {
+                                ...(r.name && !String(r.name).startsWith("temp_") ? { name: r.name } : {}),
+                                doctype: "Items used for maintenance",
+                                parentfield: "custom_items_used_for_maintenance",
+                                parenttype: "Task",
+                                idx: idx + 1,
+                                item_code: r.item_code,
+                                item_name: r.item_name,
+                                qty: Number(r.qty) || 1,
+                                custom_rate: rateVal,
+                                custom_price: rateVal
+                            };
+                        })
                     };
                     await fetch(`${erpnextConfig.url}/api/resource/Task/${taskDoc.name}`, {
                         method: "PUT",
@@ -3188,11 +3244,21 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                         completed_on: today,
                         progress: 100,
                         docstatus: 1,
-                        custom_items_used_for_maintenance: itemRows.map((r) => ({
-                            item_code: r.item_code,
-                            item_name: r.item_name,
-                            qty: r.qty
-                        }))
+                        custom_items_used_for_maintenance: itemRows.map((r, idx) => {
+                            const rateVal = Number(r.custom_rate !== undefined && r.custom_rate !== null ? r.custom_rate : (r.custom_price || 0)) || 0;
+                            return {
+                                ...(r.name && !String(r.name).startsWith("temp_") ? { name: r.name } : {}),
+                                doctype: "Items used for maintenance",
+                                parentfield: "custom_items_used_for_maintenance",
+                                parenttype: "Task",
+                                idx: idx + 1,
+                                item_code: r.item_code,
+                                item_name: r.item_name,
+                                qty: Number(r.qty) || 1,
+                                custom_rate: rateVal,
+                                custom_price: rateVal
+                            };
+                        })
                     }),
                 });
                 if (updateRes.ok) {
@@ -3311,11 +3377,22 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
         const qId = targetQuotationId || currentQuotationId || taskDoc?.custom_quotation_id;
         if (!qId) return;
 
+        // 1. Dispatch custom event for App to switch tab to Quotation Table
+        window.dispatchEvent(new CustomEvent('pms:navigate-quotation', { detail: { quotationId: qId } }));
+
+        // 2. Direct callback to parent to switch active view to Quotation Table
+        if (typeof onNavigateToQuotation === 'function') {
+            onNavigateToQuotation(qId);
+            return;
+        }
+
+        // 3. If running inside ERPNext Frappe desk, navigate to Quotation Form
         if (typeof frappe !== 'undefined' && typeof frappe.set_route === 'function') {
             frappe.set_route("Form", "Quotation", qId);
             return;
         }
 
+        // 4. Standalone fallback URL
         const baseUrl = (erpnextConfig?.url || '').replace(/\/$/, '');
         const targetUrl = baseUrl ? `${baseUrl}/app/quotation/${encodeURIComponent(qId)}` : `/app/quotation/${encodeURIComponent(qId)}`;
         window.open(targetUrl, '_blank');
@@ -3405,6 +3482,21 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                         if (msg && (msg.status === "created" || msg.status === "exists")) {
                             quotationName = msg.quotation;
                         }
+                    } else if (pmsRes.status !== 404) {
+                        const errJson = await pmsRes.json().catch(() => ({}));
+                        const rawMsg = errJson?.exception || errJson?.message || errJson?._server_messages;
+                        if (rawMsg) {
+                            let cleanMsg = typeof rawMsg === 'string' ? rawMsg : JSON.stringify(rawMsg);
+                            try {
+                                const parsed = JSON.parse(cleanMsg);
+                                if (Array.isArray(parsed) && parsed[0]) {
+                                    const inner = JSON.parse(parsed[0]);
+                                    if (inner?.message) cleanMsg = inner.message;
+                                }
+                            } catch {}
+                            showToast?.(cleanMsg.replace(/<[^>]*>/g, ''), "error");
+                            return;
+                        }
                     }
                 } catch (err) {
                     console.warn("pms.utils.create_maintenance_quotation API call failed:", err);
@@ -3435,7 +3527,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                     const qItems = (itemRows.length > 0 ? itemRows : (taskDoc?.custom_items_used_for_maintenance || [])).map(r => ({
                         item_code: r.item_code || r.item || r.name,
                         qty: Number(r.qty) || 1,
-                        rate: Number(r.custom_price || r.rate || r.price) || 0
+                        rate: Number(r.custom_rate !== undefined && r.custom_rate !== null ? r.custom_rate : (r.custom_price || r.rate || r.price || 0)) || 0
                     }));
 
                     const qPayload = {
@@ -3549,7 +3641,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                                         </td>
                                         <td style={tdStyle}>
                                             {isLocked ? (
-                                                <span>{r?.custom_price !== undefined && r?.custom_price !== null && r?.custom_price !== "" ? `$${Number(r.custom_price).toLocaleString()}` : "—"}</span>
+                                                <span>{((r?.custom_rate !== undefined && r?.custom_rate !== null && r?.custom_rate !== "") || (r?.custom_price !== undefined && r?.custom_price !== null && r?.custom_price !== "")) ? `$${Number(r.custom_rate !== undefined && r.custom_rate !== null && r.custom_rate !== "" ? r.custom_rate : r.custom_price).toLocaleString()}` : "—"}</span>
                                             ) : (
                                                 <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                                                     <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>$</span>
@@ -3557,7 +3649,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                                                         type="number"
                                                         min="0"
                                                         step="any"
-                                                        value={r?.custom_price !== undefined && r?.custom_price !== null ? r.custom_price : ""}
+                                                        value={r?.custom_rate !== undefined && r?.custom_rate !== null ? r.custom_rate : (r?.custom_price !== undefined && r?.custom_price !== null ? r.custom_price : "")}
                                                         onChange={(e) => changeRowPrice(i, e.target.value)}
                                                         placeholder="0.00"
                                                         style={{
@@ -3597,11 +3689,13 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                                 selectedLabel={pendingItem ? `${pendingItem.item_code}${pendingItem.item_name && pendingItem.item_name !== pendingItem.item_code ? ` — ${pendingItem.item_name}` : ""}` : null}
                                 onSelect={(item) => {
                                     setPendingItem(item);
-                                    const priceVal = item?.custom_price !== undefined && item?.custom_price !== null
-                                        ? item.custom_price
-                                        : (item?.standard_rate !== undefined && item?.standard_rate !== null
-                                            ? item.standard_rate
-                                            : (item?.rate !== undefined && item?.rate !== null ? item.rate : ""));
+                                    const priceVal = item?.custom_rate !== undefined && item?.custom_rate !== null
+                                        ? item.custom_rate
+                                        : (item?.custom_price !== undefined && item?.custom_price !== null
+                                            ? item.custom_price
+                                            : (item?.standard_rate !== undefined && item?.standard_rate !== null
+                                                ? item.standard_rate
+                                                : (item?.rate !== undefined && item?.rate !== null ? item.rate : "")));
                                     if (priceVal !== "") setPendingPrice(priceVal);
                                 }}
                             />

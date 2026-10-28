@@ -4800,6 +4800,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, Check, RotateCcw, Zap, Home, Send, XCircle, Layers, Bookmark, GitBranch, Upload, Eye, ExternalLink, Loader2 } from 'lucide-react';
 import houseImg from '../assets/new-house.png';
+import { ensureCsrfToken } from '../config';
 
 const resolveMediaUrl = (url, baseUrl) => {
   if (!url) return '';
@@ -4900,10 +4901,18 @@ function Toast({ toast, onClose }) {
   );
 }
 
-export default function Quotation({ erpnextConfig, properties = [], onGoToBooking }) {
+export default function Quotation({ erpnextConfig, properties = [], onGoToBooking, initialQuotationId, onClearInitialQuotation }) {
   const [quotations, setQuotations] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const workflowActionsCache = useRef({});
+
+  const isServiceQuotation = (q) => {
+    if (!q) return false;
+    return q.custom_service_quotation === 1 ||
+           q.custom_service_quotation === '1' ||
+           Number(q.custom_service_quotation) === 1 ||
+           q.custom_service_quotation === true;
+  };
 
   useEffect(() => {
     setCurrentPage(1);
@@ -5032,6 +5041,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   const [defaultServiceItems, setDefaultServiceItems] = useState([]);
   const [creatingBooking, setCreatingBooking] = useState(false);
   const [creatingBookingId, setCreatingBookingId] = useState(null);
+  const [approvingServiceQuoteId, setApprovingServiceQuoteId] = useState(null);
   const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
   const [previewModalDoc, setPreviewModalDoc] = useState(null);
   const signedDocInputRef = useRef(null);
@@ -5514,7 +5524,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
     setLoading(true);
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=["name","customer_name","party_name","transaction_date","valid_till","grand_total","status","workflow_state","booking_id","docstatus","signed_document"]&limit_page_length=100&order_by=creation desc`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=["name","customer_name","party_name","transaction_date","valid_till","grand_total","status","workflow_state","booking_id","docstatus","signed_document","custom_service_quotation"]&limit_page_length=100&order_by=creation desc`, {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json'
@@ -5938,12 +5948,83 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
 
     setSelectedQuotation(targetQuote);
-    setSelectedQuotationDetail(null);
+    setSelectedQuotationDetail(targetQuote);
     setNegotiations([]);
     setComments([]);
     setWorkflowActions(null);
     fetchQuotationDetail(targetQuote.name, targetQuote.party_name || targetQuote.customer, true);
   };
+
+  const targetQuotationIdRef = useRef(null);
+
+  // Open and highlight quotation when redirected from Task (Create Quotation / Go To Quotation)
+  useEffect(() => {
+    if (initialQuotationId) {
+      const qTarget = String(initialQuotationId).trim();
+      if (!qTarget) return;
+
+      targetQuotationIdRef.current = qTarget;
+      fetchQuotations();
+
+      const found = (quotations || []).find(q => q.name === qTarget || getRootQuotationName(q.name, q) === qTarget);
+      if (found) {
+        handleRowClick(found);
+        const idx = quotations.findIndex(q => q.name === found.name);
+        if (idx !== -1) {
+          const targetPage = Math.floor(idx / itemsPerPage) + 1;
+          setCurrentPage(targetPage);
+        }
+      } else {
+        const placeholderQuote = { name: qTarget, customer_name: 'Loading...', status: 'Draft' };
+        setSelectedQuotation(placeholderQuote);
+        setSelectedQuotationDetail(placeholderQuote);
+        fetchQuotationDetail(qTarget, null, true);
+      }
+      onClearInitialQuotation?.();
+    }
+  }, [initialQuotationId, quotations, itemsPerPage]);
+
+  // When quotations list is fetched, re-sync target pagination and row selection if a target was requested
+  useEffect(() => {
+    if (targetQuotationIdRef.current && quotations && quotations.length > 0) {
+      const target = targetQuotationIdRef.current;
+      const match = quotations.find(q => q.name === target || getRootQuotationName(q.name, q) === target);
+      if (match) {
+        setSelectedQuotation(match);
+        const idx = quotations.findIndex(q => q.name === match.name);
+        if (idx !== -1) {
+          const targetPage = Math.floor(idx / itemsPerPage) + 1;
+          setCurrentPage(targetPage);
+        }
+      }
+    }
+  }, [quotations, itemsPerPage]);
+
+  useEffect(() => {
+    const handleNavEvent = (e) => {
+      const qTarget = e.detail?.quotationId;
+      if (!qTarget) return;
+      targetQuotationIdRef.current = qTarget;
+      fetchQuotations();
+
+      const found = (quotations || []).find(q => q.name === qTarget || getRootQuotationName(q.name, q) === qTarget);
+      if (found) {
+        handleRowClick(found);
+        const idx = quotations.findIndex(q => q.name === found.name);
+        if (idx !== -1) {
+          const targetPage = Math.floor(idx / itemsPerPage) + 1;
+          setCurrentPage(targetPage);
+        }
+      } else {
+        const placeholderQuote = { name: qTarget, customer_name: 'Loading...', status: 'Draft' };
+        setSelectedQuotation(placeholderQuote);
+        setSelectedQuotationDetail(placeholderQuote);
+        fetchQuotationDetail(qTarget, null, true);
+      }
+    };
+    window.addEventListener('pms:navigate-quotation', handleNavEvent);
+    return () => window.removeEventListener('pms:navigate-quotation', handleNavEvent);
+  }, [quotations, itemsPerPage]);
 
   // SYNC DEFAULT SERVICES
   // Matches ERPNext client script:
@@ -7376,6 +7457,177 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
   };
 
+  // Approve and submit a service quotation (sets docstatus: 1)
+  const handleApproveServiceQuotation = async (qDoc) => {
+    if (!qDoc || !qDoc.name) return;
+    const qName = qDoc.name;
+
+    if (!(await confirm(`Are you sure you want to approve and submit quotation ${qName}?`))) return;
+
+    setApprovingServiceQuoteId(qName);
+    try {
+      if (!erpnextConfig || !erpnextConfig.url) {
+        throw new Error('ERPNext server is not configured.');
+      }
+
+      await ensureCsrfToken();
+
+      // Fetch latest document before submission
+      let latestDoc = qDoc;
+      try {
+        const fetchRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(qName)}`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (fetchRes.ok) {
+          const fetchJson = await fetchRes.json();
+          if (fetchJson.data) latestDoc = fetchJson.data;
+        }
+      } catch (e) {
+        console.warn('Could not fetch latest quotation before approve:', e);
+      }
+
+      if (latestDoc.docstatus === 1 || latestDoc.status === 'Submitted') {
+        showToast('info', `Quotation ${qName} is already submitted/approved.`);
+        await fetchQuotations();
+        if (selectedQuotationDetail && selectedQuotationDetail.name === qName) {
+          await fetchQuotationDetail(qName, latestDoc.party_name || latestDoc.customer_name);
+        }
+        return;
+      }
+
+      let submitSuccess = false;
+      let submitErrorMsg = null;
+
+      // Attempt A: Standard Frappe submit RPC
+      try {
+        let headers = getQuotationHeaders();
+        let submitRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.submit`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: headers,
+          body: JSON.stringify({
+            doc: { ...latestDoc, docstatus: 1 }
+          })
+        });
+
+        // If CSRF error, force refresh token and retry
+        if (submitRes.status === 400 || submitRes.status === 403) {
+          await ensureCsrfToken(true);
+          headers = getQuotationHeaders();
+          submitRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.submit`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: headers,
+            body: JSON.stringify({
+              doc: { ...latestDoc, docstatus: 1 }
+            })
+          });
+        }
+
+        const submitJson = await submitRes.json();
+        if (submitRes.ok && !submitJson.exc) {
+          submitSuccess = true;
+        } else {
+          if (submitJson._server_messages) {
+            try {
+              const msgs = JSON.parse(submitJson._server_messages);
+              submitErrorMsg = JSON.parse(msgs[0]).message || submitErrorMsg;
+            } catch (_) {
+              submitErrorMsg = submitJson._server_messages;
+            }
+          } else {
+            submitErrorMsg = submitJson.exception || submitJson.message;
+          }
+        }
+      } catch (e) {
+        submitErrorMsg = e.message;
+      }
+
+      // Attempt B: Fallback via Resource PUT with docstatus = 1
+      if (!submitSuccess) {
+        try {
+          const putRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(qName)}`, {
+            method: 'PUT',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({ docstatus: 1, status: 'Submitted' })
+          });
+          const putJson = await putRes.json();
+          if (putRes.ok && !putJson.exc) {
+            submitSuccess = true;
+          } else if (!submitErrorMsg) {
+            submitErrorMsg = putJson?.exception || putJson?.message;
+          }
+        } catch (e) {
+          if (!submitErrorMsg) submitErrorMsg = e.message;
+        }
+      }
+
+      // Attempt C: Custom approve_reject_doc if available
+      if (!submitSuccess) {
+        try {
+          const apprRes = await fetch(`${erpnextConfig.url}/api/method/approve_reject_doc`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({
+              doctype_name: 'Quotation',
+              docname: qName,
+              state_code: 1
+            })
+          });
+          const apprJson = await apprRes.json();
+          if (apprRes.ok && !apprJson.exc) {
+            submitSuccess = true;
+          }
+        } catch (_) {}
+      }
+
+      // Attempt D: Fallback to update_quotation_workflow
+      if (!submitSuccess) {
+        try {
+          const wfRes = await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({
+              quotation: qName,
+              action: 'Approve'
+            })
+          });
+          const wfJson = await wfRes.json();
+          if (wfRes.ok && !wfJson.exc) {
+            submitSuccess = true;
+          }
+        } catch (_) {}
+      }
+
+      if (!submitSuccess) {
+        throw new Error(cleanErrorMessage(submitErrorMsg || 'Failed to submit quotation.'));
+      }
+
+      showToast('success', `Quotation ${qName} approved and submitted successfully.`);
+
+      setSelectedQuotationDetail(prev => {
+        if (prev && prev.name === qName) {
+          return { ...prev, docstatus: 1, status: 'Submitted' };
+        }
+        return prev;
+      });
+
+      await fetchQuotations();
+      if (selectedQuotationDetail && selectedQuotationDetail.name === qName) {
+        await fetchQuotationDetail(qName, latestDoc.party_name || latestDoc.customer_name);
+      }
+    } catch (err) {
+      console.error('Failed to approve service quotation:', err);
+      showToast('error', err.message || 'Failed to approve quotation.');
+    } finally {
+      setApprovingServiceQuoteId(null);
+    }
+  };
+
   // Amend Quotation Workflow (Revision logic)
   const handleAmendQuotation = async () => {
     if (!selectedQuotationDetail) return;
@@ -7929,7 +8181,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             </button>
                           )}
 
-                          {q.booking_id ? (
+                          {q.booking_id && !isServiceQuotation(q) ? (
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
@@ -7954,7 +8206,54 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               <Check size={11} />
                               <span>Go to Booking</span>
                             </button>
-                          ) : q.signed_document && (q.status !== 'Cancelled' && q.docstatus !== 2) ? (
+                          ) : isServiceQuotation(q) ? (
+                            (q.docstatus === 0 || q.status === 'Draft') ? (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                style={{
+                                  fontSize: 10.5,
+                                  fontWeight: 600,
+                                  padding: '4px 10px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  color: '#ffffff',
+                                  backgroundColor: '#10b981',
+                                  borderColor: '#10b981',
+                                  cursor: approvingServiceQuoteId === q.name ? 'not-allowed' : 'pointer'
+                                }}
+                                disabled={approvingServiceQuoteId === q.name}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleApproveServiceQuotation(q);
+                                }}
+                                title={`Approve and submit ${q.name}`}
+                              >
+                                <Check size={11} />
+                                <span>{approvingServiceQuoteId === q.name ? 'Approving...' : 'Approve'}</span>
+                              </button>
+                            ) : (q.docstatus === 1 || q.status === 'Submitted') ? (
+                              <span
+                                style={{
+                                  fontSize: 10.5,
+                                  fontWeight: 600,
+                                  padding: '3px 8px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  color: '#059669',
+                                  backgroundColor: '#ecfdf5',
+                                  borderRadius: 4,
+                                  border: '1px solid #a7f3d0'
+                                }}
+                                title="Approved"
+                              >
+                                <Check size={10} />
+                                <span>Approved</span>
+                              </span>
+                            ) : null
+                          ) : !isServiceQuotation(q) && q.signed_document && (q.status !== 'Cancelled' && q.docstatus !== 2) ? (
                             <button
                               type="button"
                               className="btn btn-primary btn-sm"
@@ -9176,7 +9475,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             })}
 
                             {/* Booking Action: For submitted/approved or any active quotation */}
-                            {selectedQuotationDetail.booking_id ? (
+                            {selectedQuotationDetail.booking_id && !isServiceQuotation(selectedQuotationDetail) ? (
                               <button
                                 type="button"
                                 className="qtn-btn-base qtn-btn-approve"
@@ -9187,7 +9486,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               </button>
                             ) : (
                               // Only enable and show Create Booking after signed document is uploaded/present
-                              selectedQuotationDetail.signed_document && (selectedQuotationDetail.status !== 'Cancelled' && selectedQuotationDetail.docstatus !== 2) ? (
+                              !isServiceQuotation(selectedQuotationDetail) && selectedQuotationDetail.signed_document && (selectedQuotationDetail.status !== 'Cancelled' && selectedQuotationDetail.docstatus !== 2) ? (
                                 <button
                                   type="button"
                                   className="qtn-btn-base"
@@ -9224,72 +9523,101 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               </button>
                             )}
 
-                            {/* Print Offer Letter Action */}
-                            <button
-                              id="qtn-print-action-btn"
-                              type="button"
-                              className="qtn-btn-base qtn-btn-print"
-                              onClick={() => {
-                                if (selectedQuotationDetail?.status === 'Cancelled' || selectedQuotationDetail?.workflow_state === 'Cancelled') {
-                                  showToast('error', 'Not allowed to print cancelled documents');
-                                  return;
-                                }
-                                if (erpnextConfig?.url && selectedQuotationDetail?.name) {
-                                  const printUrl = `${erpnextConfig.url}/printview?doctype=Quotation&name=${encodeURIComponent(selectedQuotationDetail.name)}&format=PMS%20Offer%20Letter&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
-                                  const printWindow = window.open(printUrl, '_blank');
-
-                                  if (printWindow) {
-                                    const injectAndPrint = () => {
-                                      try {
-                                        const doc = printWindow.document;
-                                        if (doc) {
-                                          doc.title = "";
-                                          if (doc.head) {
-                                            if (doc.getElementById('pms-custom-print-style')) return;
-                                            const style = doc.createElement('style');
-                                            style.id = 'pms-custom-print-style';
-                                            style.innerHTML = `
-                                              .action-banner { display: none !important; }
-                                              @page { size: auto; margin: 0mm; }
-                                              @media print {
-                                                @page { size: auto; margin: 0mm; }
-                                                body { margin: 15mm !important; padding: 0px !important; }
-                                                .action-banner, .action-bar, header, footer { display: none !important; }
-                                              }
-                                            `;
-                                            doc.head.appendChild(style);
-                                            setTimeout(() => { printWindow.print(); }, 500);
-                                          }
-                                        }
-                                      } catch (err) {
-                                        console.warn("Failed to inject CSS to print window:", err);
-                                      }
-                                    };
-
-                                    printWindow.onload = injectAndPrint;
-                                    let attempts = 0;
-                                    const checkInterval = setInterval(() => {
-                                      attempts++;
-                                      if (printWindow.closed || attempts > 80) {
-                                        clearInterval(checkInterval);
-                                        return;
-                                      }
-                                      try {
-                                        if (printWindow.document && printWindow.document.readyState === 'complete') {
-                                          clearInterval(checkInterval);
-                                          injectAndPrint();
-                                        }
-                                      } catch (err) {
-                                        // ignore cross-origin transitions
-                                      }
-                                    }, 100);
+                            {/* Service Quotation: Hide Print Offer Letter and replace with Approve button for submitting doctype.
+                               Standard Quotation: Show Print Offer Letter */}
+                            {isServiceQuotation(selectedQuotationDetail) ? (
+                              (selectedQuotationDetail.docstatus === 1 || selectedQuotationDetail.status === 'Submitted') ? (
+                                <button
+                                  id="qtn-approved-action-btn"
+                                  type="button"
+                                  className="qtn-btn-base qtn-btn-approve"
+                                  disabled
+                                  style={{ opacity: 0.9, cursor: 'default' }}
+                                  title="Service Quotation is already approved and submitted"
+                                >
+                                  <Check size={12} />
+                                  <span>Approved</span>
+                                </button>
+                              ) : (selectedQuotationDetail.status !== 'Cancelled' && selectedQuotationDetail.docstatus !== 2) ? (
+                                <button
+                                  id="qtn-approve-service-btn"
+                                  type="button"
+                                  className="qtn-btn-base qtn-btn-approve"
+                                  disabled={approvingServiceQuoteId === selectedQuotationDetail.name}
+                                  onClick={() => handleApproveServiceQuotation(selectedQuotationDetail)}
+                                  title={`Approve and submit ${selectedQuotationDetail.name}`}
+                                >
+                                  <Check size={12} />
+                                  <span>{approvingServiceQuoteId === selectedQuotationDetail.name ? 'Approving...' : 'Approve'}</span>
+                                </button>
+                              ) : null
+                            ) : (
+                              <button
+                                id="qtn-print-action-btn"
+                                type="button"
+                                className="qtn-btn-base qtn-btn-print"
+                                onClick={() => {
+                                  if (selectedQuotationDetail?.status === 'Cancelled' || selectedQuotationDetail?.workflow_state === 'Cancelled') {
+                                    showToast('error', 'Not allowed to print cancelled documents');
+                                    return;
                                   }
-                                }
-                              }}
-                            >
-                              <Printer size={13} />
-                              <span>Print Offer Letter</span>
-                            </button>
+                                  if (erpnextConfig?.url && selectedQuotationDetail?.name) {
+                                    const printUrl = `${erpnextConfig.url}/printview?doctype=Quotation&name=${encodeURIComponent(selectedQuotationDetail.name)}&format=PMS%20Offer%20Letter&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+                                    const printWindow = window.open(printUrl, '_blank');
+
+                                    if (printWindow) {
+                                      const injectAndPrint = () => {
+                                        try {
+                                          const doc = printWindow.document;
+                                          if (doc) {
+                                            doc.title = "";
+                                            if (doc.head) {
+                                              if (doc.getElementById('pms-custom-print-style')) return;
+                                              const style = doc.createElement('style');
+                                              style.id = 'pms-custom-print-style';
+                                              style.innerHTML = `
+                                                .action-banner { display: none !important; }
+                                                @page { size: auto; margin: 0mm; }
+                                                @media print {
+                                                  @page { size: auto; margin: 0mm; }
+                                                  body { margin: 15mm !important; padding: 0px !important; }
+                                                  .action-banner, .action-bar, header, footer { display: none !important; }
+                                                }
+                                              `;
+                                              doc.head.appendChild(style);
+                                              setTimeout(() => { printWindow.print(); }, 500);
+                                            }
+                                          }
+                                        } catch (err) {
+                                          console.warn("Failed to inject CSS to print window:", err);
+                                        }
+                                      };
+
+                                      printWindow.onload = injectAndPrint;
+                                      let attempts = 0;
+                                      const checkInterval = setInterval(() => {
+                                        attempts++;
+                                        if (printWindow.closed || attempts > 80) {
+                                          clearInterval(checkInterval);
+                                          return;
+                                        }
+                                        try {
+                                          if (printWindow.document && printWindow.document.readyState === 'complete') {
+                                            clearInterval(checkInterval);
+                                            injectAndPrint();
+                                          }
+                                        } catch (err) {
+                                          // ignore cross-origin transitions
+                                        }
+                                      }, 100);
+                                    }
+                                  }
+                                }}
+                              >
+                                <Printer size={13} />
+                                <span>Print Offer Letter</span>
+                              </button>
+                            )}
                           </div>
                         );
                       })()}
