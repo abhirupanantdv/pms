@@ -2968,10 +2968,10 @@ import MapComponent from './components/MapComponent';
 
 // Sample INITIAL MOCK DATA
 const INITIAL_PROPERTIES = [
-  { id: 'PROP-2041', name: 'Stratford Court Apartments', type: 'residential', land_and_building_type: 'residential', address: '12 Carpenters Road, London E15', unitsCount: 24, rent: 1850, area: 18000, listedOnline: true, occupancy: 85, land_description: 'Residential building with 24 premium apartments', lease_end_date: '2026-12-31' },
-  { id: 'PROP-8032', name: 'Carpenters Row Commercial', type: 'commercial', land_and_building_type: 'commercial', address: '44 Stratford High St, London E15', unitsCount: 8, rent: 4800, area: 12000, listedOnline: true, occupancy: 75, land_description: 'Carpenters office complex, double-front showroom', lease_end_date: '2027-06-30' },
-  { id: 'PROP-9910', name: 'Estate Galleria Mall', type: 'mall', land_and_building_type: 'mall', address: 'Golden Loop Blvd, London E15', unitsCount: 17, rent: 5500, area: 32000, listedOnline: false, occupancy: 65, land_description: 'Three-story retail plaza, central courtyard', lease_end_date: '2029-03-01' },
-  { id: 'PROP-3091', name: 'E15 Plaza complex', type: 'commercial', land_and_building_type: 'commercial', address: '78 Jebb Ln, London E15', unitsCount: 15, rent: 3900, area: 14500, listedOnline: false, occupancy: 90, land_description: 'Mixed industrial depot, rear loading bay access', lease_end_date: '2028-11-15' }
+  { id: 'PROP-2041', name: 'Stratford Court Apartments', type: 'residential', land_and_building_type: 'residential', address: '12 Carpenters Road, London E15', unitsCount: 24, rent: 1850, area: 18000, listedOnline: true, occupancy: 85, land_description: 'Residential building with 24 premium apartments', lease_start_date: '2024-01-01', lease_end_date: '2026-12-31' },
+  { id: 'PROP-8032', name: 'Carpenters Row Commercial', type: 'commercial', land_and_building_type: 'commercial', address: '44 Stratford High St, London E15', unitsCount: 8, rent: 4800, area: 12000, listedOnline: true, occupancy: 75, land_description: 'Carpenters office complex, double-front showroom', lease_start_date: '2024-06-15', lease_end_date: '2027-06-30' },
+  { id: 'PROP-9910', name: 'Estate Galleria Mall', type: 'mall', land_and_building_type: 'mall', address: 'Golden Loop Blvd, London E15', unitsCount: 17, rent: 5500, area: 32000, listedOnline: false, occupancy: 65, land_description: 'Three-story retail plaza, central courtyard', lease_start_date: '2024-03-01', lease_end_date: '2029-03-01' },
+  { id: 'PROP-3091', name: 'E15 Plaza complex', type: 'commercial', land_and_building_type: 'commercial', address: '78 Jebb Ln, London E15', unitsCount: 15, rent: 3900, area: 14500, listedOnline: false, occupancy: 90, land_description: 'Mixed industrial depot, rear loading bay access', lease_start_date: '2023-11-15', lease_end_date: '2028-11-15' }
 ];
 
 const INITIAL_TENANTS = [
@@ -3073,6 +3073,7 @@ export default function App() {
   const [preSelectedIssue, setPreSelectedIssue] = useState(null);
   const [bookingSearchFromQuotation, setBookingSearchFromQuotation] = useState('');
   const [selectedQuotationId, setSelectedQuotationId] = useState('');
+  const [selectedTaskIdForMaintenance, setSelectedTaskIdForMaintenance] = useState('');
 
   useEffect(() => {
     const handleNavigateQuotation = (e) => {
@@ -3082,8 +3083,24 @@ export default function App() {
       }
       setCurrentTab('quotation');
     };
+    const handleNavigateTask = (e) => {
+      const taskId = e.detail?.taskId;
+      if (taskId) {
+        setSelectedTaskIdForMaintenance(taskId);
+      }
+      setCurrentTab('maintenance');
+    };
+    const handleNavigateInvoice = (e) => {
+      setCurrentTab('invoices');
+    };
     window.addEventListener('pms:navigate-quotation', handleNavigateQuotation);
-    return () => window.removeEventListener('pms:navigate-quotation', handleNavigateQuotation);
+    window.addEventListener('pms:navigate-task', handleNavigateTask);
+    window.addEventListener('pms:navigate-invoice', handleNavigateInvoice);
+    return () => {
+      window.removeEventListener('pms:navigate-quotation', handleNavigateQuotation);
+      window.removeEventListener('pms:navigate-task', handleNavigateTask);
+      window.removeEventListener('pms:navigate-invoice', handleNavigateInvoice);
+    };
   }, []);
 
   // PMS Portal Selection State ('admin' | 'operation')
@@ -3320,6 +3337,7 @@ export default function App() {
                   occupancy,
                   land_description: p.land_description || '',
                   legal_description: p.legal_description || legalDescMap[p.name] || '',
+                  lease_start_date: p.lease_start_date || '',
                   lease_end_date: p.lease_end_date || '2026-12-31',
                   years_remaining: p.years_remaining !== undefined ? p.years_remaining : '',
                   image: p.image || null
@@ -3384,6 +3402,7 @@ export default function App() {
                     occupancy: Math.floor(65 + Math.random() * 31),
                     land_description: p.land_description || '',
                     legal_description: p.legal_description || '',
+                    lease_start_date: p.lease_start_date || '',
                     lease_end_date: p.lease_end_date || '2026-12-31',
                     years_remaining: p.years_remaining !== undefined ? p.years_remaining : '',
                     image: p.image || null
@@ -3442,7 +3461,7 @@ export default function App() {
                   name: inv.name,
                   tenantName: inv.customer_name || 'ERPNext Tenant',
                   customer: inv.customer,
-                  propertyId: inv.booking_id || 'PROP-2041',
+                  propertyId: inv.booking_id || '',
                   booking_id: inv.booking_id,
                   amount: inv.rounded_total || inv.grand_total || 2500,
                   outstandingAmount: inv.outstanding_amount !== undefined ? inv.outstanding_amount : (statusLower === 'paid' ? 0 : inv.grand_total || 2500),
@@ -3699,53 +3718,124 @@ export default function App() {
 
         // 5. Fetch Issues for Helpdesk Support (matching ERPNext DocType fields)
         try {
-          const issueFields = JSON.stringify([
-            "name", "subject", "booking_number", "main_issues", "company",
-            "status", "priority", "raised_by", "date", "opening_date",
-            "opening_time", "agreement_status", "budget", "naming_series"
-          ]);
-          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue?fields=${encodeURIComponent(issueFields)}`, {
-            credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json'
+          let issueList = null;
+
+          // Strategy 1: fields=["*"]
+          try {
+            const res1 = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue?fields=%5B%22*%22%5D&limit_page_length=500&order_by=creation%20desc`, {
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+            });
+            if (res1.ok) {
+              const data1 = await res1.json();
+              if (Array.isArray(data1.data) && data1.data.length > 0) {
+                issueList = data1.data;
+              }
             }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            const list = data.data || data;
-            if (Array.isArray(list) && list.length > 0) {
-              setSupportTickets(list.map((issue, index) => {
-                const statusLower = (issue.status || 'open').toLowerCase();
-                const finalStatus = ['open', 'closed', 'in-progress', 'resolved'].includes(statusLower) ? statusLower : 'open';
-                const priorityLower = (issue.priority || 'medium').toLowerCase();
-                const finalPriority = ['low', 'medium', 'high', 'urgent'].includes(priorityLower) ? priorityLower : 'medium';
-                const categoriesList = ['maintenance', 'billing', 'permit'];
-                return {
-                  id: issue.name || `SUP-${Math.floor(700 + Math.random() * 200)}`,
-                  subject: issue.subject || 'Support Request',
-                  customerId: issue.customer || '',
-                  tenantName: issue.customer || issue.raised_by || 'Administrator',
-                  customer_email: issue.raised_by || '',
-                  propertyId: 'PROP-2041',
-                  status: finalStatus,
-                  lastUpdated: 'Just now',
-                  dateRaised: issue.date || issue.opening_date || '2026-06-01',
-                  priority: finalPriority,
-                  booking_number: issue.booking_number || 'BOOKING-00243',
-                  main_issues: issue.main_issues || 'Utilities & Infrastructure Issues List',
-                  company: issue.company || 'CARPENTERS PROPERTIES PTE LIMITED',
-                  agreement_status: issue.agreement_status || 'First Response Due',
-                  budget: issue.budget || 0,
-                  category: issue.main_issues || categoriesList[index % categoriesList.length],
-                  messages: [
-                    { sender: 'tenant', text: issue.subject || 'Please look into this issue.', timestamp: '10:00 AM' }
-                  ]
-                };
-              }));
+          } catch (e1) {
+            console.warn('App fetch Issue fields=["*"] failed:', e1);
+          }
+
+          // Strategy 2: Guaranteed standard safe fields
+          if (!issueList) {
+            try {
+              const safeFields = encodeURIComponent(JSON.stringify([
+                "name", "subject", "customer", "customer_name", "customer_name1",
+                "customer_email", "customer_phone_number", "contact", "booking_number",
+                "raised_by", "status", "priority", "issue_type", "main_issues", "description",
+                "opening_date", "opening_time", "resolution_date", "company",
+                "agreement_status", "budget", "creation", "modified"
+              ]));
+              const res2 = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue?fields=${safeFields}&limit_page_length=500&order_by=creation%20desc`, {
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+              });
+              if (res2.ok) {
+                const data2 = await res2.json();
+                if (Array.isArray(data2.data) && data2.data.length > 0) {
+                  issueList = data2.data;
+                }
+              }
+            } catch (e2) {
+              console.warn('App fetch Issue safe fields failed:', e2);
             }
           }
+
+          // Strategy 3: Minimal fallback (no fields parameter)
+          if (!issueList) {
+            try {
+              const res3 = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue?limit_page_length=500&order_by=creation%20desc`, {
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+              });
+              if (res3.ok) {
+                const data3 = await res3.json();
+                const rawList = data3.data || [];
+                if (Array.isArray(rawList) && rawList.length > 0) {
+                  const detailPromises = rawList.slice(0, 30).map(async (item) => {
+                    try {
+                      const itemRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue/${encodeURIComponent(item.name)}`, {
+                        credentials: 'include',
+                        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+                      });
+                      if (itemRes.ok) {
+                        const itemJson = await itemRes.json();
+                        return itemJson.data || itemJson;
+                      }
+                    } catch { }
+                    return item;
+                  });
+                  issueList = await Promise.all(detailPromises);
+                }
+              }
+            } catch (e3) {
+              console.warn('App fetch Issue minimal fallback failed:', e3);
+            }
+          }
+
+          if (Array.isArray(issueList) && issueList.length > 0) {
+            setSupportTickets(issueList.map((issue) => {
+              const statusRaw = String(issue.status || 'Open').trim();
+              const priorityRaw = String(issue.priority || 'Medium').trim();
+              const tenant = issue.customer_name1 || issue.customer_name || issue.customer || issue.raised_by || 'Administrator';
+              let dateStr = issue.date || issue.opening_date;
+              if (!dateStr && issue.creation) {
+                dateStr = String(issue.creation).split(' ')[0];
+              }
+
+              return {
+                id: issue.name,
+                subject: issue.subject || 'Support Request',
+                customerId: issue.customer || '',
+                tenantName: tenant,
+                customer_email: issue.customer_email || issue.raised_by || '',
+                customer_phone: issue.customer_phone_number || '',
+                contact: issue.contact || '',
+                propertyId: issue.custom_property || issue.property || '',
+                status: statusRaw,
+                priority: priorityRaw,
+                booking_number: issue.booking_number || issue.custom_booking_id || issue.custom_booking_number || 'BOOKING-00243',
+                main_issues: issue.main_issues || issue.custom_main_issues || issue.issue_type || 'Utilities & Infrastructure Issues List',
+                company: issue.company || 'CARPENTERS PROPERTIES PTE LIMITED',
+                agreement_status: issue.agreement_status || 'First Response Due',
+                budget: issue.budget || 0,
+                table_gtmq: issue.table_gtmq || [],
+                category: issue.main_issues || issue.issue_type || issue.custom_main_issues || 'Maintenance',
+                dateRaised: dateStr || '2026-06-01',
+                lastUpdated: issue.modified ? String(issue.modified).split('.')[0] : 'Just now',
+                description: issue.description || '',
+                messages: [
+                  {
+                    sender: 'tenant',
+                    text: (issue.description ? issue.description.replace(/<[^>]*>/g, '') : issue.subject) || 'Support request created.',
+                    timestamp: dateStr || '10:00 AM'
+                  }
+                ]
+              };
+            }));
+          }
         } catch (err) {
-          console.warn('ERPNext Issue fetch failed, using fallback mock data:', err);
+          console.warn('ERPNext Issue fetch failed:', err);
         }
 
         // 6. Fetch Maintenance Visit
@@ -4544,22 +4634,51 @@ export default function App() {
 
   const handleCreateMaintenanceSchedule = async (newSchedule) => {
     if (ERPNEXT_CONFIG) {
-      const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule`, {
+      const payloadToSend = { ...newSchedule };
+      // Never send dummy mock 'PROP-2041' or empty property links
+      if (!payloadToSend.custom_property || payloadToSend.custom_property === 'PROP-2041') {
+        delete payloadToSend.custom_property;
+      }
+
+      let res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule`, {
         method: 'POST',
         credentials: 'include',
         headers: getAuthHeaders({
           'Content-Type': 'application/json'
         }),
-        body: JSON.stringify(newSchedule)
+        body: JSON.stringify(payloadToSend)
       });
+
+      // Auto-retry without custom_property if ERPNext rejects it via Property LinkValidationError
+      if (!res.ok && payloadToSend.custom_property) {
+        try {
+          const errClone = res.clone();
+          const errText = await errClone.text();
+          if (errText.includes('Could not find Property') || errText.includes('Property') || errText.includes('LinkValidationError')) {
+            const retryPayload = { ...payloadToSend };
+            delete retryPayload.custom_property;
+            res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders({
+                'Content-Type': 'application/json'
+              }),
+              body: JSON.stringify(retryPayload)
+            });
+          }
+        } catch (retryErr) {
+          console.warn('Auto-retry without custom_property failed:', retryErr);
+        }
+      }
+
       if (res.ok) {
         const data = await res.json();
         const createdDoc = data.data || data;
-        const detailRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule/${createdDoc.name}`, {
+        const detailRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(createdDoc.name)}`, {
           credentials: 'include',
-          headers: {
+          headers: getAuthHeaders({
             'Content-Type': 'application/json'
-          }
+          })
         });
         if (detailRes.ok) {
           const detailData = await detailRes.json();
@@ -4800,16 +4919,26 @@ export default function App() {
         const formattedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         const formattedTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
 
+        // Ensure table_gtmq has items if available
+        let tableGtmq = Array.isArray(newIssue.table_gtmq) ? [...newIssue.table_gtmq] : [];
+        if (tableGtmq.length === 0 && (newIssue.subcategory || newIssue.issue_type)) {
+          tableGtmq = [{ issue: newIssue.subcategory || newIssue.issue_type }];
+        }
+
         const issuePayload = {
           doctype: 'Issue',
           naming_series: newIssue.naming_series || 'ISS-.YYYY.-',
           subject: newIssue.subject,
-          booking_number: newIssue.booking_number || 'BOOKING-00243',
+          booking_number: newIssue.booking_number || 'BOOKING-10-00526',
           main_issues: newIssue.main_issues || 'Utilities & Infrastructure Issues List',
           company: newIssue.company || 'CARPENTERS PROPERTIES PTE LIMITED',
           priority: safePriority,
           status: newIssue.status || 'Open',
-          raised_by: newIssue.raised_by || 'Administrator',
+          raised_by: newIssue.raised_by || (currentUserDetails?.fullName ? `${currentUserDetails.fullName.toLowerCase().replace(/\s+/g, '.')}@anantdv.com` : 'sufal.dd@anantdv.com'),
+          customer_name1: newIssue.customer_name1 || newIssue.customer || 'Administrator',
+          ...(newIssue.customer_email ? { customer_email: newIssue.customer_email } : {}),
+          ...(newIssue.customer_phone_number ? { customer_phone_number: newIssue.customer_phone_number } : {}),
+          ...(newIssue.contact ? { contact: newIssue.contact } : (currentUserDetails?.fullName ? { contact: currentUserDetails.fullName } : {})),
           agreement_status: newIssue.agreement_status || 'First Response Due',
           budget: newIssue.budget !== undefined ? Number(newIssue.budget) : 0,
           via_customer_portal: newIssue.via_customer_portal !== undefined ? Number(newIssue.via_customer_portal) : 0,
@@ -4818,9 +4947,8 @@ export default function App() {
           opening_time: newIssue.opening_time || formattedTime,
           custom_issue_items: Array.isArray(newIssue.custom_issue_items) ? newIssue.custom_issue_items : [],
           table_fogi: Array.isArray(newIssue.table_fogi) ? newIssue.table_fogi : [],
-          table_gtmq: Array.isArray(newIssue.table_gtmq) ? newIssue.table_gtmq : [],
-          ...(newIssue.description ? { description: newIssue.description } : {}),
-          ...(newIssue.customer ? { customer: newIssue.customer } : {})
+          table_gtmq: tableGtmq,
+          ...(newIssue.description ? { description: newIssue.description } : {})
         };
 
         const postIssue = async (payload) => {
@@ -4836,7 +4964,7 @@ export default function App() {
 
         let res = await postIssue(issuePayload);
 
-        // 2. If rejected due to LinkValidationError
+        // 2. If rejected due to LinkValidationError or table validation
         if (!res.ok) {
           let errText = '';
           try {
@@ -4845,14 +4973,20 @@ export default function App() {
             errText = JSON.stringify(errData);
           } catch { }
 
-          // A. If customer failed validation, retry without customer field
-          if (errText.includes('Customer') || errText.includes('customer')) {
+          // A. If child table validation failed, retry with empty child tables
+          if (errText.includes('table_gtmq') || errText.includes('table_fogi') || errText.includes('custom_issue_items')) {
+            const noTable = { ...issuePayload, table_gtmq: [], table_fogi: [], custom_issue_items: [] };
+            res = await postIssue(noTable);
+          }
+
+          // B. If customer failed validation, retry without customer field
+          if (!res.ok && (errText.includes('Customer') || errText.includes('customer'))) {
             const noCust = { ...issuePayload };
             delete noCust.customer;
             res = await postIssue(noCust);
           }
 
-          // B. Handle Main Issues validation failure
+          // C. Handle Main Issues validation failure
           if (!res.ok && (errText.includes('Main Issues') || errText.includes('main_issues'))) {
             if (issuePayload.main_issues) {
               try {
@@ -4882,7 +5016,7 @@ export default function App() {
             }
           }
 
-          // C. Handle Priority validation failure
+          // D. Handle Priority validation failure
           if (!res.ok && (errText.includes('Priority') || errText.includes('priority'))) {
             const fallbackPriorityPayload = { ...issuePayload, priority: 'Medium' };
             res = await postIssue(fallbackPriorityPayload);
@@ -4895,17 +5029,21 @@ export default function App() {
           const mappedIssue = {
             id: createdDoc.name,
             subject: createdDoc.subject || newIssue.subject,
-            tenantName: createdDoc.customer_name1 || createdDoc.customer || createdDoc.raised_by || newIssue.customer || 'Administrator',
-            propertyId: 'PROP-2041',
+            tenantName: createdDoc.customer_name1 || createdDoc.customer_name || createdDoc.customer || createdDoc.raised_by || newIssue.customer_name1 || newIssue.customer || 'Administrator',
+            customer_email: createdDoc.customer_email || createdDoc.raised_by || newIssue.customer_email || '',
+            customer_phone: createdDoc.customer_phone_number || newIssue.customer_phone_number || '',
+            contact: createdDoc.contact || newIssue.contact || '',
+            propertyId: createdDoc.custom_property || createdDoc.property || newIssue.custom_property || newIssue.property || '',
             status: (createdDoc.status || newIssue.status || 'open').toLowerCase(),
             lastUpdated: 'Just now',
             dateRaised: createdDoc.date || newIssue.date || formattedDate,
             priority: (createdDoc.priority || safePriority || 'medium').toLowerCase(),
-            booking_number: createdDoc.booking_number || newIssue.booking_number || 'BOOKING-00243',
+            booking_number: createdDoc.booking_number || newIssue.booking_number || 'BOOKING-10-00526',
             main_issues: createdDoc.main_issues || newIssue.main_issues || 'Utilities & Infrastructure Issues List',
             company: createdDoc.company || newIssue.company || 'CARPENTERS PROPERTIES PTE LIMITED',
             agreement_status: createdDoc.agreement_status || newIssue.agreement_status || 'First Response Due',
             budget: createdDoc.budget || 0,
+            table_gtmq: createdDoc.table_gtmq || newIssue.table_gtmq || [],
             category: createdDoc.main_issues || newIssue.main_issues || 'maintenance',
             messages: [
               { sender: 'tenant', text: createdDoc.description || newIssue.description || 'Support request created.', timestamp: '10:00 AM' }
@@ -4975,6 +5113,7 @@ export default function App() {
       if (t.id === ticketId) {
         return {
           ...t,
+          status: !message.isInternal ? 'Replied' : t.status,
           lastUpdated: 'Just now',
           messages: [...(t.messages || []), {
             sender: 'admin',
@@ -5020,10 +5159,18 @@ export default function App() {
         const matchedTenant = currentTicket?.customerId
           ? tenants.find(t => t.name === currentTicket.customerId || t.id === currentTicket.customerId)
           : null;
-        const customerEmail = matchedTenant?.email || currentTicket?.customer_email;
+        const customerEmail = message.recipient ||
+          matchedTenant?.email ||
+          currentTicket?.customer_email ||
+          currentTicket?.customer_email1 ||
+          (currentTicket?.raised_by && currentTicket.raised_by.includes('@') ? currentTicket.raised_by : '') ||
+          'sufal.dd@anantdv.com';
+
+        const subjectLine = message.subject || `Re: ${currentTicket?.subject || 'Need Maintanence'} (#${ticketId})`;
 
         if (!message.isInternal && customerEmail) {
           // Send public comment as a Communication email (calls whitelisted method to trigger SMTP dispatch)
+          let emailSentSuccessfully = false;
           try {
             const res = await fetch(`${ERPNEXT_CONFIG.url}/api/method/frappe.core.doctype.communication.email.make`, {
               method: 'POST',
@@ -5033,24 +5180,80 @@ export default function App() {
               }),
               body: JSON.stringify({
                 recipients: customerEmail,
-                subject: `Re: ${currentTicket.subject || 'Support Ticket Response'}`,
+                subject: subjectLine,
                 content: finalCommentText,
                 doctype: 'Issue',
                 name: ticketId,
                 send_email: 1,
                 communication_medium: 'Email',
-                sent_or_received: 'Sent'
+                sent_or_received: 'Sent',
+                send_me_a_copy: message.sendMeCopy ? 1 : 0
               })
             });
-            if (!res.ok) {
-              const errMsg = await res.text();
-              console.error("frappe.core.doctype.communication.email.make API failed with status:", res.status, errMsg);
+            if (res.ok) {
+              emailSentSuccessfully = true;
+              console.log("frappe.core.doctype.communication.email.make succeeded");
             } else {
-              const resJson = await res.json();
-              console.log("frappe.core.doctype.communication.email.make API succeeded:", resJson);
+              const errMsg = await res.text();
+              console.warn("frappe.core.doctype.communication.email.make returned status:", res.status, errMsg);
             }
           } catch (fetchErr) {
             console.error("Error calling communication.email.make API:", fetchErr);
+          }
+
+          // Fallback direct Communication doc insert so the email activity is permanently tracked
+          try {
+            await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Communication`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({
+                communication_type: 'Communication',
+                communication_medium: 'Email',
+                sent_or_received: 'Sent',
+                sender: 'Administrator',
+                sender_full_name: 'Administrator',
+                recipients: customerEmail,
+                subject: subjectLine,
+                content: finalCommentText,
+                reference_doctype: 'Issue',
+                reference_name: ticketId,
+                status: 'Linked'
+              })
+            });
+          } catch (commErr) {
+            console.warn("Direct Communication doc insert fallback error:", commErr);
+          }
+
+          // Automatically set status to Replied upon sending an email reply
+          try {
+            await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Issue/${ticketId}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({ status: 'Replied' })
+            });
+          } catch (stErr) {
+            console.warn("Failed updating Issue status to Replied:", stErr);
+          }
+
+          // Also insert into Comment timeline for backward compatibility
+          try {
+            await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Comment`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({
+                comment_type: 'Comment',
+                reference_doctype: 'Issue',
+                reference_name: ticketId,
+                content: finalCommentText,
+                comment_by: 'Administrator',
+                is_internal: 0
+              })
+            });
+          } catch (commentErr) {
+            console.warn("Comment insert fallback error:", commentErr);
           }
         } else {
           // If it is an internal comment or no email is found, post it as a standard timeline Comment
@@ -5065,7 +5268,7 @@ export default function App() {
               reference_doctype: 'Issue',
               reference_name: ticketId,
               content: finalCommentText,
-              comment_by: 'devteam@anantdv.com',
+              comment_by: 'Administrator',
               is_internal: message.isInternal ? 1 : 0
             })
           });
@@ -5460,7 +5663,7 @@ export default function App() {
             <div>
               <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Monthly Revenue</div>
               <div style={{ fontSize: '1.6rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                ${dashboardStats.monthlyRevenue}K <span style={{ fontSize: 12, color: '#10b981', fontWeight: 600 }}>+3.1%</span>
+                F${dashboardStats.monthlyRevenue}K <span style={{ fontSize: 12, color: '#10b981', fontWeight: 600 }}>+3.1%</span>
               </div>
             </div>
           </div>
@@ -5612,7 +5815,7 @@ export default function App() {
                   <div key={idx} style={{ fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                       <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{item.label}</span>
-                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>${item.amount.toLocaleString()} ({percentage}%)</span>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>F${item.amount.toLocaleString()} ({percentage}%)</span>
                     </div>
                     <div style={{ width: '100%', height: 6, background: 'var(--bg-tertiary)', borderRadius: 3, overflow: 'hidden' }}>
                       <div style={{ width: `${percentage}%`, height: '100%', background: item.color, borderRadius: 3 }} />
@@ -5796,6 +5999,13 @@ export default function App() {
     setCurrentTab('bookings');
   };
 
+  const handleGoToTask = (taskId) => {
+    if (taskId) {
+      setSelectedTaskIdForMaintenance(taskId);
+      setCurrentTab('maintenance');
+    }
+  };
+
   const renderActiveView = () => {
     if (dataLoading && currentTab !== 'reports' && currentTab !== 'mall-3d') {
       return (
@@ -5826,7 +6036,16 @@ export default function App() {
       case 'tenants':
         return <Tenants tenants={tenants} properties={properties} onAddTenant={handleAddTenant} erpnextConfig={ERPNEXT_CONFIG} />;
       case 'tenant-onboarding':
-        return <TenantOnboarding erpnextConfig={ERPNEXT_CONFIG} getCsrfToken={getCsrfToken} />;
+        return (
+          <TenantOnboarding
+            erpnextConfig={ERPNEXT_CONFIG}
+            getCsrfToken={getCsrfToken}
+            onNavigateToQuotation={(qId) => {
+              if (qId) setSelectedQuotationId(qId);
+              setCurrentTab('quotation');
+            }}
+          />
+        );
       case 'owners':
         return <Owners owners={owners} erpnextConfig={ERPNEXT_CONFIG} />;
       case 'mall-3d':
@@ -5857,12 +6076,31 @@ export default function App() {
               if (qId) setSelectedQuotationId(qId);
               setCurrentTab('quotation');
             }}
+            onNavigateToInvoice={() => {
+              setCurrentTab('invoices');
+            }}
+            preSelectedTaskId={selectedTaskIdForMaintenance}
+            clearPreSelectedTaskId={() => setSelectedTaskIdForMaintenance('')}
           />
         );
       case 'invoices':
         return <Invoices invoices={invoices} accounts={accounts} glEntries={glEntries} onAddInvoice={handleAddInvoice} onRecordPayment={handleRecordPayment} erpnextConfig={ERPNEXT_CONFIG} tenants={tenants} properties={properties} bookings={bookings} />;
       case 'support':
-        return <Support tickets={supportTickets} onAddMessage={handleAddSupportMessage} onCreateIssue={handleCreateIssue} tenants={tenants} properties={properties} bookings={bookings} erpnextConfig={ERPNEXT_CONFIG} onConvertToMaintenance={(ticket) => { setPreSelectedIssue(ticket); setCurrentTab('maintenance'); }} />;
+        return (
+          <Support
+            tickets={supportTickets}
+            onAddMessage={handleAddSupportMessage}
+            onCreateIssue={handleCreateIssue}
+            tenants={tenants}
+            properties={properties}
+            bookings={bookings}
+            erpnextConfig={ERPNEXT_CONFIG}
+            onCreateSchedule={handleCreateMaintenanceSchedule}
+            onConvertToMaintenance={(ticket) => {
+              setPreSelectedIssue(ticket);
+            }}
+          />
+        );
       case 'reports':
         return <Reports />;
       case 'hrms':
@@ -5890,6 +6128,7 @@ export default function App() {
             erpnextConfig={ERPNEXT_CONFIG}
             properties={properties}
             onGoToBooking={handleGoToBooking}
+            onGoToTask={handleGoToTask}
             initialQuotationId={selectedQuotationId}
             onClearInitialQuotation={() => setSelectedQuotationId('')}
           />

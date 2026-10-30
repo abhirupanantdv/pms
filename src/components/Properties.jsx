@@ -2542,34 +2542,42 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     fetchDocTypeFields();
   }, [erpnextConfig]);
 
-  // Map of legal_description directly fetched from Property Group DocType
+  // Map of legal_description and lease_start_date directly fetched from Property Group DocType
   const [legalDescriptions, setLegalDescriptions] = useState({});
+  const [leaseStartDates, setLeaseStartDates] = useState({});
 
-  // Fetch legal_description for each Property Group directly from DocType
+  // Fetch legal_description and lease_start_date for each Property Group directly from DocType
   useEffect(() => {
     if (!erpnextConfig || !erpnextConfig.url) return;
-    const fetchLegalDescriptions = async () => {
+    const fetchPropertyMeta = async () => {
       try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Property%20Group?fields=["name","legal_description"]&limit_page_length=0`, {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Property%20Group?fields=["name","legal_description","lease_start_date","lease_end_date"]&limit_page_length=0`, {
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' })
         });
         if (res.ok) {
           const json = await res.json();
           const items = json.data || [];
-          const map = {};
+          const descMap = {};
+          const startMap = {};
           items.forEach(item => {
-            if (item.name && item.legal_description) {
-              map[item.name] = item.legal_description;
+            if (item.name) {
+              if (item.legal_description) {
+                descMap[item.name] = item.legal_description;
+              }
+              if (item.lease_start_date) {
+                startMap[item.name] = item.lease_start_date;
+              }
             }
           });
-          setLegalDescriptions(prev => ({ ...prev, ...map }));
+          setLegalDescriptions(prev => ({ ...prev, ...descMap }));
+          setLeaseStartDates(prev => ({ ...prev, ...startMap }));
         }
       } catch (err) {
-        console.warn('Failed to fetch legal_description from Property Group doctype:', err);
+        console.warn('Failed to fetch legal_description and lease_start_date from Property Group doctype:', err);
       }
     };
-    fetchLegalDescriptions();
+    fetchPropertyMeta();
   }, [erpnextConfig, properties]);
 
   // Form states
@@ -2622,7 +2630,6 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     { fieldname: 'property_area', label: 'Property Area (Sq Ft)', fieldtype: 'Data', placeholder: 'e.g. 2500' },
     { fieldname: 'lease_start_date', label: 'Lease Start Date', fieldtype: 'Date', required: true },
     { fieldname: 'lease_end_date', label: 'Lease End Date', fieldtype: 'Date', required: true },
-    { fieldname: 'years_remaining', label: 'Years Remaining', fieldtype: 'Data', required: true, placeholder: 'e.g. 45' },
     { fieldname: 'custom_latitude', label: 'Latitude', fieldtype: 'Float', placeholder: 'e.g. -18.136' },
     { fieldname: 'custom_longitude', label: 'Longitude', fieldtype: 'Float', placeholder: 'e.g. 178.426' },
     { fieldname: 'legal_description', label: 'Legal Description', fieldtype: 'Text', placeholder: 'e.g. C.T. 14596...' },
@@ -2754,6 +2761,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
   }, [showAddModal, leaseEndDate, leaseStartDate]);
 
   const renderPropertyField = (field) => {
+    if (!field || field.fieldname === 'years_remaining') return null;
     const value = getFieldValue(field.fieldname);
     const onChange = (val) => {
       if (field.fieldtype === 'Int') {
@@ -2855,9 +2863,8 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     { fieldname: 'item_name', label: 'Unit Name', fieldtype: 'Data', required: true, placeholder: 'e.g. 23unit' },
     { fieldname: 'item_group', label: 'Unit Group', fieldtype: 'Select', required: true, options: ['Commercial', 'Residential', 'Retail'] },
     { fieldname: 'custom_floor', label: 'Floor', fieldtype: 'Select', required: true, options: ['Ground', '1st', '2nd', '3rd', '4th', 'Unspecified'] },
-    { fieldname: 'standard_rate', label: 'Standard Rate', fieldtype: 'Float', required: true, placeholder: 'e.g. 700' },
+    { fieldname: 'standard_rate', label: 'Standard Selling Rate(F$)', fieldtype: 'Float', required: true, placeholder: 'e.g. 700' },
     { fieldname: 'custom_7average_carpet_area_of_units', label: 'Average Carpet Area of Units (Sq Ft)', fieldtype: 'Int', required: true, placeholder: 'e.g. 90' },
-    { fieldname: 'custom_is_recomended_', label: 'Is Recommended', fieldtype: 'Select', required: true, options: ['No', 'Yes'] },
     { fieldname: 'stock_uom', label: 'Stock UOM', fieldtype: 'Link', doctype: 'UOM', required: true }
   ];
 
@@ -3588,7 +3595,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     const areaNum = parseInt(unitArea || 0, 10);
 
     if (isNaN(rateNum) || rateNum < 0) {
-      setAlertState({ show: true, success: false, message: 'Standard Rate should not be negative.' });
+      setAlertState({ show: true, success: false, message: 'Standard Selling Rate(F$) should not be negative.' });
       return;
     }
     if (isNaN(areaNum) || areaNum <= 0) {
@@ -4393,14 +4400,59 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
   const filteredProperties = properties.filter(prop => {
     const propType = prop.land_and_building_type || prop.type;
     const matchesFilter = filterType === 'all' || propType === filterType || prop.type === filterType;
-    const matchesSearch = prop.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      prop.address.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesFilter && matchesSearch;
+    if (!matchesFilter) return false;
+
+    const query = (searchQuery || '').trim().toLowerCase();
+    if (!query) return true;
+
+    // Collect all table and property values to search across all columns
+    const legalDesc = legalDescriptions[prop.name] ||
+      legalDescriptions[prop.id] ||
+      prop.legal_description ||
+      (prop.id === selectedProp?.id && detailedProp?.legal_description ? detailedProp.legal_description : '') ||
+      prop.land_description ||
+      '';
+    const leaseEnd = prop.lease_end_date || '2026-12-31';
+
+    const searchableValues = [
+      prop.id,
+      prop.name,
+      prop.address,
+      prop.land_and_building_type,
+      prop.type,
+      legalDesc,
+      leaseEnd,
+      prop.locality,
+      prop.district,
+      prop.country,
+      prop.years_remaining,
+      prop.rent,
+      prop.area,
+      prop.unitsCount,
+      prop.occupancy,
+      prop.status,
+      prop.description
+    ];
+
+    // Include any other primitive values present on the property object
+    Object.values(prop).forEach(val => {
+      if (val !== null && val !== undefined && typeof val !== 'object') {
+        searchableValues.push(val);
+      }
+    });
+
+    const combinedText = searchableValues
+      .filter(v => v !== null && v !== undefined)
+      .map(v => String(v).toLowerCase())
+      .join(' ');
+
+    const terms = query.split(/\s+/).filter(Boolean);
+    return terms.every(term => combinedText.includes(term));
   });
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filteredProperties.length]);
+  }, [searchQuery, filterType, filteredProperties.length]);
 
   const totalPages = Math.ceil(filteredProperties.length / itemsPerPage);
   const indexOfLastItem = currentPage * itemsPerPage;
@@ -4449,7 +4501,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     }
 
     const fields = [
-      { label: 'Unit Rent', value: `$${rentVal.toLocaleString()}/mo` },
+      { label: 'Unit Rent', value: `F$${rentVal.toLocaleString()}/mo` },
       { label: 'Unit Area', value: `${areaVal} ${areaUnit}` }
     ];
 
@@ -4536,7 +4588,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
             <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             <input
               type="text"
-              placeholder="Search by name or location..."
+              placeholder="Search properties across all fields (ID, name, location, type, legal description, lease)..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="form-input"
@@ -4554,13 +4606,6 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
-        </div>
-
-        <div style={{ display: 'flex', gap: 20, fontSize: 13, color: 'var(--text-secondary)' }}>
-          <span>Total: <strong>{filteredProperties.length}</strong></span>
-          <span>Residential: <strong>{filteredProperties.filter(p => p.type === 'residential').length}</strong></span>
-          <span>Commercial: <strong>{filteredProperties.filter(p => p.type === 'commercial').length}</strong></span>
-          <span>Mall: <strong>{filteredProperties.filter(p => p.type === 'mall').length}</strong></span>
         </div>
       </div>
 
@@ -4669,9 +4714,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                       }}
                     >
                       <span style={{ fontWeight: 600 }}>{unit.unit_name || unit.name}</span>
-                      <span className={`badge ${unit.status === 'occupied' ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: 9 }}>
-                        {(unit.status && unit.status.toLowerCase() === 'vacant') ? 'Available' : (unit.status || 'Available')}
-                      </span>
+                      {(unit.status || '').toLowerCase() === 'occupied' && (
+                        <span className="badge badge-danger" style={{ fontSize: 9 }}>
+                          Occupied
+                        </span>
+                      )}
                     </div>
                   );
                 })}
@@ -4732,9 +4779,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                                 }}
                               >
                                 <span style={{ fontWeight: 600 }}>{unit.unit_name || unit.name}</span>
-                                <span className={`badge ${unit.status === 'occupied' ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: 9 }}>
-                                  {(unit.status && unit.status.toLowerCase() === 'vacant') ? 'Available' : (unit.status || 'Available')}
-                                </span>
+                                {(unit.status || '').toLowerCase() === 'occupied' && (
+                                  <span className="badge badge-danger" style={{ fontSize: 9 }}>
+                                    Occupied
+                                  </span>
+                                )}
                               </div>
                             );
                           })}
@@ -4897,12 +4946,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                       )}
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <span className={`badge ${isOccupied ? 'badge-danger' : 'badge-success'}`}>
-                        {(() => {
-                          const s = details.custom_property_status || details.status || 'Available';
-                          return (s && s.toLowerCase() === 'vacant') ? 'Available' : s;
-                        })()}
-                      </span>
+                      {isOccupied && (
+                        <span className="badge badge-danger">
+                          Occupied
+                        </span>
+                      )}
                       {details.custom_property_owner && (
                         <span className="badge badge-secondary">{details.custom_property_owner}</span>
                       )}
@@ -4973,7 +5021,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                     {[
                       { label: 'Floor', value: details.custom_floor },
                       { label: 'Area', value: (details.custom_7average_carpet_area_of_units || details.custom_property_area || details.area) ? `${details.custom_7average_carpet_area_of_units || details.custom_property_area || details.area} ${(details.custom_property_area_unit || '').toLowerCase() === 'sqm' ? 'Sq Ft' : (details.custom_property_area_unit || 'Sq Ft')}` : null },
-                      { label: 'Rate', value: (details.standard_rate || details.valuation_rate || details.rent) ? `$${Number(details.standard_rate || details.valuation_rate || details.rent).toLocaleString()}` : null },
+                      { label: 'Rate', value: (details.standard_rate || details.valuation_rate || details.rent) ? `F$${Number(details.standard_rate || details.valuation_rate || details.rent).toLocaleString()}` : null },
                       { label: 'Group', value: details.custom_property_group },
                     ].filter(f => f.value).map(f => (
                       <div key={f.label}>
@@ -5019,7 +5067,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                         </span>
                         {details.custom_total_services_prices > 0 && (
                           <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                            Total: ${details.custom_total_services_prices}
+                            Total: F${details.custom_total_services_prices}
                           </span>
                         )}
                       </div>
@@ -5027,7 +5075,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                         {details.custom_property_reference.map(svc => (
                           <div key={svc.name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{svc.service_type}</span>
-                            <strong style={{ color: 'var(--text-primary)' }}>${svc.price}</strong>
+                            <strong style={{ color: 'var(--text-primary)' }}>F${svc.price}</strong>
                           </div>
                         ))}
                       </div>
@@ -5159,7 +5207,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                             </div>
                             {activeBooking.booking_amount > 0 && (
                               <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--brand-color, #059669)' }}>
-                                ${Number(activeBooking.booking_amount).toLocaleString()}/mo
+                                F${Number(activeBooking.booking_amount).toLocaleString()}/mo
                               </span>
                             )}
                           </div>
@@ -5216,7 +5264,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-secondary, #475569)', padding: '0 2px' }}>
                               <span>Security Deposit / Advance:</span>
                               <strong style={{ color: 'var(--text-primary, #0f172a)' }}>
-                                ${Number(activeBooking.advance_amount || activeBooking.deposit_amount || activeBooking.security_deposit_booking_fee).toLocaleString()}
+                                F${Number(activeBooking.advance_amount || activeBooking.deposit_amount || activeBooking.security_deposit_booking_fee).toLocaleString()}
                               </strong>
                             </div>
                           )}
@@ -5369,43 +5417,56 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                     <th>Name</th>
                     <th>Type</th>
                     <th>Legal Description</th>
+                    <th>Start Date</th>
                     <th>Lease End</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {currentItems.map(prop => (
-                    <tr
-                      key={prop.id}
-                      onClick={() => handlePropertyRowClick(prop)}
-                      style={{
-                        cursor: 'pointer',
-                        backgroundColor: selectedProp?.id === prop.id ? 'var(--bg-accent-alpha)' : '',
-                        borderLeft: selectedProp?.id === prop.id ? '3px solid var(--brand-color)' : ''
-                      }}
-                    >
-                      <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{prop.id}</td>
-                      <td>
-                        <div style={{ fontWeight: 600 }}>{prop.name}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{prop.address}</div>
-                      </td>
-                      <td>
-                        <span className={`badge ${(prop.land_and_building_type || prop.type) === 'residential' ? 'badge-success' : (prop.land_and_building_type || prop.type) === 'commercial' ? 'badge-info' : 'badge-warning'}`}>
-                          {prop.land_and_building_type || prop.type}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                        {legalDescriptions[prop.name] || legalDescriptions[prop.id] || prop.legal_description || (prop.id === selectedProp?.id && detailedProp?.legal_description ? detailedProp.legal_description : '') || '—'}
-                      </td>
-                      <td>
-                        <span className="badge badge-warning" style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--brand-color)' }}>
-                          {prop.lease_end_date || '2026-12-31'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {currentItems.map(prop => {
+                    const startDateVal = prop.lease_start_date || prop.leaseStartDate || leaseStartDates[prop.name] || leaseStartDates[prop.id] || (prop.id === selectedProp?.id && detailedProp?.lease_start_date ? detailedProp.lease_start_date : '');
+                    return (
+                      <tr
+                        key={prop.id}
+                        onClick={() => handlePropertyRowClick(prop)}
+                        style={{
+                          cursor: 'pointer',
+                          backgroundColor: selectedProp?.id === prop.id ? 'var(--bg-accent-alpha)' : '',
+                          borderLeft: selectedProp?.id === prop.id ? '3px solid var(--brand-color)' : ''
+                        }}
+                      >
+                        <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{prop.id}</td>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{prop.name}</div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{prop.address}</div>
+                        </td>
+                        <td>
+                          <span className={`badge ${(prop.land_and_building_type || prop.type) === 'residential' ? 'badge-success' : (prop.land_and_building_type || prop.type) === 'commercial' ? 'badge-info' : 'badge-warning'}`}>
+                            {prop.land_and_building_type || prop.type}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                          {legalDescriptions[prop.name] || legalDescriptions[prop.id] || prop.legal_description || (prop.id === selectedProp?.id && detailedProp?.legal_description ? detailedProp.legal_description : '') || '—'}
+                        </td>
+                        <td>
+                          {startDateVal ? (
+                            <span className="badge badge-info" style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#2563eb' }}>
+                              {startDateVal}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)' }}>—</span>
+                          )}
+                        </td>
+                        <td>
+                          <span className="badge badge-warning" style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--brand-color)' }}>
+                            {prop.lease_end_date || '2026-12-31'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {filteredProperties.length === 0 && (
                     <tr>
-                      <td colSpan="5" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
+                      <td colSpan="6" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
                         No properties match your filter.
                       </td>
                     </tr>
@@ -5578,14 +5639,12 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                       <span style={{ fontWeight: 600, textAlign: 'right', maxWidth: '70%' }}>{p.land_description || 'N/A'}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-muted)' }}>Lease Expiry:</span>
-                      <span style={{ fontWeight: 600 }}>{p.lease_end_date || 'N/A'}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>Lease Start:</span>
+                      <span style={{ fontWeight: 600 }}>{p.lease_start_date || leaseStartDates[p.name] || leaseStartDates[p.id] || 'N/A'}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-muted)' }}>Occupied Units:</span>
-                      <span style={{ fontWeight: 600, color: 'var(--color-danger)' }}>
-                        {propertyUnits.filter(u => (u.status || '').toLowerCase() === 'occupied').length}
-                      </span>
+                      <span style={{ color: 'var(--text-muted)' }}>Lease Expiry:</span>
+                      <span style={{ fontWeight: 600 }}>{p.lease_end_date || 'N/A'}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: 'var(--text-muted)' }}>Available Units:</span>
@@ -5598,14 +5657,15 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                       const lower = key.toLowerCase().replace(/[\s_-]/g, '');
                       const excluded = [
                         'id', 'name', 'type', 'landandbuildingtype', 'address', 'landdescription',
-                        'leaseenddate', 'rent', 'area', 'unitscount', 'listedonline', 'occupancy',
+                        'leasestartdate', 'leaseenddate', 'rent', 'area', 'unitscount', 'listedonline', 'occupancy',
                         'createdby', 'modified', 'docstatus', 'doctype', 'gallery', 'image', 'owner',
                         'creation', 'modifiedby', 'propertyowner', 'internal', 'external', 'idx',
                         'externaltenant', 'internaltenant',
                         'attachments', 'customattachments', 'attachment', 'customattachment',
                         'customlatitude', 'customlongitude', 'latitude', 'longitude',
                         'geolocation', 'geoloacation',
-                        'propertygroupname', 'isgroup', 'oldparent', 'lft', 'rgt', 'istable'
+                        'propertygroupname', 'isgroup', 'oldparent', 'lft', 'rgt', 'istable',
+                        'yearsremaining', 'years_remaining', 'remainingyears', 'remainingyear'
                       ];
                       if (excluded.includes(lower)) return false;
 
@@ -5617,24 +5677,23 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                       }
                       if (typeof val === 'object') return false;
                       return true;
-                    }).map(key => (
-                      <div key={key} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-muted)', textTransform: 'capitalize' }}>
-                          {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:
-                        </span>
-                        <span style={{ fontWeight: 600 }}>{String(p[key])}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                    }).map(key => {
+                      const isPropertyArea = key.toLowerCase().replace(/[\s_-]/g, '') === 'propertyarea';
+                      const rawVal = p[key];
+                      let displayVal = String(rawVal);
+                      if (isPropertyArea && rawVal !== null && rawVal !== undefined && String(rawVal).trim() !== '') {
+                        displayVal = String(rawVal).toLowerCase().includes('sq') ? String(rawVal) : `${rawVal} Sq FT`;
+                      }
 
-                <div style={{ background: 'var(--bg-tertiary)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 6 }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Occupancy Progress</span>
-                    <span style={{ fontWeight: 600 }}>{p.occupancy || 0}%</span>
-                  </div>
-                  <div style={{ width: '100%', height: 6, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{ width: `${p.occupancy || 0}%`, height: '100%', backgroundColor: (p.occupancy || 0) > 50 ? 'var(--color-success)' : 'var(--brand-color)', borderRadius: 3 }} />
+                      return (
+                        <div key={key} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span style={{ color: 'var(--text-muted)', textTransform: 'capitalize' }}>
+                            {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:
+                          </span>
+                          <span style={{ fontWeight: 600 }}>{displayVal}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -5656,9 +5715,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                             >
                               <span style={{ fontWeight: 600 }}>{unit.unit_name || unit.name}</span>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <span className={`badge ${unit.status === 'occupied' ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: 9 }}>
-                                  {unit.status || 'Available'}
-                                </span>
+                                {(unit.status || '').toLowerCase() === 'occupied' && (
+                                  <span className="badge badge-danger" style={{ fontSize: 9 }}>
+                                    Occupied
+                                  </span>
+                                )}
                                 <span style={{ fontSize: 10, color: 'var(--brand-color)', fontWeight: 600 }}>{isExpanded ? 'Collapse' : 'Expand'}</span>
                               </div>
                             </div>
@@ -6165,7 +6226,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                       <span>Area: <strong style={{ color: '#1e293b' }}>{details.custom_7average_carpet_area_of_units || details.area} Sq Ft</strong></span>
                     )}
                     {(details.standard_rate || details.valuation_rate || details.rent) && (
-                      <span>Rent: <strong style={{ color: '#047857' }}>${Number(details.standard_rate || details.valuation_rate || details.rent).toLocaleString()}/mo</strong></span>
+                      <span>Rent: <strong style={{ color: '#047857' }}>F${Number(details.standard_rate || details.valuation_rate || details.rent).toLocaleString()}/mo</strong></span>
                     )}
                   </div>
                 </div>
@@ -6761,7 +6822,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
 
                               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
                                 <div style={{ fontSize: 13, fontWeight: 800, color: '#047857' }}>
-                                  ${Number(b.booking_amount || details.standard_rate || 0).toLocaleString()}
+                                  F${Number(b.booking_amount || details.standard_rate || 0).toLocaleString()}
                                   <span style={{ fontSize: 10, fontWeight: 500, color: '#64748b' }}> / mo</span>
                                 </div>
                                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>

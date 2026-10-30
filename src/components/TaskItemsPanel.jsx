@@ -1940,7 +1940,7 @@
 // export default TaskAssignPanel;
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Plus, Minus, Trash2, Save, RefreshCw, FileText, CheckCircle2, ChevronDown, Search, X, Briefcase, Clock, ArrowRight, ExternalLink } from "lucide-react";
+import { Plus, Minus, Trash2, Save, RefreshCw, FileText, CheckCircle2, ChevronDown, Search, X, Briefcase, Clock, ArrowRight, ExternalLink, Receipt } from "lucide-react";
 import { getAuthHeaders, getCsrfToken as getGlobalCsrfToken } from '../config';
 
 // ---------- Searchable multi-select dropdown (local data — employees / vendors) ----------
@@ -2194,7 +2194,7 @@ function ItemSearchDropdown({ erpnextConfig, onSelect, selectedLabel }) {
                                     {opt.item_name && opt.item_name !== opt.item_code && <span style={{ fontSize: 10, color: "var(--text-secondary)" }}>{opt.item_name}</span>}
                                 </div>
                                 {(opt.custom_rate > 0 || opt.custom_price > 0) && (
-                                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>${opt.custom_rate || opt.custom_price}</span>
+                                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>F${opt.custom_rate || opt.custom_price}</span>
                                 )}
                             </div>
                         ))}
@@ -2232,7 +2232,7 @@ export const mapMaintenanceItems = (rawList) => {
 };
 
 // ---------- Main component ----------
-function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextConfig, getCsrfToken, showToast, onSaved, aftersucess, onNavigateToQuotation }) {
+function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextConfig, getCsrfToken, showToast, onSaved, aftersucess, onNavigateToQuotation, onNavigateToInvoice }) {
 
     // A task is "locked" (read-only) once its status is "Completed" (or "Cancelled")
     // or when the user has just successfully submitted the task locally.
@@ -2242,6 +2242,9 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
     const [currentQuotationId, setCurrentQuotationId] = useState(taskDoc?.custom_quotation_id || null);
     const [creatingQuotation, setCreatingQuotation] = useState(false);
     const [showQuotationConfirm, setShowQuotationConfirm] = useState(false);
+
+    const [currentInvoiceId, setCurrentInvoiceId] = useState(taskDoc?.custom_sales_invoice || taskDoc?.custom_sales_invoice_id || null);
+    const [generatingInvoice, setGeneratingInvoice] = useState(false);
 
     useEffect(() => {
         setIsLockedLocal(taskDoc?.status === "Completed");
@@ -2265,6 +2268,37 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
             .catch(() => {});
         }
     }, [taskDoc?.custom_quotation_id, taskDoc?.quotation_id, taskDoc?.name, isLocked, erpnextConfig?.url]);
+
+    useEffect(() => {
+        const invId = taskDoc?.custom_sales_invoice || taskDoc?.custom_sales_invoice_id || null;
+        if (invId) {
+            setCurrentInvoiceId(invId);
+        } else if (isLocked && taskDoc?.name && erpnextConfig?.url) {
+            fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice?filters=${encodeURIComponent(JSON.stringify([["custom_task_id_", "=", taskDoc.name], ["docstatus", "!=", 2]]))}&fields=["name"]&limit=1`, {
+                credentials: "include",
+                headers: safeHeaders()
+            })
+            .then(r => r.ok ? r.json() : null)
+            .then(json => {
+                if (json?.data?.[0]?.name) {
+                    setCurrentInvoiceId(json.data[0].name);
+                } else {
+                    fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice?filters=${encodeURIComponent(JSON.stringify([["po_no", "=", taskDoc.name], ["docstatus", "!=", 2]]))}&fields=["name"]&limit=1`, {
+                        credentials: "include",
+                        headers: safeHeaders()
+                    })
+                    .then(r2 => r2.ok ? r2.json() : null)
+                    .then(json2 => {
+                        if (json2?.data?.[0]?.name) {
+                            setCurrentInvoiceId(json2.data[0].name);
+                        }
+                    })
+                    .catch(() => {});
+                }
+            })
+            .catch(() => {});
+        }
+    }, [taskDoc?.custom_sales_invoice, taskDoc?.custom_sales_invoice_id, taskDoc?.name, isLocked, erpnextConfig?.url]);
 
     const resolveToken = () => {
         try {
@@ -3373,6 +3407,219 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
         }
     };
 
+    const handleGoToInvoice = (targetInvoiceId) => {
+        const invId = targetInvoiceId || currentInvoiceId || taskDoc?.custom_sales_invoice || taskDoc?.custom_sales_invoice_id;
+        if (!invId) return;
+
+        // 1. Dispatch custom event for App to switch tab to Invoices Table
+        window.dispatchEvent(new CustomEvent('pms:navigate-invoice', { detail: { invoiceId: invId } }));
+
+        // 2. Direct callback if provided
+        if (typeof onNavigateToInvoice === 'function') {
+            onNavigateToInvoice(invId);
+            return;
+        }
+
+        // 3. If running inside ERPNext Frappe desk, navigate to Sales Invoice Form
+        if (typeof frappe !== 'undefined' && typeof frappe.set_route === 'function') {
+            frappe.set_route("Form", "Sales Invoice", invId);
+            return;
+        }
+
+        // 4. Standalone fallback URL
+        const baseUrl = (erpnextConfig?.url || '').replace(/\/$/, '');
+        const targetUrl = baseUrl ? `${baseUrl}/app/sales-invoice/${encodeURIComponent(invId)}` : `/app/sales-invoice/${encodeURIComponent(invId)}`;
+        window.open(targetUrl, '_blank');
+    };
+
+    const handleGenerateSalesInvoice = async () => {
+        if (currentInvoiceId) {
+            handleGoToInvoice(currentInvoiceId);
+            return;
+        }
+
+        if (!taskDoc?.name || !erpnextConfig?.url) {
+            showToast?.("No ERPNext connection or Task ID missing.", "error");
+            return;
+        }
+
+        setGeneratingInvoice(true);
+        try {
+            let invoiceName = null;
+
+            // 1. If frappe object exists in the environment, use frappe.call
+            if (typeof frappe !== 'undefined' && typeof frappe.call === 'function') {
+                await new Promise((resolve) => {
+                    const doCall = (methodName, fallback) => {
+                        frappe.call({
+                            method: methodName,
+                            args: { task_name: taskDoc.name },
+                            freeze: true,
+                            freeze_message: "Generating Sales Invoice...",
+                            callback: function (r) {
+                                if (r?.message) {
+                                    const result = r.message;
+                                    if (result.status === "created" || result.status === "exists") {
+                                        invoiceName = result.sales_invoice || result.invoice;
+                                    }
+                                }
+                                if (!invoiceName && fallback) {
+                                    fallback();
+                                } else {
+                                    resolve();
+                                }
+                            },
+                            error: function () {
+                                if (fallback) fallback();
+                                else resolve();
+                            }
+                        });
+                    };
+
+                    doCall("erpnext.projects.doctype.task.task.create_maintenance_sales_invoice", () => {
+                        doCall("pms.utils.create_maintenance_sales_invoice");
+                    });
+                });
+            }
+
+            // 2. Try REST API endpoints
+            if (!invoiceName) {
+                const endpoints = [
+                    `${erpnextConfig.url}/api/method/erpnext.projects.doctype.task.task.create_maintenance_sales_invoice`,
+                    `${erpnextConfig.url}/api/method/pms.utils.create_maintenance_sales_invoice`
+                ];
+                for (const ep of endpoints) {
+                    if (invoiceName) break;
+                    try {
+                        const epRes = await fetch(ep, {
+                            method: "POST",
+                            credentials: "include",
+                            headers: safeHeaders({ "Content-Type": "application/json" }),
+                            body: JSON.stringify({ task_name: taskDoc.name })
+                        });
+                        if (epRes.ok) {
+                            const epJson = await epRes.json();
+                            const msg = epJson?.message || epJson;
+                            if (msg && (msg.status === "created" || msg.status === "exists")) {
+                                invoiceName = msg.sales_invoice || msg.invoice;
+                                break;
+                            }
+                        }
+                    } catch (err) {
+                        console.warn(`${ep} API call failed:`, err);
+                    }
+                }
+            }
+
+            // 3. Fallback: REST creation matching exact ERPNext Sales Invoice specification
+            if (!invoiceName) {
+                let existingInv = null;
+                try {
+                    const checkFilters = JSON.stringify([["po_no", "=", taskDoc.name], ["docstatus", "!=", 2]]);
+                    const checkRes = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice?filters=${encodeURIComponent(checkFilters)}&fields=["name"]&limit=1`, {
+                        credentials: "include",
+                        headers: safeHeaders()
+                    });
+                    if (checkRes.ok) {
+                        const checkJson = await checkRes.json();
+                        if (checkJson?.data?.[0]?.name) {
+                            existingInv = checkJson.data[0].name;
+                        }
+                    }
+                } catch (e) {}
+
+                if (existingInv) {
+                    invoiceName = existingInv;
+                } else {
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const invItems = (itemRows.length > 0 ? itemRows : (taskDoc?.custom_items_used_for_maintenance || [])).map((r, idx) => ({
+                        doctype: "Sales Invoice Item",
+                        idx: idx + 1,
+                        item_code: r.item_code || r.item || r.name,
+                        item_name: r.item_name || r.item_code || '',
+                        qty: Number(r.qty) || 1,
+                        rate: Number(r.custom_rate !== undefined && r.custom_rate !== null ? r.custom_rate : (r.custom_price || r.rate || r.price || 0)) || 0,
+                        amount: (Number(r.qty) || 1) * (Number(r.custom_rate !== undefined && r.custom_rate !== null ? r.custom_rate : (r.custom_price || r.rate || r.price || 0)) || 0)
+                    }));
+
+                    const invPayload = {
+                        doctype: "Sales Invoice",
+                        customer: taskDoc?.customer || taskDoc?.custom_customer || taskDoc?.custom_customer_name || taskDoc?.customer_name || "",
+                        company: taskDoc?.company || "CARPENTERS PROPERTIES PTE LIMITED",
+                        posting_date: todayStr,
+                        due_date: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+                        custom_task_id_: taskDoc.name,
+                        po_no: taskDoc.name,
+                        selling_price_list: "Standard Selling For Property Management",
+                        taxes_and_charges: "Fiji Tax - CFPL",
+                        tc_name: "Sales Invoice Conditions",
+                        ...(taskDoc?.custom_booking_id ? { booking_id: taskDoc.custom_booking_id } : {}),
+                        items: invItems
+                    };
+
+                    const createRes = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice`, {
+                        method: "POST",
+                        credentials: "include",
+                        headers: safeHeaders({ "Content-Type": "application/json" }),
+                        body: JSON.stringify(invPayload)
+                    });
+
+                    if (createRes.ok) {
+                        const createJson = await createRes.json();
+                        invoiceName = createJson?.data?.name;
+                        // Save reference back to Task
+                        try {
+                            await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskDoc.name)}`, {
+                                method: "PUT",
+                                credentials: "include",
+                                headers: safeHeaders({ "Content-Type": "application/json" }),
+                                body: JSON.stringify({ custom_sales_invoice: invoiceName })
+                            });
+                        } catch {}
+                    } else {
+                        const errJson = await createRes.json().catch(() => ({}));
+                        const rawMsg = errJson?.exception || errJson?.message || errJson?._server_messages || "Failed to create Sales Invoice.";
+                        let cleanMsg = typeof rawMsg === 'string' ? rawMsg : JSON.stringify(rawMsg);
+                        try {
+                            const parsed = JSON.parse(cleanMsg);
+                            if (Array.isArray(parsed) && parsed[0]) {
+                                const inner = JSON.parse(parsed[0]);
+                                if (inner?.message) cleanMsg = inner.message;
+                            }
+                        } catch {}
+                        showToast?.(cleanMsg.replace(/<[^>]*>/g, ''), "error");
+                        setGeneratingInvoice(false);
+                        return;
+                    }
+                }
+            }
+
+            if (invoiceName) {
+                setCurrentInvoiceId(invoiceName);
+                if (typeof onSaved === 'function') {
+                    onSaved({ ...taskDoc, custom_sales_invoice: invoiceName });
+                }
+                showToast?.(`Sales Invoice ${invoiceName} generated successfully!`, "success");
+                handleGoToInvoice(invoiceName);
+            }
+        } catch (err) {
+            console.error("Error creating sales invoice:", err);
+            showToast?.("Error generating sales invoice.", "error");
+        } finally {
+            setGeneratingInvoice(false);
+        }
+    };
+
+    useEffect(() => {
+        const handleExternalGenInvoice = (e) => {
+            if (e.detail?.task?.name === taskDoc?.name || e.detail?.task?.id === taskDoc?.name) {
+                handleGenerateSalesInvoice();
+            }
+        };
+        window.addEventListener('pms:generate-task-invoice', handleExternalGenInvoice);
+        return () => window.removeEventListener('pms:generate-task-invoice', handleExternalGenInvoice);
+    }, [taskDoc?.name, currentInvoiceId, itemRows]);
+
     const handleGoToQuotation = (targetQuotationId) => {
         const qId = targetQuotationId || currentQuotationId || taskDoc?.custom_quotation_id;
         if (!qId) return;
@@ -3538,6 +3785,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                         custom_service_quotation: 1,
                         valid_till: validTill,
                         custom_task_reference: taskDoc.name,
+                        custom_task_id: taskDoc.name,
                         ...(taskDoc?.custom_booking_id ? { booking_id: taskDoc.custom_booking_id } : {}),
                         items: qItems
                     };
@@ -3641,10 +3889,10 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                                         </td>
                                         <td style={tdStyle}>
                                             {isLocked ? (
-                                                <span>{((r?.custom_rate !== undefined && r?.custom_rate !== null && r?.custom_rate !== "") || (r?.custom_price !== undefined && r?.custom_price !== null && r?.custom_price !== "")) ? `$${Number(r.custom_rate !== undefined && r.custom_rate !== null && r.custom_rate !== "" ? r.custom_rate : r.custom_price).toLocaleString()}` : "—"}</span>
+                                                <span>{((r?.custom_rate !== undefined && r?.custom_rate !== null && r?.custom_rate !== "") || (r?.custom_price !== undefined && r?.custom_price !== null && r?.custom_price !== "")) ? `F$${Number(r.custom_rate !== undefined && r.custom_rate !== null && r.custom_rate !== "" ? r.custom_rate : r.custom_price).toLocaleString()}` : "—"}</span>
                                             ) : (
                                                 <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                                                    <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>$</span>
+                                                    <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>F$</span>
                                                     <input
                                                         type="number"
                                                         min="0"
@@ -3705,7 +3953,7 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                                 <button type="button" onClick={() => setPendingQty((q) => q + 1)} style={stepperBtnStyle}><Plus size={12} /></button>
                             </div>
                             <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-                                <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>$</span>
+                                <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>F$</span>
                                 <input
                                     type="number"
                                     min="0"
@@ -3936,6 +4184,50 @@ function TaskAssignPanel({ taskDoc, employeeDir = [], vendorDir = [], erpnextCon
                             <CheckCircle2 size={15} />
                             <span>Task Submitted & Locked</span>
                         </div>
+
+                        {/* Button right after Task Submitted Status */}
+                        {currentInvoiceId ? (
+                            <button
+                                type="button"
+                                onClick={() => handleGoToInvoice()}
+                                style={{
+                                    ...primaryActionBtnStyle,
+                                    width: "100%",
+                                    padding: "10px 0",
+                                    gap: 8,
+                                    background: "#2563eb",
+                                    color: "#ffffff"
+                                }}
+                                title={`Sales Invoice: ${currentInvoiceId} (Click to open)`}
+                            >
+                                <Receipt size={14} />
+                                <span>Go To Invoice</span>
+                                <ExternalLink size={14} />
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => handleGenerateSalesInvoice()}
+                                disabled={generatingInvoice}
+                                style={{
+                                    ...primaryActionBtnStyle,
+                                    width: "100%",
+                                    padding: "10px 0",
+                                    gap: 8,
+                                    background: "#2563eb",
+                                    color: "#ffffff"
+                                }}
+                            >
+                                {generatingInvoice ? (
+                                    <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Generating Invoice…</>
+                                ) : (
+                                    <>
+                                        <Receipt size={14} />
+                                        <span>Genarate Sales Invoice</span>
+                                    </>
+                                )}
+                            </button>
+                        )}
 
                         {currentQuotationId ? (
                             <button

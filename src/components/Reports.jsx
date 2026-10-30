@@ -171,10 +171,10 @@ export default function Reports() {
                       <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{c.id}</td>
                       <td>{c.property}</td>
                       <td>{c.category}</td>
-                      <td>${c.est.toLocaleString()}</td>
-                      <td>${c.actual.toLocaleString()}</td>
+                      <td>F${c.est.toLocaleString()}</td>
+                      <td>F${c.actual.toLocaleString()}</td>
                       <td style={{ color: c.variance > 0 ? 'var(--color-danger)' : 'var(--color-success)', fontWeight: 600 }}>
-                        {c.variance > 0 ? `+$${c.variance}` : `$${c.variance}`}
+                        {c.variance > 0 ? `+F$${c.variance}` : `F$${c.variance}`}
                       </td>
                       <td><span className="badge badge-success">{c.status}</span></td>
                     </tr>
@@ -207,7 +207,7 @@ export default function Reports() {
                       <td>{p.totalTickets}</td>
                       <td>{p.open}</td>
                       <td style={{ color: 'var(--color-success)', fontWeight: 600 }}>{p.resolved}</td>
-                      <td style={{ fontWeight: 700 }}>${p.cost.toLocaleString()}</td>
+                      <td style={{ fontWeight: 700 }}>F${p.cost.toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -270,7 +270,7 @@ export default function Reports() {
                       <td style={{ fontWeight: 600 }}>{v.name}</td>
                       <td>{v.category}</td>
                       <td>{v.activeWO}</td>
-                      <td style={{ fontWeight: 700 }}>${v.ytdCost.toLocaleString()}</td>
+                      <td style={{ fontWeight: 700 }}>F${v.ytdCost.toLocaleString()}</td>
                       <td>⭐ {v.rating}</td>
                     </tr>
                   ))}

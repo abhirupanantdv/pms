@@ -4798,7 +4798,7 @@
 
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, Check, RotateCcw, Zap, Home, Send, XCircle, Layers, Bookmark, GitBranch, Upload, Eye, ExternalLink, Loader2 } from 'lucide-react';
+import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, Check, RotateCcw, Zap, Home, Send, XCircle, Layers, Bookmark, GitBranch, Upload, Eye, ExternalLink, Loader2, Receipt, Save } from 'lucide-react';
 import houseImg from '../assets/new-house.png';
 import { ensureCsrfToken } from '../config';
 
@@ -4901,17 +4901,32 @@ function Toast({ toast, onClose }) {
   );
 }
 
-export default function Quotation({ erpnextConfig, properties = [], onGoToBooking, initialQuotationId, onClearInitialQuotation }) {
+export default function Quotation({ erpnextConfig, properties = [], onGoToBooking, initialQuotationId, onClearInitialQuotation, onGoToTask }) {
   const [quotations, setQuotations] = useState([]);
+  const [taskQuotationMap, setTaskQuotationMap] = useState({});
+  const [serviceQuotationTaskId, setServiceQuotationTaskId] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const workflowActionsCache = useRef({});
 
   const isServiceQuotation = (q) => {
     if (!q) return false;
-    return q.custom_service_quotation === 1 ||
-           q.custom_service_quotation === '1' ||
-           Number(q.custom_service_quotation) === 1 ||
-           q.custom_service_quotation === true;
+    const val = q.custom_service_quotation;
+    if (val === 1 || val === '1' || val === true || String(val).toLowerCase() === 'yes' || Number(val) === 1) {
+      return true;
+    }
+    if (q.custom_task_id || q.custom_task_reference) {
+      return true;
+    }
+    if (q.name && taskQuotationMap && taskQuotationMap[q.name]) {
+      return true;
+    }
+    if (selectedQuotation && (selectedQuotation.name === q.name || getRootQuotationName(selectedQuotation.name, selectedQuotation) === getRootQuotationName(q.name, q))) {
+      const sVal = selectedQuotation.custom_service_quotation;
+      if (sVal === 1 || sVal === '1' || sVal === true || String(sVal).toLowerCase() === 'yes' || Number(sVal) === 1 || selectedQuotation.custom_task_id || selectedQuotation.custom_task_reference) {
+        return true;
+      }
+    }
+    return false;
   };
 
   useEffect(() => {
@@ -4959,6 +4974,18 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   const [selectedQuotation, setSelectedQuotation] = useState(null);
   const [selectedQuotationDetail, setSelectedQuotationDetail] = useState(null);
   const itemsPerPage = selectedQuotation ? 6 : 10;
+
+  const handleGoToTask = (taskId) => {
+    if (!taskId) return;
+    if (typeof window !== 'undefined' && window.frappe?.set_route) {
+      window.frappe.set_route("Form", "Task", taskId);
+    }
+    if (onGoToTask) {
+      onGoToTask(taskId);
+    } else {
+      window.dispatchEvent(new CustomEvent('pms:navigate-task', { detail: { taskId } }));
+    }
+  };
 
   // Date Helpers for Quotations
   const formatDateToYMD = (date) => {
@@ -5045,9 +5072,68 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
   const [previewModalDoc, setPreviewModalDoc] = useState(null);
   const signedDocInputRef = useRef(null);
+  const [paymentDetailsText, setPaymentDetailsText] = useState('');
+  const [savingPaymentDetails, setSavingPaymentDetails] = useState(false);
+  const [paymentDetailsSaved, setPaymentDetailsSaved] = useState(false);
   const [discountAmount, setDiscountAmount] = useState('');
   const [messageText, setMessageText] = useState('');
   const [savingDiscount, setSavingDiscount] = useState(false);
+
+  useEffect(() => {
+    setPaymentDetailsText(selectedQuotationDetail?.custom_payment_details || '');
+    setPaymentDetailsSaved(false);
+  }, [selectedQuotationDetail?.name, selectedQuotationDetail?.custom_payment_details]);
+
+  const handleSavePaymentDetails = async (textToSave = null) => {
+    if (!selectedQuotationDetail?.name) return;
+    const text = textToSave !== null ? textToSave : paymentDetailsText;
+    setSavingPaymentDetails(true);
+    try {
+      if (erpnextConfig?.url && selectedQuotationDetail.name) {
+        let saved = false;
+        try {
+          const rpcRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({
+              doctype: 'Quotation',
+              name: selectedQuotationDetail.name,
+              fieldname: 'custom_payment_details',
+              value: text
+            })
+          });
+          if (rpcRes.ok) saved = true;
+        } catch (e) {
+          console.warn('frappe.client.set_value custom_payment_details failed:', e);
+        }
+
+        if (!saved) {
+          try {
+            await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(selectedQuotationDetail.name)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: getQuotationHeaders(),
+              body: JSON.stringify({ custom_payment_details: text })
+            });
+          } catch (putErr) {
+            console.warn('PUT Quotation custom_payment_details failed:', putErr);
+          }
+        }
+      }
+
+      setSelectedQuotationDetail(prev => prev ? { ...prev, custom_payment_details: text } : null);
+      setQuotations(prev => prev.map(q => q.name === selectedQuotationDetail.name ? { ...q, custom_payment_details: text } : q));
+      setPaymentDetailsSaved(true);
+      setTimeout(() => setPaymentDetailsSaved(false), 2500);
+      showToast('success', 'Payment Details saved successfully.');
+    } catch (err) {
+      console.error('Failed saving payment details:', err);
+      showToast('error', 'Could not save Payment Details.');
+    } finally {
+      setSavingPaymentDetails(false);
+    }
+  };
 
   // New Version Modal States
   const [showNewVersionModal, setShowNewVersionModal] = useState(false);
@@ -5512,6 +5598,59 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     return { version_no: 1, isAmendment: false };
   };
 
+  // Helper to resolve accurate quotation status, giving authoritative priority to Cancelled docstatus / status
+  const getEffectiveQuotationStatus = (doc, versions = []) => {
+    if (!doc) return 'Draft';
+
+    // 1. In Frappe/ERPNext, docstatus: 2 means Cancelled. Also check status string.
+    const isDocCancelled = doc.docstatus === 2 ||
+      String(doc.status || '').toLowerCase() === 'cancelled' ||
+      String(doc.workflow_state || '').toLowerCase() === 'cancelled';
+
+    // 2. If an amended successor exists for this document in versions, this document is superseded and cancelled
+    const hasAmendedSuccessor = Array.isArray(versions) && versions.some(v => v.amended_from === doc.name);
+
+    if (isDocCancelled || hasAmendedSuccessor) {
+      return 'Cancelled';
+    }
+
+    // 3. Rejected status
+    if (String(doc.status || '').toLowerCase() === 'rejected' || String(doc.workflow_state || '').toLowerCase() === 'rejected') {
+      return 'Rejected';
+    }
+
+    // 4. Lost status
+    if (String(doc.status || '').toLowerCase() === 'lost' || String(doc.workflow_state || '').toLowerCase() === 'lost') {
+      return 'Lost';
+    }
+
+    // 5. Ordered status
+    if (String(doc.status || '').toLowerCase() === 'ordered' || String(doc.workflow_state || '').toLowerCase() === 'ordered') {
+      return 'Ordered';
+    }
+
+    // 6. If docstatus is 0 (Draft)
+    if (doc.docstatus === 0) {
+      if (doc.workflow_state && doc.workflow_state.toLowerCase().includes('request')) {
+        return doc.workflow_state;
+      }
+      return doc.workflow_state || doc.status || 'Draft';
+    }
+
+    // 7. Workflow state for submitted docs (if approved, etc.)
+    if (doc.workflow_state) {
+      return doc.workflow_state;
+    }
+
+    // 8. General status or docstatus fallback
+    if (doc.status) {
+      return doc.status;
+    }
+
+    if (doc.docstatus === 1) return 'Submitted';
+    return 'Draft';
+  };
+
   // Fetch quotations from ERPNext
   const fetchQuotations = async () => {
     console.log("hit the fetch")
@@ -5524,12 +5663,22 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
     setLoading(true);
     try {
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=["name","customer_name","party_name","transaction_date","valid_till","grand_total","status","workflow_state","booking_id","docstatus","signed_document","custom_service_quotation"]&limit_page_length=100&order_by=creation desc`, {
+      const fields = ["name", "customer_name", "party_name", "transaction_date", "valid_till", "grand_total", "status", "workflow_state", "booking_id", "docstatus", "signed_document", "custom_payment_details", "custom_service_quotation", "custom_task_id", "custom_task_reference"];
+      let res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=${encodeURIComponent(JSON.stringify(fields))}&limit_page_length=100&order_by=creation desc`, {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json'
         }
       });
+      if (!res.ok) {
+        const fallbackFields = ["name", "customer_name", "party_name", "transaction_date", "valid_till", "grand_total", "status", "workflow_state", "booking_id", "docstatus", "signed_document", "custom_payment_details", "custom_service_quotation"];
+        res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=${encodeURIComponent(JSON.stringify(fallbackFields))}&limit_page_length=100&order_by=creation desc`, {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+      }
       if (res.ok) {
         const json = await res.json();
         setQuotations(json.data || []);
@@ -5538,6 +5687,22 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         console.warn('Quotation fetch failed:', res.status, text);
         setDebugMsg(`Quotation fetch failed (${res.status}): ${text.slice(0, 200)}`);
       }
+
+      // Query Task map to link service quotations to their tasks
+      try {
+        const taskRes = await fetch(`${erpnextConfig.url}/api/resource/Task?filters=${encodeURIComponent(JSON.stringify([["custom_quotation_id", "is", "set"]]))}&fields=${encodeURIComponent(JSON.stringify(["name", "custom_quotation_id"]))}&limit_page_length=500`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (taskRes.ok) {
+          const taskJson = await taskRes.json();
+          const tMap = {};
+          (taskJson.data || []).forEach(t => {
+            if (t.custom_quotation_id) tMap[t.custom_quotation_id] = t.name;
+          });
+          setTaskQuotationMap(tMap);
+        }
+      } catch (tErr) { }
     } catch (e) {
       console.warn('Failed fetching quotations:', e);
       setDebugMsg(`Quotation fetch error: ${e.message}`);
@@ -5604,6 +5769,32 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       setWorkflowActions(null);
     }
   }, [selectedQuotationDetail]);
+
+  useEffect(() => {
+    if (!selectedQuotationDetail) {
+      setServiceQuotationTaskId('');
+      return;
+    }
+    const directTaskId = selectedQuotationDetail.custom_task_id || selectedQuotationDetail.custom_task_reference;
+    if (directTaskId) {
+      setServiceQuotationTaskId(directTaskId);
+      return;
+    }
+    if (isServiceQuotation(selectedQuotationDetail) && selectedQuotationDetail.name && erpnextConfig?.url) {
+      fetch(`${erpnextConfig.url}/api/resource/Task?filters=${encodeURIComponent(JSON.stringify([["custom_quotation_id", "=", selectedQuotationDetail.name]]))}&fields=${encodeURIComponent(JSON.stringify(["name"]))}&limit_page_length=1`, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      })
+        .then(res => res.ok ? res.json() : null)
+        .then(json => {
+          const list = json?.data || [];
+          if (list.length > 0 && list[0]?.name) {
+            setServiceQuotationTaskId(list[0].name);
+          }
+        })
+        .catch(err => console.warn('Failed resolving Task for service quotation:', err));
+    }
+  }, [selectedQuotationDetail, erpnextConfig]);
 
   // Handle detailed Quotation view & retrieve client CRM metadata
   const fetchQuotationDetail = async (qName, customerId, preferLatest = false) => {
@@ -5857,10 +6048,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             current_discount: discAmount,
             current_grand_total: parseFloat(vDoc.grand_total || 0),
             current_net_total: parseFloat(vDoc.net_total || vDoc.total || 0),
+            current_taxes: parseFloat(vDoc.total_taxes_and_charges || 0),
             previous_discount: prevDisc,
             previous_grand_total: prevGrandTotal,
-            discount_difference: discAmount - prevDisc,
-            negotiation_status: vDoc.workflow_state || vDoc.status || (vDoc.docstatus === 1 ? 'Submitted' : vDoc.docstatus === 2 ? 'Cancelled' : 'Draft'),
+            negotiation_status: getEffectiveQuotationStatus(vDoc, detailedVersions),
             items: vDoc.items || [],
             doc: vDoc
           };
@@ -6978,6 +7169,20 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       }
 
       // 4. Step 3: Create Duplicate / Amended Quotation with new offered rates
+      const versionNetTotal = erpItems.reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0);
+      const baseSourceTotal = parseFloat(latestSource.net_total || latestSource.total || latestSource.base_net_total || 0);
+      const taxSourceTotal = parseFloat(latestSource.total_taxes_and_charges || 0);
+      const taxesRateFromList = (latestSource.taxes && Array.isArray(latestSource.taxes) && latestSource.taxes.length > 0 && latestSource.taxes[0].rate)
+        ? (parseFloat(latestSource.taxes[0].rate) / 100)
+        : null;
+
+      const versionTaxRatePct = taxesRateFromList !== null
+        ? taxesRateFromList
+        : (baseSourceTotal > 0 && taxSourceTotal > 0 ? (taxSourceTotal / baseSourceTotal) : 0.125);
+
+      const versionTaxes = versionNetTotal * versionTaxRatePct;
+      const versionGrandTotal = versionNetTotal + versionTaxes;
+
       const payload = {
         order_type: "Sales",
         quotation_to: "Customer",
@@ -7007,16 +7212,27 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         custom_template: latestSource.custom_template || quotetamplate || "Quotation Template 1",
         taxes_and_charges: latestSource.taxes_and_charges || "Fiji Tax - CFPL",
         amended_from: latestSource.name,
-        items: erpItems
+        items: erpItems,
+        total: versionNetTotal,
+        net_total: versionNetTotal,
+        total_taxes_and_charges: versionTaxes,
+        grand_total: versionGrandTotal,
+        rounded_total: Math.round(versionGrandTotal)
       };
 
       if (latestSource.taxes && Array.isArray(latestSource.taxes) && latestSource.taxes.length > 0) {
-        payload.taxes = latestSource.taxes.map(t => ({
-          charge_type: t.charge_type,
-          account_head: t.account_head,
-          description: t.description,
-          rate: t.rate
-        }));
+        payload.taxes = latestSource.taxes.map(t => {
+          const rateVal = parseFloat(t.rate) || (versionTaxRatePct * 100);
+          const taxAmt = versionNetTotal * (rateVal / 100);
+          return {
+            charge_type: t.charge_type || 'On Net Total',
+            account_head: t.account_head,
+            description: t.description || `VAT @ ${rateVal}%`,
+            rate: rateVal,
+            tax_amount: taxAmt,
+            total: versionNetTotal + taxAmt
+          };
+        });
       }
 
       if (versionNote && versionNote.trim()) {
@@ -7253,10 +7469,27 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     const qDoc = quotationToBook || selectedQuotationDetail;
     if (!qDoc) return;
     if (!qDoc.signed_document) {
-      showToast('error', 'Please upload a signed document before creating a booking.');
-      showAlert('Signed Document Required', 'A signed document must be uploaded to the quotation before creating a booking.');
+      showToast('error', 'Please upload a signed offer letter before creating a booking.');
+      showAlert('Signed Offer Letter Required', 'A signed offer letter must be uploaded to the quotation before creating a booking.');
       return;
     }
+
+    const isService = isServiceQuotation(qDoc);
+    const currentPaymentText = (paymentDetailsText || qDoc.custom_payment_details || '').trim();
+
+    // Apply validation only for non-service quotations
+    if (!isService) {
+      if (currentPaymentText.length < 40) {
+        showToast('error', `Payment Details must contain at least 40 characters. Currently entered: ${currentPaymentText.length}`);
+        showAlert('Payment Details Required', `Payment Details must contain at least 40 characters.\nCurrently entered: ${currentPaymentText.length}`);
+        return;
+      }
+
+      if (currentPaymentText !== (qDoc.custom_payment_details || '').trim()) {
+        await handleSavePaymentDetails(currentPaymentText);
+      }
+    }
+
     const qName = qDoc.name;
     if (!(await confirm(`Create Booking from Quotation ${qName}?`))) return;
 
@@ -7294,7 +7527,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               credentials: 'include',
               headers: getQuotationHeaders(),
               body: JSON.stringify({
-                doc: { ...latestDoc, docstatus: 1 }
+                doc: { ...latestDoc, custom_payment_details: currentPaymentText, docstatus: 1 }
               })
             });
 
@@ -7324,7 +7557,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 method: 'PUT',
                 credentials: 'include',
                 headers: getQuotationHeaders(),
-                body: JSON.stringify({ docstatus: 1, status: 'Submitted' })
+                body: JSON.stringify({ custom_payment_details: currentPaymentText, docstatus: 1, status: 'Submitted' })
               });
               const putJson = await putRes.json();
               if (putRes.ok && !putJson.exc) {
@@ -7581,7 +7814,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           if (apprRes.ok && !apprJson.exc) {
             submitSuccess = true;
           }
-        } catch (_) {}
+        } catch (_) { }
       }
 
       // Attempt D: Fallback to update_quotation_workflow
@@ -7600,7 +7833,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           if (wfRes.ok && !wfJson.exc) {
             submitSuccess = true;
           }
-        } catch (_) {}
+        } catch (_) { }
       }
 
       if (!submitSuccess) {
@@ -8234,24 +8467,52 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 <span>{approvingServiceQuoteId === q.name ? 'Approving...' : 'Approve'}</span>
                               </button>
                             ) : (q.docstatus === 1 || q.status === 'Submitted') ? (
-                              <span
-                                style={{
-                                  fontSize: 10.5,
-                                  fontWeight: 600,
-                                  padding: '3px 8px',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 4,
-                                  color: '#059669',
-                                  backgroundColor: '#ecfdf5',
-                                  borderRadius: 4,
-                                  border: '1px solid #a7f3d0'
-                                }}
-                                title="Approved"
-                              >
-                                <Check size={10} />
-                                <span>Approved</span>
-                              </span>
+                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <span
+                                  style={{
+                                    fontSize: 10.5,
+                                    fontWeight: 600,
+                                    padding: '3px 8px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 4,
+                                    color: '#059669',
+                                    backgroundColor: '#ecfdf5',
+                                    borderRadius: 4,
+                                    border: '1px solid #a7f3d0'
+                                  }}
+                                  title="Approved"
+                                >
+                                  <Check size={10} />
+                                  <span>Approved</span>
+                                </span>
+                                {(q.custom_task_id || q.custom_task_reference || taskQuotationMap[q.name]) && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm"
+                                    style={{
+                                      fontSize: 10.5,
+                                      fontWeight: 600,
+                                      padding: '3px 8px',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                      color: '#2563eb',
+                                      borderColor: '#bfdbfe',
+                                      backgroundColor: '#eff6ff',
+                                      cursor: 'pointer'
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleGoToTask(q.custom_task_id || q.custom_task_reference || taskQuotationMap[q.name]);
+                                    }}
+                                    title={`Go to Task ${q.custom_task_id || q.custom_task_reference || taskQuotationMap[q.name]}`}
+                                  >
+                                    <ExternalLink size={10} />
+                                    <span>Go to Task</span>
+                                  </button>
+                                )}
+                              </div>
                             ) : null
                           ) : !isServiceQuotation(q) && q.signed_document && (q.status !== 'Cancelled' && q.docstatus !== 2) ? (
                             <button
@@ -8418,14 +8679,18 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '4px' }}>
                     <strong style={{ fontSize: 16, color: '#111827', fontWeight: 700 }}>{selectedQuotationDetail.customer_name}</strong>
                     {(() => {
-                      const status = selectedQuotationDetail.workflow_state || selectedQuotationDetail.status || 'Draft';
+                      const status = getEffectiveQuotationStatus(selectedQuotationDetail, negotiations.map(n => n.doc || n));
 
                       // Map status to badge colors
                       let bg = 'rgba(107, 114, 128, 0.08)';
                       let color = '#4b5563';
                       let border = '1px solid rgba(107, 114, 128, 0.15)';
 
-                      if (status === 'Approved') {
+                      if (status === 'Cancelled') {
+                        bg = 'rgba(239, 68, 68, 0.08)';
+                        color = '#ef4444';
+                        border = '1px solid rgba(239, 68, 68, 0.2)';
+                      } else if (status === 'Approved') {
                         bg = 'rgba(16, 185, 129, 0.08)';
                         color = '#10b981';
                         border = '1px solid rgba(16, 185, 129, 0.2)';
@@ -8466,6 +8731,59 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         </span>
                       );
                     })()}
+
+                    {/* Quick Approve button in header for Service Quotations */}
+                    {isServiceQuotation(selectedQuotationDetail) && (selectedQuotationDetail.docstatus === 0 || selectedQuotationDetail.status === 'Draft') && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '3px 12px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          color: '#ffffff',
+                          backgroundColor: '#10b981',
+                          border: '1px solid #10b981',
+                          borderRadius: 6,
+                          cursor: approvingServiceQuoteId === selectedQuotationDetail.name ? 'not-allowed' : 'pointer'
+                        }}
+                        disabled={approvingServiceQuoteId === selectedQuotationDetail.name}
+                        onClick={() => handleApproveServiceQuotation(selectedQuotationDetail)}
+                        title={`Approve and submit ${selectedQuotationDetail.name}`}
+                      >
+                        <Check size={12} />
+                        <span>{approvingServiceQuoteId === selectedQuotationDetail.name ? 'Approving...' : 'Approve'}</span>
+                      </button>
+                    )}
+
+                    {/* Go to Task button in header for submitted Service Quotations */}
+                    {isServiceQuotation(selectedQuotationDetail) && (selectedQuotationDetail.docstatus === 1 || selectedQuotationDetail.status === 'Submitted') && (selectedQuotationDetail.custom_task_id || selectedQuotationDetail.custom_task_reference || serviceQuotationTaskId || taskQuotationMap[selectedQuotationDetail.name]) && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          padding: '3px 12px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          color: '#ffffff',
+                          backgroundColor: '#2563eb',
+                          border: '1px solid #2563eb',
+                          borderRadius: 6,
+                          cursor: 'pointer'
+                        }}
+                        onClick={() => handleGoToTask(selectedQuotationDetail.custom_task_id || selectedQuotationDetail.custom_task_reference || serviceQuotationTaskId || taskQuotationMap[selectedQuotationDetail.name])}
+                        title={`Go to Task ${selectedQuotationDetail.custom_task_id || selectedQuotationDetail.custom_task_reference || serviceQuotationTaskId || taskQuotationMap[selectedQuotationDetail.name]}`}
+                      >
+                        <ExternalLink size={12} />
+                        <span>Go to Task</span>
+                      </button>
+                    )}
                   </div>
                   <p style={{ color: '#4b5563', lineHeight: 1.4, marginTop: 2, fontSize: 11.5 }}>{customerAddress}</p>
                   <p style={{ color: '#4b5563', fontSize: 11, marginTop: 4 }}>Contact: {selectedQuotationDetail.custom_customer_email || ''} | {selectedQuotationDetail.custom_customer_ph_no || ''}</p>
@@ -8600,10 +8918,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                   const diffPct = totalPriceListRate > 0 ? ((discount / totalPriceListRate) * 100).toFixed(2) : '0.00';
 
-                  const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
-                  const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
+                  const effectiveDocStatus = getEffectiveQuotationStatus(selectedQuotationDetail, negotiations.map(n => n.doc || n));
+                  const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(effectiveDocStatus);
+                  const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request") && effectiveDocStatus !== "Cancelled";
                   const isDiscountDisabled = isTerminal;
-                  const isApproved = (selectedQuotationDetail.workflow_state || selectedQuotationDetail.status) === "Approved";
+                  const isApproved = effectiveDocStatus === "Approved";
                   const isDisabled = isTerminal;
 
                   const activeComments = comments.length > 0 ? comments : [
@@ -8988,6 +9307,17 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                   ))}
                                 </tr>
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                                  <td style={{ padding: '10px 14px', fontWeight: 600 }}>Taxes</td>
+                                  {sortedComp.map((n) => {
+                                    const taxAmt = parseFloat(n.current_taxes ?? n.doc?.total_taxes_and_charges ?? (Math.max(0, (parseFloat(n.current_grand_total || 0) - parseFloat(n.current_net_total || 0)))));
+                                    return (
+                                      <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: '#4b5563', fontWeight: 500 }}>
+                                        ${taxAmt.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                                   <td style={{ padding: '10px 14px', fontWeight: 600 }}>Grand Total</td>
                                   {sortedComp.map((n) => (
                                     <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: 'var(--brand-color)', fontWeight: 700 }}>${(n.current_grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
@@ -9094,10 +9424,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   ? String(commercialItem.discount_amount)
                   : (selectedQuotationDetail.discount_amount !== undefined && selectedQuotationDetail.discount_amount !== null ? String(selectedQuotationDetail.discount_amount) : '0');
                 const isChanged = (discountAmount !== '' && parseFloat(discountAmount || 0) !== parseFloat(originalDiscount || 0)) || messageText.trim() !== '';
-                const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(selectedQuotationDetail.workflow_state || selectedQuotationDetail.status);
-                const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request");
+                const effectiveDocStatus = getEffectiveQuotationStatus(selectedQuotationDetail, negotiations.map(n => n.doc || n));
+                const isTerminal = ["Approved", "Rejected", "Cancelled"].includes(effectiveDocStatus);
+                const isRequestForApproval = (selectedQuotationDetail.workflow_state || "").toLowerCase().includes("request") && effectiveDocStatus !== "Cancelled";
                 const isDiscountDisabled = isTerminal;
-                const isApproved = (selectedQuotationDetail.workflow_state || selectedQuotationDetail.status) === "Approved";
+                const isApproved = effectiveDocStatus === "Approved";
                 const isDisabled = isTerminal;
                 const activeNegotiations = negotiations || [];
 
@@ -9193,196 +9524,342 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                           <span style={{ color: '#6b7280' }}>Current Status</span>
-                          <strong style={{ color: 'var(--brand-color)' }}>{selectedQuotationDetail.workflow_state || selectedQuotationDetail.status}</strong>
+                          <strong style={{ color: effectiveDocStatus === 'Cancelled' ? '#ef4444' : effectiveDocStatus === 'Approved' ? '#059669' : 'var(--brand-color)' }}>{effectiveDocStatus}</strong>
                         </div>
                       </div>
                     </div>
 
-                    {/* Right Column: Final Decision */}
+                    {/* Right Column: Final Decision (Standard Quotations) / Action (Service Quotations) */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 10.5, textTransform: 'uppercase' }}>Final Decision</span>
+                      {!isServiceQuotation(selectedQuotationDetail) ? (
+                        <>
+                          <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 10.5, textTransform: 'uppercase' }}>Final Decision</span>
 
-                      {/* SECTION: Upload Signed Document */}
-                      <div
-                        style={{
-                          padding: '10px 12px',
-                          borderRadius: 8,
-                          border: selectedQuotationDetail.signed_document ? '1px solid #bbf7d0' : '1px dashed #cbd5e1',
-                          backgroundColor: selectedQuotationDetail.signed_document ? '#f0fdf4' : '#f8fafc',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 8,
-                          transition: 'all 0.2s ease',
-                          marginTop: 2,
-                          marginBottom: 4
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: selectedQuotationDetail.signed_document ? '#166534' : '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            {selectedQuotationDetail.signed_document ? (
-                              <CheckCircle2 size={13} color="#16a34a" />
-                            ) : (
-                              <FileText size={13} color="#64748b" />
-                            )}
-                            Upload Signed Document
-                          </span>
-                          <span
+                          {/* SECTION: Uploaded Signed Offer Letter */}
+                          <div
                             style={{
-                              fontSize: 9.5,
-                              fontWeight: 700,
-                              padding: '2px 7px',
-                              borderRadius: 4,
-                              letterSpacing: '0.02em',
-                              backgroundColor: selectedQuotationDetail.signed_document ? '#dcfce7' : '#fef3c7',
-                              color: selectedQuotationDetail.signed_document ? '#15803d' : '#b45309',
-                              border: `1px solid ${selectedQuotationDetail.signed_document ? '#86efac' : '#fde68a'}`
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              border: selectedQuotationDetail.signed_document ? '1px solid #bbf7d0' : '1px dashed #cbd5e1',
+                              backgroundColor: selectedQuotationDetail.signed_document ? '#f0fdf4' : '#f8fafc',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 8,
+                              transition: 'all 0.2s ease',
+                              marginTop: 2,
+                              marginBottom: 4
                             }}
                           >
-                            {selectedQuotationDetail.signed_document ? 'Ready for Booking' : 'Required for Booking'}
-                          </span>
-                        </div>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: selectedQuotationDetail.signed_document ? '#166534' : '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                {selectedQuotationDetail.signed_document ? (
+                                  <CheckCircle2 size={13} color="#16a34a" />
+                                ) : (
+                                  <FileText size={13} color="#64748b" />
+                                )}
+                                Uploaded Signed Offer Letter
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: 9.5,
+                                  fontWeight: 700,
+                                  padding: '2px 7px',
+                                  borderRadius: 4,
+                                  letterSpacing: '0.02em',
+                                  backgroundColor: selectedQuotationDetail.signed_document ? '#dcfce7' : '#fef3c7',
+                                  color: selectedQuotationDetail.signed_document ? '#15803d' : '#b45309',
+                                  border: `1px solid ${selectedQuotationDetail.signed_document ? '#86efac' : '#fde68a'}`
+                                }}
+                              >
+                                {selectedQuotationDetail.signed_document ? 'Ready for Booking' : 'Required for Booking'}
+                              </span>
+                            </div>
 
-                        {selectedQuotationDetail.signed_document ? (
-                          /* Document Preview & Management Box */
-                          <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: 10,
-                            background: '#ffffff',
-                            padding: '6px 10px',
-                            borderRadius: 6,
-                            border: '1px solid #dcfce7'
-                          }}>
-                            <div
-                              style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, cursor: 'pointer' }}
-                              onClick={() => setPreviewModalDoc({ url: selectedQuotationDetail.signed_document, name: getDocFileName(selectedQuotationDetail.signed_document) })}
-                              title="Click to preview document"
-                            >
-                              {isImageDoc(selectedQuotationDetail.signed_document) ? (
-                                <img
-                                  src={resolveMediaUrl(selectedQuotationDetail.signed_document, erpnextConfig?.url)}
-                                  alt="Signed Doc"
-                                  style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, border: '1px solid #e2e8f0' }}
-                                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                                />
-                              ) : (
-                                <div style={{ width: 34, height: 34, borderRadius: 4, background: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 800 }}>
-                                  PDF
+                            {selectedQuotationDetail.signed_document ? (
+                              /* Document Preview & Management Box */
+                              <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 10,
+                                background: '#ffffff',
+                                padding: '6px 10px',
+                                borderRadius: 6,
+                                border: '1px solid #dcfce7'
+                              }}>
+                                <div
+                                  style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, cursor: 'pointer' }}
+                                  onClick={() => setPreviewModalDoc({ url: selectedQuotationDetail.signed_document, name: getDocFileName(selectedQuotationDetail.signed_document) })}
+                                  title="Click to preview document"
+                                >
+                                  {isImageDoc(selectedQuotationDetail.signed_document) ? (
+                                    <img
+                                      src={resolveMediaUrl(selectedQuotationDetail.signed_document, erpnextConfig?.url)}
+                                      alt="Signed Doc"
+                                      style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, border: '1px solid #e2e8f0' }}
+                                      onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                    />
+                                  ) : (
+                                    <div style={{ width: 34, height: 34, borderRadius: 4, background: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 800 }}>
+                                      PDF
+                                    </div>
+                                  )}
+                                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                    <span style={{ fontSize: 11, fontWeight: 600, color: '#1f2937', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160 }}>
+                                      {getDocFileName(selectedQuotationDetail.signed_document)}
+                                    </span>
+                                    <span style={{ fontSize: 9.5, color: '#16a34a', fontWeight: 500 }}>
+                                      Click to view full preview
+                                    </span>
+                                  </div>
                                 </div>
-                              )}
-                              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                                <span style={{ fontSize: 11, fontWeight: 600, color: '#1f2937', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160 }}>
-                                  {getDocFileName(selectedQuotationDetail.signed_document)}
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-light btn-sm"
+                                    style={{
+                                      fontSize: 10.5,
+                                      padding: '4px 10px',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 5,
+                                      color: '#1e293b',
+                                      border: '1px solid #cbd5e1',
+                                      borderRadius: 6,
+                                      backgroundColor: '#ffffff',
+                                      cursor: 'pointer',
+                                      fontWeight: 600
+                                    }}
+                                    onClick={() => setPreviewModalDoc({ url: selectedQuotationDetail.signed_document, name: getDocFileName(selectedQuotationDetail.signed_document) })}
+                                    title="Preview Document"
+                                  >
+                                    <Eye size={12} />
+                                    <span>Preview</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-light btn-sm"
+                                    style={{
+                                      fontSize: 10.5,
+                                      padding: '4px 10px',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 5,
+                                      color: '#dc2626',
+                                      border: '1px solid #fecaca',
+                                      borderRadius: 6,
+                                      backgroundColor: '#fef2f2',
+                                      cursor: 'pointer',
+                                      fontWeight: 600
+                                    }}
+                                    onClick={handleRemoveSignedDocument}
+                                    title="Remove Signed Offer Letter"
+                                  >
+                                    <Trash2 size={12} />
+                                    <span>Remove</span>
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              /* Upload Attach Box */
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <p style={{ margin: 0, fontSize: 10.5, color: '#64748b', lineHeight: 1.35 }}>
+                                  Please attach the customer-signed offer letter. <strong>Create Booking</strong> will be enabled once uploaded.
+                                </p>
+                                <button
+                                  type="button"
+                                  className="btn btn-outline-primary btn-sm"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: 6,
+                                    padding: '6px 12px',
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    borderRadius: 6,
+                                    backgroundColor: '#eff6ff',
+                                    border: '1px dashed #3b82f6',
+                                    color: '#1d4ed8',
+                                    cursor: uploadingSignedDoc ? 'wait' : 'pointer'
+                                  }}
+                                  onClick={() => signedDocInputRef.current?.click()}
+                                  disabled={uploadingSignedDoc}
+                                >
+                                  {uploadingSignedDoc ? (
+                                    <>
+                                      <Loader2 size={13} className="animate-spin" />
+                                      <span>Uploading signed offer letter...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Upload size={13} />
+                                      <span>Attach Signed Offer Letter</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            )}
+
+                            <input
+                              ref={signedDocInputRef}
+                              type="file"
+                              accept="image/*,application/pdf,.pdf"
+                              style={{ display: 'none' }}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  handleUploadSignedDocument(file);
+                                }
+                                e.target.value = '';
+                              }}
+                            />
+                          </div>
+
+                          {/* SECTION: Payment Details (custom_payment_details) - ONLY for non-service quotations */}
+                          {!isServiceQuotation(selectedQuotationDetail) && (
+                            <div
+                              style={{
+                                padding: '10px 12px',
+                                borderRadius: 8,
+                                border: (paymentDetailsText || '').trim().length >= 40 ? '1px solid #bbf7d0' : '1px solid #cbd5e1',
+                                backgroundColor: (paymentDetailsText || '').trim().length >= 40 ? '#f0fdf4' : '#f8fafc',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                                transition: 'all 0.2s ease',
+                                marginTop: 2,
+                                marginBottom: 4
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <label
+                                  htmlFor="custom_payment_details"
+                                  style={{
+                                    margin: 0,
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    color: (paymentDetailsText || '').trim().length >= 40 ? '#166534' : '#334155',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6
+                                  }}
+                                >
+                                  {(paymentDetailsText || '').trim().length >= 40 ? (
+                                    <CheckCircle2 size={13} color="#16a34a" />
+                                  ) : (
+                                    <Receipt size={13} color="#64748b" />
+                                  )}
+                                  Payment Details <span style={{ color: '#ef4444' }}>*</span>
+                                </label>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  {paymentDetailsSaved && (
+                                    <span style={{ fontSize: 9.5, color: '#16a34a', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                      <Check size={11} /> Saved
+                                    </span>
+                                  )}
+                                  <span
+                                    style={{
+                                      fontSize: 9.5,
+                                      fontWeight: 700,
+                                      padding: '2px 7px',
+                                      borderRadius: 4,
+                                      letterSpacing: '0.02em',
+                                      backgroundColor: (paymentDetailsText || '').trim().length >= 40 ? '#dcfce7' : '#fef3c7',
+                                      color: (paymentDetailsText || '').trim().length >= 40 ? '#15803d' : '#b45309',
+                                      border: `1px solid ${(paymentDetailsText || '').trim().length >= 40 ? '#86efac' : '#fde68a'}`
+                                    }}
+                                    title="Must contain at least 40 characters before submission"
+                                  >
+                                    {(paymentDetailsText || '').trim().length >= 40
+                                      ? `${(paymentDetailsText || '').trim().length} chars (Valid)`
+                                      : `${(paymentDetailsText || '').trim().length} / 40 min chars`}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <textarea
+                                id="custom_payment_details"
+                                name="custom_payment_details"
+                                rows={3}
+                                value={paymentDetailsText}
+                                onChange={(e) => {
+                                  setPaymentDetailsText(e.target.value);
+                                  setPaymentDetailsSaved(false);
+                                }}
+                                onBlur={() => {
+                                  if (paymentDetailsText !== (selectedQuotationDetail?.custom_payment_details || '')) {
+                                    handleSavePaymentDetails(paymentDetailsText);
+                                  }
+                                }}
+                                disabled={selectedQuotationDetail?.docstatus === 1 || selectedQuotationDetail?.status === 'Cancelled' || savingPaymentDetails}
+                                placeholder="Enter payment details (bank transfer, cheque, transaction ID, date, etc. - min 40 characters)..."
+                                style={{
+                                  width: '100%',
+                                  boxSizing: 'border-box',
+                                  fontSize: 11,
+                                  lineHeight: '1.4',
+                                  padding: '8px 10px',
+                                  borderRadius: 6,
+                                  border: (paymentDetailsText || '').trim().length > 0 && (paymentDetailsText || '').trim().length < 40 ? '1px solid #f59e0b' : '1px solid #cbd5e1',
+                                  background: selectedQuotationDetail?.docstatus === 1 ? 'var(--bg-tertiary, #f1f5f9)' : '#ffffff',
+                                  color: '#1e293b',
+                                  resize: 'vertical',
+                                  minHeight: 58,
+                                  fontFamily: 'inherit'
+                                }}
+                              />
+
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                                <span style={{ fontSize: 9.5, color: (paymentDetailsText || '').trim().length > 0 && (paymentDetailsText || '').trim().length < 40 ? '#d97706' : '#64748b' }}>
+                                  {(paymentDetailsText || '').trim().length < 40
+                                    ? `Minimum 40 characters required (currently: ${(paymentDetailsText || '').trim().length}).`
+                                    : 'Payment details meet submission requirement.'}
                                 </span>
-                                <span style={{ fontSize: 9.5, color: '#16a34a', fontWeight: 500 }}>
-                                  Click to view full preview
-                                </span>
+
+                                {selectedQuotationDetail?.docstatus !== 1 && selectedQuotationDetail?.status !== 'Cancelled' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSavePaymentDetails(paymentDetailsText)}
+                                    disabled={savingPaymentDetails || paymentDetailsText === (selectedQuotationDetail?.custom_payment_details || '')}
+                                    className="btn btn-sm"
+                                    style={{
+                                      fontSize: 10,
+                                      padding: '3px 9px',
+                                      borderRadius: 4,
+                                      fontWeight: 600,
+                                      background: paymentDetailsText === (selectedQuotationDetail?.custom_payment_details || '') ? '#f1f5f9' : 'var(--brand-color, #2563eb)',
+                                      color: paymentDetailsText === (selectedQuotationDetail?.custom_payment_details || '') ? '#94a3b8' : '#ffffff',
+                                      border: 'none',
+                                      cursor: paymentDetailsText === (selectedQuotationDetail?.custom_payment_details || '') ? 'default' : 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4
+                                    }}
+                                    title="Save payment details to quotation"
+                                  >
+                                    {savingPaymentDetails ? (
+                                      <>
+                                        <Loader2 size={10} className="animate-spin" />
+                                        <span>Saving...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Save size={10} />
+                                        <span>Save</span>
+                                      </>
+                                    )}
+                                  </button>
+                                )}
                               </div>
                             </div>
-
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                              <button
-                                type="button"
-                                className="btn btn-light btn-sm"
-                                style={{
-                                  fontSize: 10.5,
-                                  padding: '4px 10px',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 5,
-                                  color: '#1e293b',
-                                  border: '1px solid #cbd5e1',
-                                  borderRadius: 6,
-                                  backgroundColor: '#ffffff',
-                                  cursor: 'pointer',
-                                  fontWeight: 600
-                                }}
-                                onClick={() => setPreviewModalDoc({ url: selectedQuotationDetail.signed_document, name: getDocFileName(selectedQuotationDetail.signed_document) })}
-                                title="Preview Document"
-                              >
-                                <Eye size={12} />
-                                <span>Preview</span>
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-light btn-sm"
-                                style={{
-                                  fontSize: 10.5,
-                                  padding: '4px 10px',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 5,
-                                  color: '#dc2626',
-                                  border: '1px solid #fecaca',
-                                  borderRadius: 6,
-                                  backgroundColor: '#fef2f2',
-                                  cursor: 'pointer',
-                                  fontWeight: 600
-                                }}
-                                onClick={handleRemoveSignedDocument}
-                                title="Remove Signed Document"
-                              >
-                                <Trash2 size={12} />
-                                <span>Remove</span>
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          /* Upload Attach Box */
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            <p style={{ margin: 0, fontSize: 10.5, color: '#64748b', lineHeight: 1.35 }}>
-                              Please attach the customer-signed offer letter. <strong>Create Booking</strong> will be enabled once uploaded.
-                            </p>
-                            <button
-                              type="button"
-                              className="btn btn-outline-primary btn-sm"
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: 6,
-                                padding: '6px 12px',
-                                fontSize: 11,
-                                fontWeight: 600,
-                                borderRadius: 6,
-                                backgroundColor: '#eff6ff',
-                                border: '1px dashed #3b82f6',
-                                color: '#1d4ed8',
-                                cursor: uploadingSignedDoc ? 'wait' : 'pointer'
-                              }}
-                              onClick={() => signedDocInputRef.current?.click()}
-                              disabled={uploadingSignedDoc}
-                            >
-                              {uploadingSignedDoc ? (
-                                <>
-                                  <Loader2 size={13} className="animate-spin" />
-                                  <span>Uploading signed document...</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Upload size={13} />
-                                  <span>Attach Signed Document</span>
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        )}
-
-                        <input
-                          ref={signedDocInputRef}
-                          type="file"
-                          accept="image/*,application/pdf,.pdf"
-                          style={{ display: 'none' }}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              handleUploadSignedDocument(file);
-                            }
-                            e.target.value = '';
-                          }}
-                        />
-                      </div>
+                          )}
+                        </>
+                      ) : (
+                        <span style={{ color: '#4b5563', fontWeight: 700, fontSize: 10.5, textTransform: 'uppercase' }}>Action</span>
+                      )}
 
                       {/* BUTTONS ROW (Dynamic workflow buttons + Booking + Print) */}
                       {(() => {
@@ -9500,8 +9977,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               ) : null
                             )}
 
-                            {/* New Version Button - Only show when Go to Booking is NOT shown */}
-                            {!selectedQuotationDetail.booking_id && (
+                            {/* New Version Button - Only show when Go to Booking is NOT shown and NOT a service quotation */}
+                            {!selectedQuotationDetail.booking_id && !isServiceQuotation(selectedQuotationDetail) && (
                               <button
                                 id="qtn-new-version-action-btn"
                                 type="button"
@@ -9519,7 +9996,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 title={`Create Revised Quotation from ${selectedQuotationDetail.name}`}
                               >
                                 <GitBranch size={11} color="#1d4ed8" />
-                                <span>Revised Quotation</span>
+                                <span>Revise Quotation</span>
                               </button>
                             )}
 
@@ -9527,17 +10004,40 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                Standard Quotation: Show Print Offer Letter */}
                             {isServiceQuotation(selectedQuotationDetail) ? (
                               (selectedQuotationDetail.docstatus === 1 || selectedQuotationDetail.status === 'Submitted') ? (
-                                <button
-                                  id="qtn-approved-action-btn"
-                                  type="button"
-                                  className="qtn-btn-base qtn-btn-approve"
-                                  disabled
-                                  style={{ opacity: 0.9, cursor: 'default' }}
-                                  title="Service Quotation is already approved and submitted"
-                                >
-                                  <Check size={12} />
-                                  <span>Approved</span>
-                                </button>
+                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                                  <button
+                                    id="qtn-approved-action-btn"
+                                    type="button"
+                                    className="qtn-btn-base qtn-btn-approve"
+                                    disabled
+                                    style={{ opacity: 0.9, cursor: 'default' }}
+                                    title="Service Quotation is already approved and submitted"
+                                  >
+                                    <Check size={12} />
+                                    <span>Approved</span>
+                                  </button>
+                                  {(selectedQuotationDetail.custom_task_id || selectedQuotationDetail.custom_task_reference || serviceQuotationTaskId || taskQuotationMap[selectedQuotationDetail.name]) && (
+                                    <button
+                                      id="qtn-go-to-task-action-btn"
+                                      type="button"
+                                      className="qtn-btn-base"
+                                      style={{
+                                        background: '#2563eb',
+                                        borderColor: '#2563eb',
+                                        color: '#ffffff',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                        fontWeight: 700
+                                      }}
+                                      onClick={() => handleGoToTask(selectedQuotationDetail.custom_task_id || selectedQuotationDetail.custom_task_reference || serviceQuotationTaskId || taskQuotationMap[selectedQuotationDetail.name])}
+                                      title={`Go to Task ${selectedQuotationDetail.custom_task_id || selectedQuotationDetail.custom_task_reference || serviceQuotationTaskId || taskQuotationMap[selectedQuotationDetail.name]}`}
+                                    >
+                                      <ExternalLink size={12} />
+                                      <span>Go to Task</span>
+                                    </button>
+                                  )}
+                                </div>
                               ) : (selectedQuotationDetail.status !== 'Cancelled' && selectedQuotationDetail.docstatus !== 2) ? (
                                 <button
                                   id="qtn-approve-service-btn"
@@ -10346,7 +10846,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: 'var(--text-primary, #0f172a)' }}>
-                      Create Revised Quotation
+                      Create Revise Quotation
                     </h2>
                     {(() => {
                       const root = getRootQuotationName(versionTargetQuotation.name, versionTargetQuotation);
@@ -10712,23 +11212,84 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     </table>
                   </div>
 
-                  {/* GRAND TOTAL ROW (MATCHES SCREENSHOT) */}
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    alignItems: 'center',
-                    gap: 12,
-                    padding: '12px 18px',
-                    borderTop: '1px solid var(--border-color, #e2e8f0)',
-                    background: 'var(--bg-secondary, #f8fafc)'
-                  }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary, #475569)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      GRAND TOTAL
-                    </span>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: '#059669' }}>
-                      ${versionItems.reduce((sum, item) => sum + ((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)), 0).toLocaleString()}
-                    </span>
-                  </div>
+                  {/* TAXES & TOTALS SUMMARY SECTION */}
+                  {(() => {
+                    const versionNetTotal = versionItems.reduce((sum, item) => sum + ((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)), 0);
+
+                    const baseSourceTotal = parseFloat(versionTargetQuotation.net_total || versionTargetQuotation.total || versionTargetQuotation.base_net_total || 0);
+                    const taxSourceTotal = parseFloat(versionTargetQuotation.total_taxes_and_charges || 0);
+                    const taxesRateFromList = (versionTargetQuotation.taxes && Array.isArray(versionTargetQuotation.taxes) && versionTargetQuotation.taxes.length > 0 && versionTargetQuotation.taxes[0].rate)
+                      ? (parseFloat(versionTargetQuotation.taxes[0].rate) / 100)
+                      : null;
+
+                    const versionTaxRatePct = taxesRateFromList !== null
+                      ? taxesRateFromList
+                      : (baseSourceTotal > 0 && taxSourceTotal > 0 ? (taxSourceTotal / baseSourceTotal) : 0.125);
+
+                    const versionTaxes = versionNetTotal * versionTaxRatePct;
+                    const versionGrandTotal = versionNetTotal + versionTaxes;
+
+                    return (
+                      <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'flex-end',
+                        padding: '12px 20px',
+                        borderTop: '1px solid var(--border-color, #e2e8f0)',
+                        background: 'var(--bg-secondary, #f8fafc)',
+                        gap: 8
+                      }}>
+                        {/* Net Total */}
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          width: '100%',
+                          maxWidth: '320px',
+                          fontSize: 12,
+                          color: 'var(--text-secondary, #475569)'
+                        }}>
+                          <span style={{ fontWeight: 600 }}>Net Total</span>
+                          <span style={{ fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
+                            ${versionNetTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+
+                        {/* Taxes Section (Matching Image 1: Taxes (VAT @ 12.5%) $93.5) */}
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          width: '100%',
+                          maxWidth: '320px',
+                          fontSize: 12,
+                          color: 'var(--text-secondary, #475569)',
+                          paddingBottom: 8,
+                          borderBottom: '1px solid var(--border-color, #e2e8f0)'
+                        }}>
+                          <span style={{ fontWeight: 600 }}>Taxes (VAT @ {(versionTaxRatePct * 100).toFixed(1)}%)</span>
+                          <span style={{ fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
+                            ${versionTaxes.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+
+                        {/* Grand Total */}
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          width: '100%',
+                          maxWidth: '320px',
+                          alignItems: 'center',
+                          paddingTop: 2
+                        }}>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary, #475569)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            GRAND TOTAL
+                          </span>
+                          <span style={{ fontSize: 16, fontWeight: 800, color: '#059669' }}>
+                            ${versionGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -10805,11 +11366,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                 }}
               >
                 {versionSubmitting ? (
-                  <span>Creating Revised Quotation...</span>
+                  <span>Creating Revise Quotation...</span>
                 ) : (
                   <>
                     <GitBranch size={14} />
-                    <span>Create Revised Quotation</span>
+                    <span>Create Revise Quotation</span>
                   </>
                 )}
               </button>

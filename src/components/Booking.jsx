@@ -270,6 +270,26 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     return [];
   };
 
+  const normalizeBookingTaxes = (payload) => {
+    const candidates = [
+      payload?.booking_sales_and_taxes,
+      payload?.data?.booking_sales_and_taxes,
+      payload?.message?.booking_sales_and_taxes,
+      payload?.data?.data?.booking_sales_and_taxes,
+      payload?.sales_and_taxes,
+      payload?.taxes,
+      payload?.data?.taxes,
+      payload?.quotation_taxes
+    ];
+
+    const taxes = candidates.find(Array.isArray);
+    if (Array.isArray(taxes)) {
+      return taxes.filter(t => t && (t.rate !== undefined || t.tax_amount !== undefined || t.description || t.account_head));
+    }
+
+    return [];
+  };
+
   // Fetch DocType fields metadata to construct dynamic form
   const fetchDocTypeFields = async () => {
     if (!erpnextConfig || !erpnextConfig.url) return;
@@ -651,7 +671,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
       if (details) {
         if (details.quotation && erpnextConfig && erpnextConfig.url) {
           try {
-            const qRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(details.quotation)}?fields=["name","custom_start_date","custom_end_date","valid_till","discount_amount"]`, {
+            const qRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(details.quotation)}`, {
               credentials: 'include',
               headers: { 'Content-Type': 'application/json' }
             });
@@ -662,36 +682,44 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
               details.quotation_end_date = qData.custom_end_date;
               details.quotation_valid_till = qData.valid_till;
               details.quotation_discount_amount = qData.discount_amount;
+              details.quotation_taxes = qData.taxes;
+              details.quotation_total_taxes_and_charges = qData.total_taxes_and_charges;
+              if ((!details.booking_sales_and_taxes || details.booking_sales_and_taxes.length === 0) && qData.taxes && Array.isArray(qData.taxes)) {
+                details.booking_sales_and_taxes = qData.taxes;
+              }
             }
           } catch (_) { }
         }
 
         const normalizedItems = normalizeBookingItems(details);
-        setSelectedBookingDetails({ ...details, booking_item: normalizedItems });
+        const normalizedTaxes = normalizeBookingTaxes(details);
+        setSelectedBookingDetails({ ...details, booking_item: normalizedItems, booking_sales_and_taxes: normalizedTaxes });
         fetchWorkflowTransitions(details);
         setBookings(prev => prev.map(b => {
           const bookingId = b.name || b.id;
-          return bookingId === id ? { ...b, ...details, booking_item: normalizedItems } : b;
+          return bookingId === id ? { ...b, ...details, booking_item: normalizedItems, booking_sales_and_taxes: normalizedTaxes } : b;
         }));
       } else {
         const mockDetail = bookings.find(b => b.name === id || b.id === id);
         const normalizedItems = normalizeBookingItems(mockDetail || {});
-        setSelectedBookingDetails(mockDetail ? { ...mockDetail, booking_item: normalizedItems } : null);
+        const normalizedTaxes = normalizeBookingTaxes(mockDetail || {});
+        setSelectedBookingDetails(mockDetail ? { ...mockDetail, booking_item: normalizedItems, booking_sales_and_taxes: normalizedTaxes } : null);
         fetchWorkflowTransitions(mockDetail);
         setBookings(prev => prev.map(b => {
           const bookingId = b.name || b.id;
-          return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
+          return bookingId === id ? { ...b, booking_item: normalizedItems, booking_sales_and_taxes: normalizedTaxes } : b;
         }));
       }
     } catch (err) {
       console.warn('Failed to load booking details:', err);
       const mockDetail = bookings.find(b => b.name === id || b.id === id);
       const normalizedItems = normalizeBookingItems(mockDetail || {});
-      setSelectedBookingDetails(mockDetail ? { ...mockDetail, booking_item: normalizedItems } : null);
+      const normalizedTaxes = normalizeBookingTaxes(mockDetail || {});
+      setSelectedBookingDetails(mockDetail ? { ...mockDetail, booking_item: normalizedItems, booking_sales_and_taxes: normalizedTaxes } : null);
       fetchWorkflowTransitions(mockDetail);
       setBookings(prev => prev.map(b => {
         const bookingId = b.name || b.id;
-        return bookingId === id ? { ...b, booking_item: normalizedItems } : b;
+        return bookingId === id ? { ...b, booking_item: normalizedItems, booking_sales_and_taxes: normalizedTaxes } : b;
       }));
     } finally {
       setLoadingDetails(false);
@@ -1595,9 +1623,10 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
         const details = json.data;
         if (details) {
           const normalizedItems = normalizeBookingItems(details);
+          const normalizedTaxes = normalizeBookingTaxes(details);
           setBookings(prev => prev.map(b => {
             const bookingId = b.name || b.id;
-            return bookingId === id ? { ...b, ...details, booking_item: normalizedItems } : b;
+            return bookingId === id ? { ...b, ...details, booking_item: normalizedItems, booking_sales_and_taxes: normalizedTaxes } : b;
           }));
         }
       }
@@ -1989,7 +2018,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                       </span>
                     </td>
                     <td style={{ fontWeight: 600 }}>
-                      ${parseFloat(b.booking_amount || b.amount_to_pay || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      F${parseFloat(b.booking_amount || b.amount_to_pay || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td>
                       <span className={`badge ${b.payment_status === 'Paid' ? 'badge-success' : b.payment_status === 'Partially Paid' ? 'badge-warning' : 'badge-danger'}`}>
@@ -2554,28 +2583,81 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
 
                   const monthlyGrandTotal = parseFloat(selectedBookingDetails.grand_totalmonthly || selectedBookingDetails.per_month_billing_amount || selectedBookingDetails.booking_amount || 0);
 
-                  // Compute taxes
-                  let displayTaxes = Math.max(0, parseFloat(selectedBookingDetails.taxes_and_charges || selectedBookingDetails.total_taxes_and_charges || 0));
-                  if (displayTaxes === 0 && monthlyGrandTotal > 0) {
-                    const diff = (monthlyGrandTotal + calculatedDiscount) - displayNetTotal;
-                    if (diff > 0) displayTaxes = diff;
-                  }
-                  if (displayTaxes === 0 && displayNetTotal > 0) {
-                    displayTaxes = (displayNetTotal - calculatedDiscount) * 0.125;
+                  // Extract dynamic taxes from child table "Booking Sales and Taxes" (field: booking_sales_and_taxes)
+                  const taxTableRows = (Array.isArray(selectedBookingDetails.booking_sales_and_taxes) && selectedBookingDetails.booking_sales_and_taxes.length > 0)
+                    ? selectedBookingDetails.booking_sales_and_taxes
+                    : (Array.isArray(selectedBookingDetails.taxes) && selectedBookingDetails.taxes.length > 0)
+                      ? selectedBookingDetails.taxes
+                      : (Array.isArray(selectedBookingDetails.quotation_taxes) && selectedBookingDetails.quotation_taxes.length > 0)
+                        ? selectedBookingDetails.quotation_taxes
+                        : [];
+
+                  // Helper to resolve row tax amount
+                  const getRowTaxAmount = (taxRow) => {
+                    const explicitAmt = parseFloat(taxRow.tax_amount ?? taxRow.tax_amount_after_discount_amount ?? taxRow.amount);
+                    if (!isNaN(explicitAmt) && explicitAmt > 0) return explicitAmt;
+                    const rate = parseFloat(taxRow.rate ?? 0);
+                    if (rate > 0) {
+                      const baseAmt = displayNetTotal > 0 ? displayNetTotal : monthlyGrandTotal;
+                      return (baseAmt * rate) / 100;
+                    }
+                    return 0;
+                  };
+
+                  // Helper to resolve row tax rate
+                  const getRowTaxRate = (taxRow) => {
+                    const r = parseFloat(taxRow.rate);
+                    if (!isNaN(r) && r > 0) return r;
+                    const amt = parseFloat(taxRow.tax_amount ?? taxRow.amount ?? 0);
+                    if (amt > 0 && displayNetTotal > 0) {
+                      return Number(((amt / displayNetTotal) * 100).toFixed(1));
+                    }
+                    return 12.5;
+                  };
+
+                  // Helper to format tax row label
+                  const getRowTaxLabel = (taxRow) => {
+                    const rate = getRowTaxRate(taxRow);
+                    let title = (taxRow.description || taxRow.account_head || 'VAT').trim();
+                    title = title.replace(/\s*-\s*[A-Z0-9]+$/, '').trim();
+
+                    if (title.toLowerCase().includes('@')) {
+                      return title.toLowerCase().startsWith('taxes') ? title : `Taxes (${title})`;
+                    }
+                    if (title.toLowerCase().includes('vat')) {
+                      return `Taxes (VAT @ ${rate}%)`;
+                    }
+                    if (title.toLowerCase().includes('tax')) {
+                      return `${title} (@ ${rate}%)`;
+                    }
+                    return `Taxes (${title} @ ${rate}%)`;
+                  };
+
+                  // Compute fallback values when child table rows are absent
+                  let fallbackTaxAmt = 0;
+                  let fallbackTaxPct = '12.5';
+                  const docTaxes = parseFloat(selectedBookingDetails.total_taxes_and_charges || selectedBookingDetails.quotation_total_taxes_and_charges || 0);
+
+                  if (docTaxes > 0) {
+                    fallbackTaxAmt = docTaxes;
+                    if (displayNetTotal > 0) {
+                      fallbackTaxPct = Number(((docTaxes / displayNetTotal) * 100).toFixed(1)).toString();
+                    }
+                  } else if (displayNetTotal > 0) {
+                    fallbackTaxAmt = displayNetTotal * 0.125;
+                    fallbackTaxPct = '12.5';
+                  } else if (monthlyGrandTotal > 0) {
+                    fallbackTaxAmt = monthlyGrandTotal - (monthlyGrandTotal / 1.125);
+                    fallbackTaxPct = '12.5';
                   }
 
-                  let taxPctDisplay = '12.5';
-                  if (displayNetTotal > 0 && displayTaxes > 0) {
-                    const netAfterDisc = Math.max(1, displayNetTotal - calculatedDiscount);
-                    const pct = (displayTaxes / netAfterDisc) * 100;
-                    if (pct > 0 && pct <= 100) {
-                      taxPctDisplay = Number(pct.toFixed(1)).toString();
-                    }
-                  }
+                  const totalTaxes = taxTableRows.length > 0
+                    ? taxTableRows.reduce((sum, t) => sum + getRowTaxAmount(t), 0)
+                    : fallbackTaxAmt;
 
                   const displayGrandTotal = monthlyGrandTotal > 0
                     ? monthlyGrandTotal
-                    : Math.max(0, (displayNetTotal - calculatedDiscount + displayTaxes));
+                    : Math.max(0, (displayNetTotal + totalTaxes));
 
                   return (
                     <div style={{
@@ -2666,7 +2748,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                                     <span>{item.item_name || item.item_code}</span>
                                     {parseFloat(item.discount_amount || 0) > 0 && (
                                       <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 600, marginLeft: 6 }}>
-                                        (Disc: -${parseFloat(item.discount_amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })})
+                                        (Disc: -F${parseFloat(item.discount_amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })})
                                       </span>
                                     )}
                                   </td>
@@ -2674,7 +2756,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                                     {areaVal && areaVal !== '—' ? `${areaVal} sqft` : '—'}
                                   </td>
                                   <td style={{ padding: '8px 12px', textAlign: 'right', color: '#111827', fontWeight: 700 }}>
-                                    ${amtVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                                    F${amtVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                                   </td>
                                 </tr>
                               );
@@ -2697,21 +2779,37 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
                           <span>Net Total</span>
                           <span style={{ fontWeight: 600, color: '#111827' }}>
-                            ${displayNetTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                            F${displayNetTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                           </span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#ef4444', fontWeight: 600 }}>
                           <span>Negotiated Discount</span>
                           <span>
-                            -${calculatedDiscount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                            -F${calculatedDiscount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                           </span>
                         </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
-                          <span>Taxes (VAT @ {taxPctDisplay}%)</span>
-                          <span>
-                            ${displayTaxes.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
-                          </span>
-                        </div>
+                        {/* Dynamic Tax Rows from Booking Sales and Taxes child table */}
+                        {taxTableRows.length > 0 ? (
+                          taxTableRows.map((taxRow, tIdx) => {
+                            const taxAmt = getRowTaxAmount(taxRow);
+                            const label = getRowTaxLabel(taxRow);
+                            return (
+                              <div key={taxRow.name || tIdx} style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
+                                <span>{label}</span>
+                                <span>
+                                  F${taxAmt.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
+                            <span>Taxes (VAT @ {fallbackTaxPct}%)</span>
+                            <span>
+                              F${fallbackTaxAmt.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        )}
                         <div style={{
                           display: 'flex',
                           justifyContent: 'space-between',
@@ -2723,7 +2821,7 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                         }}>
                           <span>Grand Total ({currency || 'FJD'})</span>
                           <span>
-                            ${displayGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                            F${displayGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                           </span>
                         </div>
                       </div>
@@ -2754,32 +2852,53 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
                       <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Deposit Amount:</span>
                       <strong style={{ color: 'var(--text-primary, #0f172a)', fontSize: '13px', fontWeight: 700 }}>
-                        ${parseFloat(selectedBookingDetails.advance_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        F${parseFloat(selectedBookingDetails.advance_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </strong>
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
-                      <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Paid Amount:</span>
-                      <strong style={{ color: '#10b981', fontSize: '13px', fontWeight: 700 }}>
-                        ${parseFloat(selectedBookingDetails.paid_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </strong>
-                    </div>
+                    {(() => {
+                      let monthlyGrandTotal = parseFloat(
+                        selectedBookingDetails.grand_totalmonthly ||
+                        selectedBookingDetails.per_month_billing_amount ||
+                        selectedBookingDetails.booking_amount ||
+                        selectedBookingDetails.grand_total ||
+                        0
+                      );
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px', borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '2px' }}>
-                      {(() => {
-                        const monthlyGrandTotal = parseFloat(selectedBookingDetails.grand_totalmonthly || selectedBookingDetails.per_month_billing_amount || selectedBookingDetails.booking_amount || 0);
-                        const paidAmount = parseFloat(selectedBookingDetails.paid_amount || 0);
-                        const pendingBalance = monthlyGrandTotal - paidAmount;
-                        return (
-                          <>
-                            <span style={{ color: 'var(--text-primary, #0f172a)', fontWeight: 700 }}>Pending Balance:</span>
-                            <strong style={{ color: '#ef4444', fontSize: '13px', fontWeight: 800 }}>
-                              ${pendingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      if (monthlyGrandTotal <= 0 && Array.isArray(selectedBookingDetails.booking_item) && selectedBookingDetails.booking_item.length > 0) {
+                        const itemsSum = selectedBookingDetails.booking_item.reduce((sum, it) => {
+                          const amt = it.amount !== undefined && it.amount !== null
+                            ? parseFloat(it.amount)
+                            : ((parseFloat(it.qty) || 1) * (parseFloat(it.rate) || 0));
+                          return sum + (isNaN(amt) ? 0 : amt);
+                        }, 0);
+                        const disc = parseFloat(selectedBookingDetails.discount_amount || selectedBookingDetails.quotation_discount_amount || 0);
+                        const tax = parseFloat(selectedBookingDetails.total_taxes_and_charges || selectedBookingDetails.quotation_total_taxes_and_charges || 0);
+                        monthlyGrandTotal = Math.max(0, itemsSum - disc + tax);
+                      }
+
+                      const rawPaidAmount = parseFloat(selectedBookingDetails.paid_amount || 0);
+                      const paidAmount = rawPaidAmount > 0 ? rawPaidAmount : monthlyGrandTotal;
+                      const pendingBalance = 0;
+
+                      return (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                            <span style={{ color: 'var(--text-muted, #6b7280)', fontWeight: 500 }}>Paid Amount:</span>
+                            <strong style={{ color: '#10b981', fontSize: '13px', fontWeight: 700 }}>
+                              F${paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </strong>
-                          </>
-                        );
-                      })()}
-                    </div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px', borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '2px' }}>
+                            <span style={{ color: 'var(--text-primary, #0f172a)', fontWeight: 700 }}>Pending Balance:</span>
+                            <strong style={{ color: pendingBalance > 0 ? '#ef4444' : '#10b981', fontSize: '13px', fontWeight: 800 }}>
+                              F${pendingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </strong>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
 
                   {/* Image Illustration Container */}

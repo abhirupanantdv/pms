@@ -2964,7 +2964,7 @@ export default function PropertyMall3DView({ properties = [] }) {
               <div>Status: {STATUS_LABEL[hoveredUnit.status] || hoveredUnit.status}</div>
               {hoveredUnit.tenant && <div>Tenant: {hoveredUnit.tenant}</div>}
               {hoveredUnit.area && <div>Area: {hoveredUnit.area} sq ft</div>}
-              {hoveredUnit.rent && <div>Rent: ${hoveredUnit.rent.toLocaleString()}/mo</div>}
+              {hoveredUnit.rent && <div>Rent: F${hoveredUnit.rent.toLocaleString()}/mo</div>}
             </div>
           )}
 

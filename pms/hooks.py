@@ -24,5 +24,13 @@ website_route_rules = [
 doc_events = {
     "Tenant Onboarding": {
         "validate": "pms.utils.validate_tenant_onboarding_phone"
+    },
+    "Quotation": {
+        "before_submit": "pms.utils.validate_quotation_payment_details"
     }
+}
+
+doctype_js = {
+    "Quotation": "public/js/quotation.js",
+    "Task": "public/js/task.js"
 }

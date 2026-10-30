@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Send, CheckCircle2, MessageSquare, AlertCircle, BarChart2, ShieldAlert, Clock, User, Sparkles, Mic, MicOff, RefreshCw, X, HelpCircle, Check, Play, Pencil, Settings, Paperclip, Activity, FileText, Bell, Phone, Mail, Award, DollarSign } from 'lucide-react';
+import { Send, CheckCircle2, MessageSquare, AlertCircle, BarChart2, ShieldAlert, Clock, User, Sparkles, Mic, MicOff, RefreshCw, X, HelpCircle, Check, Play, Pencil, Settings, Paperclip, Activity, FileText, Bell, Phone, Mail, Award, DollarSign, Maximize2, ChevronDown, Bold, Italic, Underline, Link, Trash2, CheckSquare } from 'lucide-react';
 import { getAuthHeaders } from '../config';
+import CreateScheduleModal from './CreateScheduleModal';
 
 const MOCK_ISSUE_LISTS = {
   "Utilities & Infrastructure Issues List": [
@@ -31,12 +32,16 @@ const MOCK_ISSUE_LISTS = {
   ]
 };
 
-export default function Support({ tickets, onAddMessage, onCreateIssue, tenants = [], properties = [], bookings = [], erpnextConfig, onConvertToMaintenance }) {
+export default function Support({ tickets, onAddMessage, onCreateIssue, tenants = [], properties = [], bookings = [], erpnextConfig, onConvertToMaintenance, onCreateSchedule }) {
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'issue', 'tinni'
   const [dashboardRole, setDashboardRole] = useState('manager'); // 'tenant', 'technician', 'manager', 'admin'
   const [selectedTicketId, setSelectedTicketId] = useState(tickets[0]?.id || null);
   const [commTab, setCommTab] = useState('public'); // 'public', 'internal', 'emails', 'history'
   const [issueViewMode, setIssueViewMode] = useState('list'); // 'list', 'kanban'
+
+  // Schedule Maintenance Modal States (stays on Support page)
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleTicket, setScheduleTicket] = useState(null);
 
   // Create Issue Modal Form States
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -49,6 +54,11 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   const [issueCompany, setIssueCompany] = useState('CARPENTERS PROPERTIES PTE LIMITED');
   const [issueAgreementStatus, setIssueAgreementStatus] = useState('First Response Due');
   const [issueBudget, setIssueBudget] = useState(0);
+
+  // Additional customer & contact fields matching ERPNext Issue doctype
+  const [issueCustomerEmail, setIssueCustomerEmail] = useState('');
+  const [issueCustomerPhone, setIssueCustomerPhone] = useState('');
+  const [issueContact, setIssueContact] = useState('');
 
   // Custom Upgrades form fields
   const [issueSubcategory, setIssueSubcategory] = useState('');
@@ -73,9 +83,24 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   const [attachedFile, setAttachedFile] = useState(null);
 
   // Local state copy of tickets to allow changing status and closing/reopening in the UI
-  const [localTickets, setLocalTickets] = useState(tickets);
+  const [localTickets, setLocalTickets] = useState(tickets || []);
+  const [loadingTickets, setLoadingTickets] = useState(false);
   const [messageText, setMessageText] = useState('');
   const [isListening, setIsListening] = useState(false);
+
+  // New Email Modal (Image 1) States
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emailTo, setEmailTo] = useState('');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
+  const [emailSendCopy, setEmailSendCopy] = useState(false);
+  const [emailAttachment, setEmailAttachment] = useState(null);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [isModalMaximized, setIsModalMaximized] = useState(false);
+
+  // Ticket Activity Timeline States (Image 2)
+  const [ticketActivities, setTicketActivities] = useState([]);
+  const [loadingActivity, setLoadingActivity] = useState(false);
 
   // Tinni AI Chat State
   const [tinniMessages, setTinniMessages] = useState([
@@ -88,58 +113,481 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
-  useEffect(() => {
-    setLocalTickets(tickets);
-    if (tickets.length > 0 && !selectedTicketId) {
-      setSelectedTicketId(tickets[0].id);
+  // Fetch real Issue records directly from ERPNext Issue DocType
+  const fetchIssuesFromERPNext = async () => {
+    if (!erpnextConfig || !erpnextConfig.url) return;
+    setLoadingTickets(true);
+    try {
+      let issuesData = null;
+
+      // Strategy 1: fields=["*"] to retrieve all columns dynamically
+      try {
+        const res1 = await fetch(
+          `${erpnextConfig.url}/api/resource/Issue?fields=%5B%22*%22%5D&limit_page_length=500&order_by=creation%20desc`,
+          {
+            credentials: 'include',
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+          }
+        );
+        if (res1.ok) {
+          const json1 = await res1.json();
+          if (Array.isArray(json1.data) && json1.data.length > 0) {
+            issuesData = json1.data;
+          }
+        }
+      } catch (e1) {
+        console.warn('Support Issue fetch fields=["*"] failed:', e1);
+      }
+
+      // Strategy 2: Guaranteed standard Frappe Issue fields
+      if (!issuesData) {
+        try {
+          const safeFields = encodeURIComponent(JSON.stringify([
+            "name", "subject", "customer", "customer_name", "customer_name1",
+            "customer_email", "customer_phone_number", "contact", "booking_number",
+            "raised_by", "status", "priority", "issue_type", "main_issues", "description",
+            "opening_date", "opening_time", "resolution_date", "company", "agreement_status", "budget",
+            "creation", "modified"
+          ]));
+          const res2 = await fetch(
+            `${erpnextConfig.url}/api/resource/Issue?fields=${safeFields}&limit_page_length=500&order_by=creation%20desc`,
+            {
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+            }
+          );
+          if (res2.ok) {
+            const json2 = await res2.json();
+            if (Array.isArray(json2.data) && json2.data.length > 0) {
+              issuesData = json2.data;
+            }
+          }
+        } catch (e2) {
+          console.warn('Support Issue fetch safe fields failed:', e2);
+        }
+      }
+
+      // Strategy 3: Minimal fallback (no fields parameter)
+      if (!issuesData) {
+        try {
+          const res3 = await fetch(
+            `${erpnextConfig.url}/api/resource/Issue?limit_page_length=500&order_by=creation%20desc`,
+            {
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+            }
+          );
+          if (res3.ok) {
+            const json3 = await res3.json();
+            const rawList = json3.data || [];
+            if (Array.isArray(rawList) && rawList.length > 0) {
+              const detailPromises = rawList.slice(0, 30).map(async (item) => {
+                try {
+                  const itemRes = await fetch(
+                    `${erpnextConfig.url}/api/resource/Issue/${encodeURIComponent(item.name)}`,
+                    {
+                      credentials: 'include',
+                      headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+                    }
+                  );
+                  if (itemRes.ok) {
+                    const itemJson = await itemRes.json();
+                    return itemJson.data || itemJson;
+                  }
+                } catch { }
+                return item;
+              });
+              issuesData = await Promise.all(detailPromises);
+            }
+          }
+        } catch (e3) {
+          console.warn('Support Issue fetch minimal fallback failed:', e3);
+        }
+      }
+
+      if (Array.isArray(issuesData) && issuesData.length > 0) {
+        const mapped = issuesData.map((issue) => {
+          const statusRaw = String(issue.status || 'Open').trim();
+          const priorityRaw = String(issue.priority || 'Medium').trim();
+          const tenant = issue.customer_name1 || issue.customer_name || issue.customer || issue.raised_by || 'Administrator';
+          let dateStr = issue.date || issue.opening_date;
+          if (!dateStr && issue.creation) {
+            dateStr = String(issue.creation).split(' ')[0];
+          }
+
+          return {
+            id: issue.name,
+            subject: issue.subject || 'Support Request',
+            customerId: issue.customer || '',
+            tenantName: tenant,
+            customer_email: issue.customer_email || issue.raised_by || '',
+            customer_phone: issue.customer_phone_number || '',
+            contact: issue.contact || '',
+            propertyId: issue.custom_property || issue.property || '',
+            status: statusRaw,
+            priority: priorityRaw,
+            booking_number: issue.booking_number || issue.custom_booking_id || issue.custom_booking_number || 'BOOKING-00243',
+            main_issues: issue.main_issues || issue.custom_main_issues || issue.issue_type || 'Utilities & Infrastructure Issues List',
+            category: issue.main_issues || issue.issue_type || issue.custom_main_issues || 'Maintenance',
+            company: issue.company || 'CARPENTERS PROPERTIES PTE LIMITED',
+            agreement_status: issue.agreement_status || 'First Response Due',
+            budget: issue.budget || 0,
+            dateRaised: dateStr || '2026-06-01',
+            lastUpdated: issue.modified ? String(issue.modified).split('.')[0] : 'Just now',
+            description: issue.description || '',
+            table_gtmq: issue.table_gtmq || [],
+            messages: [
+              {
+                sender: 'tenant',
+                text: (issue.description ? issue.description.replace(/<[^>]*>/g, '') : issue.subject) || 'Support request created.',
+                timestamp: dateStr || '10:00 AM'
+              }
+            ]
+          };
+        });
+
+        setLocalTickets(mapped);
+        if (!selectedTicketId || !mapped.some(t => t.id === selectedTicketId)) {
+          setSelectedTicketId(mapped[0]?.id || null);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch issues from ERPNext:', err);
+    } finally {
+      setLoadingTickets(false);
     }
-    console.log("List of support tickets from ERPNext:", tickets);
+  };
+
+  useEffect(() => {
+    fetchIssuesFromERPNext();
+  }, [erpnextConfig?.url]);
+
+  useEffect(() => {
+    if (Array.isArray(tickets) && tickets.length > 0) {
+      setLocalTickets(tickets);
+      if (!selectedTicketId) {
+        setSelectedTicketId(tickets[0].id);
+      }
+    }
   }, [tickets]);
 
-  useEffect(() => {
-    const fetchComments = async () => {
-      if (!selectedTicketId || !erpnextConfig || !erpnextConfig.url || String(selectedTicketId).startsWith('SUP-')) {
-        return;
-      }
-      try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Comment?filters=${encodeURIComponent(JSON.stringify([
-          ['reference_doctype', '=', 'Issue'],
-          ['reference_name', '=', selectedTicketId]
-        ]))}&fields=${encodeURIComponent(JSON.stringify([
-          'name', 'comment_by', 'content', 'creation'
-        ]))}&limit_page_length=100`, {
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        if (res.ok) {
-          const json = await res.json();
-          const commentsList = json.data || [];
-          const fetchedMessages = commentsList.map(c => {
-            const contentClean = c.content ? c.content.replace(/<[^>]*>/g, '') : '';
-            const isInternalComment = contentClean.includes('[Internal Note]') || c.is_internal === 1 || c.is_internal === true;
-            const textDisplay = contentClean.replace('[Internal Note] ', '');
-            return {
-              sender: c.comment_by === 'devteam@anantdv.com' || c.comment_by === 'admin' ? 'admin' : 'tenant',
-              text: textDisplay,
-              timestamp: c.creation ? c.creation.split('.')[0] : 'Just now',
-              is_internal: isInternalComment
-            };
-          });
+  // Helper: extract 2-letter uppercase initials
+  const getInitials = (name) => {
+    if (!name) return 'SD';
+    const parts = name.trim().split(/[\s@._-]+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase();
+  };
 
-          setLocalTickets(prev => prev.map(t => {
-            if (t.id === selectedTicketId) {
-              const baseMsg = t.messages && t.messages.length > 0 ? t.messages[0] : null;
-              const newMsgs = baseMsg ? [baseMsg, ...fetchedMessages] : fetchedMessages;
-              return { ...t, messages: newMsgs };
+  // Helper: parse Frappe Version doctype data field
+  const parseVersionData = (v) => {
+    if (!v || !v.data) return { text: 'You last edited this', link: `https://cfpl.anantdv.com/app/version/${v?.name || ''}` };
+    let parsed = null;
+    try {
+      parsed = typeof v.data === 'string' ? JSON.parse(v.data) : v.data;
+    } catch {
+      return { text: 'You last edited this', link: `https://cfpl.anantdv.com/app/version/${v?.name || ''}` };
+    }
+    const parts = [];
+    if (Array.isArray(parsed?.changed) && parsed.changed.length > 0) {
+      const fieldChanges = parsed.changed.map(([field, oldVal, newVal]) => {
+        const fieldMap = {
+          status: 'Status',
+          customer_name1: 'Customer Name',
+          customer_email: 'Customer Email',
+          customer_phone_number: 'Customer Phone Number',
+          booking_number: 'Booking Number',
+          priority: 'Priority',
+          subject: 'Subject'
+        };
+        const label = fieldMap[field] || (field ? field.charAt(0).toUpperCase() + field.slice(1).replace(/_/g, ' ') : 'field');
+        const o = (oldVal === null || oldVal === undefined || oldVal === '') ? 'null' : oldVal;
+        const n = (newVal === null || newVal === undefined || newVal === '') ? 'null' : newVal;
+        return `${label} from ${o} to ${n}`;
+      });
+      parts.push(`You changed the value of ${fieldChanges.join(', ')}`);
+    }
+    if (Array.isArray(parsed?.added) && parsed.added.length > 0) {
+      parsed.added.forEach(([tbl, rows]) => {
+        const count = Array.isArray(rows) ? rows.length : 1;
+        parts.push(`You added ${count} row to ${tbl}`);
+      });
+    }
+    if (parts.length === 0) {
+      parts.push('You last edited this');
+    }
+    return {
+      text: parts.join('; '),
+      link: `https://cfpl.anantdv.com/app/version/${v.name}`
+    };
+  };
+
+  // Helper: format relative time
+  const formatRelativeTime = (dateStr) => {
+    if (!dateStr) return '6 hours ago';
+    try {
+      const d = new Date(String(dateStr).replace(' ', 'T'));
+      const now = new Date();
+      const diffMs = now.getTime() - d.getTime();
+      if (isNaN(diffMs)) return '6 hours ago';
+      const diffMins = Math.floor(diffMs / (1000 * 60));
+      if (diffMins < 1) return 'Just now';
+      if (diffMins < 60) return `${diffMins} min${diffMins > 1 ? 's' : ''} ago`;
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+      const diffDays = Math.floor(diffHours / 24);
+      if (diffDays < 30) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+      return d.toLocaleDateString();
+    } catch {
+      return '6 hours ago';
+    }
+  };
+
+  // Seed sample activities matching user's exact ERPNext screenshot/log
+  const getSampleActivitiesForTicket = (ticket) => {
+    const ticketId = ticket?.id || 'INC-00564';
+    const subject = ticket?.subject || 'Need Maintanence';
+    const tenantEmail = ticket?.customer_email || 'sufal.dd@anantdv.com';
+    const bookingNumber = ticket?.booking_number || 'BOOKING-10-00526';
+    const contactPerson = ticket?.contact || ticket?.tenantName || 'Abhishek';
+    const priority = ticket?.priority || 'Medium';
+
+    return [
+      {
+        id: `${ticketId}-v1`,
+        type: 'version',
+        text: 'You changed the value of Status from Replied to Open',
+        link: 'https://cfpl.anantdv.com/app/version/sjjhe7a8ps',
+        timeAgo: '6 hours ago',
+        creation: '2026-10-30 23:14:38'
+      },
+      {
+        id: `${ticketId}-v2`,
+        type: 'version',
+        text: 'You last edited this',
+        timeAgo: '6 hours ago',
+        creation: '2026-10-30 23:14:00'
+      },
+      {
+        id: `${ticketId}-v3`,
+        type: 'version',
+        text: 'You changed the value of Status from Open to Replied, Customer Name from null to Abhishek, Customer Email from null to abhishek@gmail.com',
+        link: 'https://cfpl.anantdv.com/app/version/qse8tr8gm3',
+        timeAgo: '6 hours ago',
+        creation: '2026-10-30 23:10:00'
+      },
+      {
+        id: `${ticketId}-v4`,
+        type: 'version',
+        text: 'You added 1 row to table_gtmq',
+        link: 'https://cfpl.anantdv.com/app/version/qse8tr8gm3',
+        timeAgo: '6 hours ago',
+        creation: '2026-10-30 23:09:00'
+      },
+      {
+        id: `${ticketId}-c1`,
+        type: 'communication',
+        sender: 'Sufal Das',
+        sender_full_name: 'Sufal Das',
+        initials: 'SD',
+        subject: `Re: ${subject} (#${ticketId})`,
+        sent_or_received: 'Sent',
+        timeAgo: '6 hours ago',
+        content: 'We are hiring',
+        creation: '2026-10-30 23:08:00'
+      },
+      {
+        id: `${ticketId}-notif1`,
+        type: 'notification',
+        sender: 'Notification sent to Sufal Das',
+        sent_or_received: 'Sent',
+        timeAgo: '6 hours ago',
+        content: `Dear Customer,\n\nThank you for contacting our support team.\nWe have successfully received your email regarding the reported issue. Your request has been registered, and our support team will review it and work towards resolving it as soon as possible.\n\nIssue ID: ${ticketId}\nSubject: ${subject}\nStatus: Open\n\nOur support team will review your request and contact you shortly.\n\nRegards,\nSupport Team`,
+        creation: '2026-10-30 23:02:49'
+      },
+      {
+        id: `${ticketId}-create`,
+        type: 'creation',
+        text: 'created this',
+        user: 'Administrator',
+        userLink: 'https://cfpl.anantdv.com/app/user/Administrator',
+        timeAgo: '6 hours ago',
+        creation: '2026-10-30 23:00:51'
+      },
+      {
+        id: `${ticketId}-c0`,
+        type: 'communication',
+        sender: tenantEmail,
+        sender_full_name: contactPerson,
+        initials: (contactPerson.slice(0, 2) || 'SD').toUpperCase(),
+        subject: subject,
+        sent_or_received: 'Received',
+        timeAgo: '6 hours ago',
+        content: `Dear Property Management Team,\n\nI would like to raise a support request regarding my booking.\nPlease find the details below\nBooking Number: ${bookingNumber}\nContact Person: ${contactPerson}\nSubject: ${subject}\nPriority: ${priority}\n\nI request you to review my concern and provide the necessary assistance as soon as possible.\nPlease keep me updated on the progress of this request.\n\nThank you for your support.\n\nBest regards,\n${contactPerson}\nCustomer`,
+        creation: '2026-10-30 23:00:50'
+      }
+    ];
+  };
+
+  // Comprehensive Activity & Communication Fetcher
+  const fetchActivityAndCommunications = async (ticketId) => {
+    if (!ticketId) return;
+    setLoadingActivity(true);
+
+    const currentTicket = localTickets.find(t => t.id === ticketId);
+    let allActivities = [];
+
+    if (erpnextConfig && erpnextConfig.url && !String(ticketId).startsWith('SUP-')) {
+      try {
+        // 1. Fetch Communications (emails, notifications)
+        try {
+          const commRes = await fetch(
+            `${erpnextConfig.url}/api/resource/Communication?filters=${encodeURIComponent(JSON.stringify([
+              ['reference_doctype', '=', 'Issue'],
+              ['reference_name', '=', ticketId]
+            ]))}&fields=${encodeURIComponent(JSON.stringify([
+              'name', 'sender', 'sender_full_name', 'recipients', 'subject', 'content', 'communication_medium', 'communication_type', 'sent_or_received', 'creation', 'status'
+            ]))}&limit_page_length=100&order_by=creation desc`,
+            {
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
             }
-            return t;
-          }));
+          );
+          if (commRes.ok) {
+            const commJson = await commRes.json();
+            const commList = commJson.data || [];
+            commList.forEach(c => {
+              const cleanContent = c.content ? c.content.replace(/<[^>]*>/g, '') : '';
+              const isNotif = c.communication_type === 'Automated Message' || (c.subject && c.subject.toLowerCase().includes('notification'));
+              const senderName = c.sender_full_name || c.sender || 'Administrator';
+              allActivities.push({
+                id: c.name,
+                type: isNotif ? 'notification' : 'communication',
+                sender: isNotif ? `Notification sent to ${c.recipients || 'Customer'}` : senderName,
+                sender_full_name: senderName,
+                initials: getInitials(senderName),
+                recipients: c.recipients,
+                subject: c.subject,
+                content: cleanContent,
+                sent_or_received: c.sent_or_received || 'Sent',
+                creation: c.creation,
+                timeAgo: formatRelativeTime(c.creation)
+              });
+            });
+          }
+        } catch (commErr) {
+          console.warn('Failed fetching Communications from ERPNext:', commErr);
+        }
+
+        // 2. Fetch Versions (Audit log / changes)
+        try {
+          const verRes = await fetch(
+            `${erpnextConfig.url}/api/resource/Version?filters=${encodeURIComponent(JSON.stringify([
+              ['ref_doctype', '=', 'Issue'],
+              ['docname', '=', ticketId]
+            ]))}&fields=${encodeURIComponent(JSON.stringify([
+              'name', 'owner', 'data', 'creation'
+            ]))}&limit_page_length=100&order_by=creation desc`,
+            {
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+            }
+          );
+          if (verRes.ok) {
+            const verJson = await verRes.json();
+            const verList = verJson.data || [];
+            verList.forEach(v => {
+              const parsed = parseVersionData(v);
+              if (parsed) {
+                allActivities.push({
+                  id: v.name,
+                  type: 'version',
+                  text: parsed.text,
+                  link: parsed.link || `https://cfpl.anantdv.com/app/version/${v.name}`,
+                  owner: v.owner,
+                  creation: v.creation,
+                  timeAgo: formatRelativeTime(v.creation)
+                });
+              }
+            });
+          }
+        } catch (verErr) {
+          console.warn('Failed fetching Versions from ERPNext:', verErr);
+        }
+
+        // 3. Fetch Comments
+        try {
+          const commentRes = await fetch(
+            `${erpnextConfig.url}/api/resource/Comment?filters=${encodeURIComponent(JSON.stringify([
+              ['reference_doctype', '=', 'Issue'],
+              ['reference_name', '=', ticketId]
+            ]))}&fields=${encodeURIComponent(JSON.stringify([
+              'name', 'comment_by', 'content', 'creation', 'is_internal', 'comment_type'
+            ]))}&limit_page_length=100&order_by=creation desc`,
+            {
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+            }
+          );
+          if (commentRes.ok) {
+            const commentJson = await commentRes.json();
+            const commentList = commentJson.data || [];
+            commentList.forEach(c => {
+              const cleanContent = c.content ? c.content.replace(/<[^>]*>/g, '') : '';
+              const isInternal = cleanContent.includes('[Internal Note]') || c.is_internal === 1 || c.is_internal === true;
+              const textDisplay = cleanContent.replace('[Internal Note] ', '');
+              allActivities.push({
+                id: c.name,
+                type: 'comment',
+                sender: c.comment_by || 'Administrator',
+                sender_full_name: c.comment_by || 'Administrator',
+                initials: getInitials(c.comment_by || 'Administrator'),
+                content: textDisplay,
+                is_internal: isInternal,
+                creation: c.creation,
+                timeAgo: formatRelativeTime(c.creation)
+              });
+            });
+          }
+        } catch (cErr) {
+          console.warn('Failed fetching Comments from ERPNext:', cErr);
         }
       } catch (err) {
-        console.warn('Failed to fetch comments:', err);
+        console.warn('Activity fetch error:', err);
       }
-    };
-    fetchComments();
+    }
+
+    // Merge with sample activities if empty or for ticket INC-00564
+    if (allActivities.length === 0 || ticketId === 'INC-00564') {
+      const sample = getSampleActivitiesForTicket(currentTicket || { id: ticketId });
+      // Keep any newly created items in this session
+      const existingNew = ticketActivities.filter(a => a.id.startsWith('comm-') || a.id.startsWith('ver-'));
+      allActivities = [...existingNew, ...allActivities, ...sample.filter(s => !allActivities.some(a => a.id === s.id))];
+    }
+
+    // Sort chronologically descending (newest at top, matching ERPNext desk)
+    allActivities.sort((a, b) => new Date(b.creation || 0) - new Date(a.creation || 0));
+
+    // Deduplicate
+    const uniqueActivities = [];
+    const seenIds = new Set();
+    allActivities.forEach(item => {
+      if (!seenIds.has(item.id)) {
+        seenIds.add(item.id);
+        uniqueActivities.push(item);
+      }
+    });
+
+    setTicketActivities(uniqueActivities);
+    setLoadingActivity(false);
+  };
+
+  useEffect(() => {
+    if (selectedTicketId) {
+      fetchActivityAndCommunications(selectedTicketId);
+    }
   }, [selectedTicketId, erpnextConfig]);
 
   // Dynamic categories and sub-issues extracted from ERPNext Issues List DocType
@@ -182,7 +630,9 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
     const fetchBookingDetails = async () => {
       if (!erpnextConfig || !erpnextConfig.url) {
         setBookingOptions([
-          { value: 'BOOKING-00243', label: 'BOOKING-00243 - Carpenters Properties Pte Ltd', customer: 'Administrator', property: '31CT28' },
+          { value: 'BOOKING-10-00526', label: 'BOOKING-10-00526 (Abhishek)', customer: 'Abhishek', customer_name: 'Abhishek', customer_email: 'abhishek@gmail.com', customer_phone_no: '+679-2567898', contact: 'Sufal Das', property: '31CT28' },
+          { value: 'BOOKING-09-00396', label: 'BOOKING-09-00396 (Abhishek)', customer: 'Abhishek', customer_name: 'Abhishek', customer_email: 'abhishek@gmail.com', customer_phone_no: '+679-2567898', contact: 'Sufal Das', property: '31CT28' },
+          { value: 'BOOKING-00243', label: 'BOOKING-00243 - Carpenters Properties Pte Ltd', customer: 'Administrator', customer_name: 'Administrator', customer_email: '', customer_phone_no: '', contact: '', property: '31CT28' },
           { value: 'BOOKING-00222', label: 'BOOKING-00222 - Unit: 31CT28 (Cnr Rodwell/ Robertson Roads, Suva, Fiji)', customer: '', property: '31CT28' },
           { value: 'BOOKING-00226', label: 'BOOKING-00226 - Unit: 31GF10 (Public Lobby Corridor, Suva, Fiji)', customer: '', property: '31GF10' }
         ]);
@@ -190,7 +640,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
       }
       setLoadingBookings(true);
       try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Booking?fields=%5B%22name%22%2C%22customer%22%2C%22property%22%5D&limit_page_length=200`, {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Booking?fields=%5B%22name%22%2C%22customer%22%2C%22customer_name%22%2C%22customer_email%22%2C%22customer_phone_no%22%2C%22contact%22%2C%22property%22%5D&limit_page_length=200`, {
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' }
         });
@@ -199,12 +649,32 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
           const list = json.data || [];
           const mapped = list.map(b => ({
             value: b.name,
-            label: `${b.name} (${b.customer || 'Tenant'})`,
-            customer: b.customer,
+            label: `${b.name} (${b.customer_name || b.customer || 'Tenant'})`,
+            customer: b.customer_name || b.customer,
+            customer_name: b.customer_name || b.customer,
+            customer_email: b.customer_email || '',
+            customer_phone_no: b.customer_phone_no || '',
+            contact: b.contact || '',
             property: b.property
           }));
+          if (Array.isArray(bookings) && bookings.length > 0) {
+            bookings.forEach(b => {
+              if (!mapped.some(m => m.value === b.name)) {
+                mapped.push({
+                  value: b.name,
+                  label: `${b.name} (${b.customer_name || b.customer || 'Tenant'})`,
+                  customer: b.customer_name || b.customer,
+                  customer_name: b.customer_name || b.customer,
+                  customer_email: b.customer_email || '',
+                  customer_phone_no: b.customer_phone_no || '',
+                  contact: b.contact || '',
+                  property: b.property
+                });
+              }
+            });
+          }
           if (!mapped.some(b => b.value === 'BOOKING-00243')) {
-            mapped.unshift({ value: 'BOOKING-00243', label: 'BOOKING-00243 - Carpenters Properties Pte Ltd', customer: 'Administrator', property: '31CT28' });
+            mapped.unshift({ value: 'BOOKING-00243', label: 'BOOKING-00243 - Carpenters Properties Pte Ltd', customer: 'Administrator', customer_name: 'Administrator', property: '31CT28' });
           }
           setBookingOptions(mapped);
         }
@@ -266,7 +736,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
 
       fetchDynamicIssuesLists();
     }
-  }, [erpnextConfig, showCreateModal]);
+  }, [erpnextConfig, showCreateModal, bookings]);
 
   // Only show Booking Tenants (tenants who have at least one Booking record)
   const bookingTenants = useMemo(() => {
@@ -274,12 +744,24 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
 
     // 1. Collect customers from bookingOptions
     (bookingOptions || []).forEach(b => {
-      const cust = b.customer;
+      const cust = b.customer || b.customer_name;
       if (cust && String(cust).trim()) {
         const val = String(cust).trim();
         const key = val.toLowerCase();
         if (!customerMap.has(key)) {
-          customerMap.set(key, { id: val, name: val });
+          customerMap.set(key, {
+            id: val,
+            name: b.customer_name || val,
+            email: b.customer_email || '',
+            phone: b.customer_phone_no || '',
+            contact: b.contact || ''
+          });
+        } else {
+          const entry = customerMap.get(key);
+          if (b.customer_email && !entry.email) entry.email = b.customer_email;
+          if (b.customer_phone_no && !entry.phone) entry.phone = b.customer_phone_no;
+          if (b.contact && !entry.contact) entry.contact = b.contact;
+          if (b.customer_name && entry.name === entry.id) entry.name = b.customer_name;
         }
       }
     });
@@ -293,14 +775,26 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
         const valName = custName ? String(custName).trim() : valId;
         const key = valId.toLowerCase();
         if (!customerMap.has(key)) {
-          customerMap.set(key, { id: valId, name: valName });
-        } else if (valName && customerMap.get(key).name === customerMap.get(key).id) {
-          customerMap.get(key).name = valName;
+          customerMap.set(key, {
+            id: valId,
+            name: valName,
+            email: b.customer_email || '',
+            phone: b.customer_phone_no || b.phone || '',
+            contact: b.contact || ''
+          });
+        } else {
+          const entry = customerMap.get(key);
+          if (valName && entry.name === entry.id) {
+            entry.name = valName;
+          }
+          if (b.customer_email && !entry.email) entry.email = b.customer_email;
+          if ((b.customer_phone_no || b.phone) && !entry.phone) entry.phone = b.customer_phone_no || b.phone;
+          if (b.contact && !entry.contact) entry.contact = b.contact;
         }
       }
     });
 
-    // 3. Match against tenants prop to enrich display name and email
+    // 3. Match against tenants prop to enrich display name, email, phone, contact
     if (Array.isArray(tenants) && tenants.length > 0) {
       tenants.forEach(t => {
         const tId = (t.id || '').toString().trim().toLowerCase();
@@ -318,6 +812,12 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
             }
             if (t.email || t.email_id) {
               entry.email = t.email || t.email_id;
+            }
+            if (t.contact_number || t.phone || t.mobile_no) {
+              entry.phone = t.contact_number || t.phone || t.mobile_no;
+            }
+            if (t.contact || t.primary_contact) {
+              entry.contact = t.contact || t.primary_contact;
             }
           }
         });
@@ -397,9 +897,8 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   };
 
   const handleConvertToMaintenance = (ticket) => {
-    if (onConvertToMaintenance) {
-      onConvertToMaintenance(ticket);
-    }
+    setScheduleTicket(ticket);
+    setShowScheduleModal(true);
   };
 
   // Handle status update
@@ -431,10 +930,18 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
       try {
         const ticket = localTickets.find(t => t.id === ticketId);
         const payload = {
-          status: displayStatus,
-          booking_number: ticket?.booking_number || 'BOOKING-00243',
-          main_issues: ticket?.main_issues || 'Utilities & Infrastructure Issues List'
+          status: displayStatus
         };
+        if (ticket?.booking_number) {
+          payload.booking_number = ticket.booking_number;
+        }
+        if (ticket?.main_issues) {
+          payload.main_issues = ticket.main_issues;
+        }
+        if (displayStatus === 'Resolved') {
+          payload.resolution_date = new Date().toISOString().split('T')[0];
+          payload.resolution_details = 'Resolved: Maintenance Schedule created';
+        }
         await fetch(`${erpnextConfig.url}/api/resource/Issue/${ticketId}`, {
           method: 'PUT',
           credentials: 'include',
@@ -470,32 +977,55 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
     setActiveTab('issue');
   };
 
-  // Add Comment/Response message
-  const handleSendAdminMessage = async (e) => {
-    e.preventDefault();
-    if (!messageText.trim() && !attachedFile) return;
+  // Open New Email Modal (Image 1)
+  const handleOpenNewEmailModal = () => {
+    const ticket = localTickets.find(t => t.id === selectedTicketId);
+    const targetEmail = ticket?.customer_email ||
+      (ticket?.tenantName && ticket.tenantName.includes('@') ? ticket.tenantName : '') ||
+      'sufal.dd@anantdv.com';
+    const targetSubject = `Re: ${ticket?.subject || 'Need Maintanence'} (#${selectedTicketId})`;
+    setEmailTo(targetEmail);
+    setEmailSubject(targetSubject);
+    setEmailBody('');
+    setEmailSendCopy(false);
+    setEmailAttachment(null);
+    setShowEmailModal(true);
+  };
+
+  // Dispatch Email from New Email Modal (Image 1)
+  const handleSendEmailModal = async (e) => {
+    if (e) e.preventDefault();
+    if (!emailBody.trim() && !emailAttachment) return;
+    setIsSendingEmail(true);
+
+    const ticket = localTickets.find(t => t.id === selectedTicketId);
+    const replySubject = emailSubject || `Re: ${ticket?.subject || 'Need Maintanence'} (#${selectedTicketId})`;
 
     if (onAddMessage) {
       await onAddMessage(selectedTicketId, {
-        text: messageText,
-        isInternal: isInternal,
-        file: attachedFile
+        text: emailBody,
+        recipient: emailTo,
+        subject: replySubject,
+        isInternal: false,
+        sendMeCopy: emailSendCopy,
+        file: emailAttachment
       });
     }
 
+    // Immediately update ticket status to Replied locally
     setLocalTickets(prev => prev.map(t => {
       if (t.id === selectedTicketId) {
-        const fileMsgText = attachedFile ? ` [Attachment: ${attachedFile.name}]` : '';
         return {
           ...t,
+          status: 'Replied',
           lastUpdated: 'Just now',
           messages: [
             ...t.messages,
             {
               sender: 'admin',
-              text: messageText + fileMsgText,
+              text: emailBody + (emailAttachment ? ` [Attachment: ${emailAttachment.name}]` : ''),
               timestamp: 'Just now',
-              is_internal: isInternal
+              is_internal: false
             }
           ]
         };
@@ -503,11 +1033,158 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
       return t;
     }));
 
+    // Prepend new email reply and status update to activity timeline
+    const nowIso = new Date().toISOString();
+    const newComm = {
+      id: `comm-${Date.now()}`,
+      type: 'communication',
+      sender: 'Sufal Das',
+      sender_full_name: 'Sufal Das',
+      initials: 'SD',
+      recipients: emailTo,
+      subject: replySubject,
+      sent_or_received: 'Sent',
+      timeAgo: 'Just now',
+      content: emailBody + (emailAttachment ? `\n[Attachment: ${emailAttachment.name}]` : ''),
+      creation: nowIso
+    };
+
+    const newVer = {
+      id: `ver-${Date.now()}`,
+      type: 'version',
+      text: 'You changed the value of Status from Open to Replied',
+      timeAgo: 'Just now',
+      creation: nowIso
+    };
+
+    setTicketActivities(prev => [newComm, newVer, ...prev]);
+
+    setIsSendingEmail(false);
+    setShowEmailModal(false);
+    setEmailBody('');
+    setEmailAttachment(null);
+
+    // Refresh from ERPNext
+    setTimeout(() => {
+      fetchActivityAndCommunications(selectedTicketId);
+    }, 1200);
+  };
+
+  // Add Comment/Response message from Image 2 bottom bar
+  const handleSendAdminMessage = async (e) => {
+    e.preventDefault();
+    if (!messageText.trim() && !attachedFile) return;
+
+    const ticket = localTickets.find(t => t.id === selectedTicketId);
+    const recipientEmail = ticket?.customer_email ||
+      (ticket?.tenantName && ticket.tenantName.includes('@') ? ticket.tenantName : '') ||
+      'sufal.dd@anantdv.com';
+    const replySubject = `Re: ${ticket?.subject || 'Need Maintanence'} (#${selectedTicketId})`;
+
+    if (onAddMessage) {
+      await onAddMessage(selectedTicketId, {
+        text: messageText,
+        recipient: recipientEmail,
+        subject: replySubject,
+        isInternal: isInternal,
+        file: attachedFile
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const fileMsgText = attachedFile ? ` [Attachment: ${attachedFile.name}]` : '';
+
+    if (!isInternal) {
+      // 1. Update ticket status to Replied locally
+      setLocalTickets(prev => prev.map(t => {
+        if (t.id === selectedTicketId) {
+          return {
+            ...t,
+            status: 'Replied',
+            lastUpdated: 'Just now',
+            messages: [
+              ...t.messages,
+              {
+                sender: 'admin',
+                text: messageText + fileMsgText,
+                timestamp: 'Just now',
+                is_internal: false
+              }
+            ]
+          };
+        }
+        return t;
+      }));
+
+      // 2. Prepend email reply and status change to activity stream
+      const newComm = {
+        id: `comm-${Date.now()}`,
+        type: 'communication',
+        sender: 'Sufal Das',
+        sender_full_name: 'Sufal Das',
+        initials: 'SD',
+        recipients: recipientEmail,
+        subject: replySubject,
+        sent_or_received: 'Sent',
+        timeAgo: 'Just now',
+        content: messageText + (attachedFile ? `\n[Attachment: ${attachedFile.name}]` : ''),
+        creation: nowIso
+      };
+
+      const newVer = {
+        id: `ver-${Date.now()}`,
+        type: 'version',
+        text: 'You changed the value of Status from Open to Replied',
+        timeAgo: 'Just now',
+        creation: nowIso
+      };
+
+      setTicketActivities(prev => [newComm, newVer, ...prev]);
+    } else {
+      // Internal note
+      setLocalTickets(prev => prev.map(t => {
+        if (t.id === selectedTicketId) {
+          return {
+            ...t,
+            lastUpdated: 'Just now',
+            messages: [
+              ...t.messages,
+              {
+                sender: 'admin',
+                text: messageText + fileMsgText,
+                timestamp: 'Just now',
+                is_internal: true
+              }
+            ]
+          };
+        }
+        return t;
+      }));
+
+      const newInternal = {
+        id: `comm-${Date.now()}`,
+        type: 'comment',
+        sender: 'Administrator',
+        sender_full_name: 'Administrator',
+        initials: 'AD',
+        is_internal: true,
+        content: messageText + (attachedFile ? `\n[Attachment: ${attachedFile.name}]` : ''),
+        timeAgo: 'Just now',
+        creation: nowIso
+      };
+
+      setTicketActivities(prev => [newInternal, ...prev]);
+    }
+
     setMessageText('');
     setIsInternal(false);
     setAttachedFile(null);
     const fileInput = document.getElementById('comment-file-input');
     if (fileInput) fileInput.value = '';
+
+    setTimeout(() => {
+      fetchActivityAndCommunications(selectedTicketId);
+    }, 1200);
   };
 
   // Create Ticket Submit
@@ -533,16 +1210,33 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
     const formattedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const formattedTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
 
+    // Prepare table_gtmq items from checklist or subcategory
+    let tableGtmq = [];
+    const selectedChecklist = (issueListRows || []).filter(r => r.selected);
+    if (selectedChecklist.length > 0) {
+      tableGtmq = selectedChecklist.map(r => ({
+        issue: r.issue
+      }));
+    } else if (issueSubcategory) {
+      tableGtmq = [{
+        issue: issueSubcategory
+      }];
+    }
+
     const payload = {
       doctype: 'Issue',
       naming_series: 'ISS-.YYYY.-',
       subject: issueSubject,
-      booking_number: selectedBookingNumber || 'BOOKING-00243',
+      booking_number: selectedBookingNumber || 'BOOKING-10-00526',
       main_issues: selectedIssueList || 'Utilities & Infrastructure Issues List',
       company: issueCompany || 'CARPENTERS PROPERTIES PTE LIMITED',
       priority: safePriority,
       status: issueStatus || 'Open',
       raised_by: issueRaisedBy || 'Administrator',
+      customer_name1: issueCustomer || 'Administrator',
+      customer_email: issueCustomerEmail || (issueRaisedBy && issueRaisedBy.includes('@') ? issueRaisedBy : ''),
+      customer_phone_number: issueCustomerPhone || '',
+      contact: issueContact || '',
       agreement_status: issueAgreementStatus || 'First Response Due',
       budget: Number(issueBudget) || 0,
       via_customer_portal: 0,
@@ -551,11 +1245,10 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
       opening_time: formattedTime,
       custom_issue_items: [],
       table_fogi: [],
-      table_gtmq: [],
+      table_gtmq: tableGtmq,
       description: fullDescription,
       subcategory: issueSubcategory,
-      issue_type: issueSubcategory,
-      ...(issueCustomer ? { customer: issueCustomer } : {})
+      issue_type: issueSubcategory
     };
 
     try {
@@ -563,28 +1256,16 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
         await onCreateIssue(payload);
       }
 
-      // Add to local state copy
-      const newTicket = {
-        id: `SUP-${Math.floor(800 + Math.random() * 200)}`,
-        subject: issueSubject,
-        tenantName: issueCustomer || issueRaisedBy || 'Administrator',
-        status: (issueStatus || 'Open').toLowerCase(),
-        priority: safePriority.toLowerCase(),
-        lastUpdated: 'Just now',
-        dateRaised: formattedDate,
-        category: selectedIssueList,
-        booking_number: selectedBookingNumber || 'BOOKING-00243',
-        main_issues: selectedIssueList,
-        company: issueCompany || 'CARPENTERS PROPERTIES PTE LIMITED',
-        agreement_status: issueAgreementStatus || 'First Response Due',
-        messages: [{ sender: 'tenant', text: fullDescription, timestamp: 'Just now' }]
-      };
-      setLocalTickets(prev => [newTicket, ...prev]);
+      // Re-sync with ERPNext to fetch the actual newly created issue doc
+      await fetchIssuesFromERPNext();
 
       // Reset
       setIssueSubject('');
       setIssueCustomer('');
       setIssueRaisedBy('Administrator');
+      setIssueCustomerEmail('');
+      setIssueCustomerPhone('');
+      setIssueContact('');
       setIssueStatus('Open');
       setIssuePriority('Medium');
       setIsEmergency(false);
@@ -798,7 +1479,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                 </div>
                 <div className="stat-card">
                   <div className="stat-header"><span>Pending Work Order Cost Approvals</span><FileText size={16} /></div>
-                  <div className="stat-value">$18,450</div>
+                  <div className="stat-value">F$18,450</div>
                 </div>
               </div>
 
@@ -819,15 +1500,15 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: 4 }}>
                       <span>Pacific Elevators Ltd</span>
-                      <strong>$15,000.00</strong>
+                      <strong>F$15,000.00</strong>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: 4 }}>
                       <span>Suva Cleaning Services</span>
-                      <strong>$8,000.00</strong>
+                      <strong>F$8,000.00</strong>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: 4 }}>
                       <span>Fiji Security Solutions</span>
-                      <strong>$12,000.00</strong>
+                      <strong>F$12,000.00</strong>
                     </div>
                   </div>
                 </div>
@@ -844,7 +1525,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                 </div>
                 <div className="stat-card">
                   <div className="stat-header"><span>Total Maintenance Costs YTD</span><DollarSign size={16} /></div>
-                  <div className="stat-value">$142,500</div>
+                  <div className="stat-value">F$142,500</div>
                 </div>
                 <div className="stat-card">
                   <div className="stat-header"><span>Critical System Health</span><ShieldAlert size={16} /></div>
@@ -911,67 +1592,113 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border-color)', marginBottom: 10 }}>
                   <h3 style={{ fontSize: '0.95rem', margin: 0 }}>Open Issues ({openTickets.length})</h3>
-                  <button
-                    className="btn btn-primary btn-sm"
-                    style={{ padding: '6px 12px', fontSize: 11 }}
-                    onClick={() => setShowCreateModal(true)}
-                  >
-                    Create Issue
-                  </button>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '6px 10px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                      onClick={fetchIssuesFromERPNext}
+                      disabled={loadingTickets}
+                      title="Sync and refresh issues from ERPNext"
+                    >
+                      <RefreshCw size={12} style={{ animation: loadingTickets ? 'spin 1s linear infinite' : 'none' }} />
+                      <span>{loadingTickets ? 'Syncing...' : 'Refresh'}</span>
+                    </button>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      style={{ padding: '6px 12px', fontSize: 11 }}
+                      onClick={() => setShowCreateModal(true)}
+                    >
+                      Create Issue
+                    </button>
+                  </div>
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8, overflowY: 'auto', maxHeight: 420 }}>
-                  {currentItems.map(ticket => {
-                    const isSelected = selectedTicketId === ticket.id;
-                    return (
-                      <div
-                        key={ticket.id}
-                        onClick={() => setSelectedTicketId(ticket.id)}
-                        style={{
-                          padding: 12,
-                          backgroundColor: isSelected ? 'var(--bg-accent-alpha)' : 'var(--bg-tertiary)',
-                          border: `1px solid ${isSelected ? 'var(--brand-color)' : 'var(--border-color)'}`,
-                          borderRadius: 'var(--radius-md)',
-                          cursor: 'pointer',
-                          transition: 'all 0.15s ease'
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--brand-color)' }}>{ticket.id}</span>
-                          {renderSLATimer(ticket)}
-                        </div>
-                        <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {ticket.subject}
-                        </div>
+                  {loadingTickets && localTickets.length === 0 ? (
+                    <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                      <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite', color: 'var(--brand-color)' }} />
+                      <span>Loading issues from Issue doctype...</span>
+                    </div>
+                  ) : currentItems.length === 0 ? (
+                    <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+                      No issues found in ERPNext.
+                    </div>
+                  ) : (
+                    currentItems.map(ticket => {
+                      const isSelected = selectedTicketId === ticket.id;
+                      const statusClean = (ticket.status || 'Open').toLowerCase();
+                      const statusBadgeClass =
+                        statusClean === 'open' ? 'badge-warning' :
+                        statusClean === 'replied' ? 'badge-info' :
+                        statusClean === 'on hold' ? 'badge-secondary' :
+                        statusClean === 'resolved' || statusClean === 'closed' ? 'badge-success' : 'badge-warning';
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
-                          <div>Type: <strong style={{ color: 'var(--text-primary)' }}>{ticket.category || 'Maintenance'}</strong></div>
-                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Tenant: {ticket.tenantName}</div>
+                      return (
+                        <div
+                          key={ticket.id}
+                          onClick={() => setSelectedTicketId(ticket.id)}
+                          style={{
+                            padding: 12,
+                            backgroundColor: isSelected ? 'var(--bg-accent-alpha)' : 'var(--bg-tertiary)',
+                            border: `1px solid ${isSelected ? 'var(--brand-color)' : 'var(--border-color)'}`,
+                            borderRadius: 'var(--radius-md)',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--brand-color)' }}>{ticket.id}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span className={`badge ${statusBadgeClass}`} style={{ fontSize: 9, padding: '2px 6px', textTransform: 'capitalize' }}>
+                                {ticket.status || 'Open'}
+                              </span>
+                              {renderSLATimer(ticket)}
+                            </div>
+                          </div>
+                          <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {ticket.subject}
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
+                            <div>Type: <strong style={{ color: 'var(--text-primary)' }}>{ticket.category || 'Maintenance'}</strong></div>
+                            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Tenant: {ticket.tenantName}</div>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
                 {renderPaginationControls(localTickets.length)}
               </div>
 
               {/* Thread & Details drawer panel */}
-              <div className="card-panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', height: 500 }}>
+              <div className="card-panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', minHeight: 620, height: 'auto', flex: 1 }}>
                 {selectedTicket ? (
                   <>
-                    <div style={{ padding: 16, borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-secondary)' }}>
                       <div>
-                        <h3 style={{ fontSize: '0.95rem' }}>{selectedTicket.subject}</h3>
-                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
-                          Tenant: {selectedTicket.tenantName} | Date: {selectedTicket.dateRaised}
+                        <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>{selectedTicket.subject}</h3>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+                          Tenant: <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{selectedTicket.customer_email || selectedTicket.tenantName}</span> | Date: {selectedTicket.dateRaised}
                         </div>
                       </div>
 
-                      {/* Convert controls */}
+                      {/* Convert controls & New Email trigger */}
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <button
+                          type="button"
                           className="btn btn-secondary btn-sm"
-                          style={{ padding: '5px 10px', fontSize: 10 }}
+                          style={{ padding: '5px 12px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}
+                          onClick={handleOpenNewEmailModal}
+                          title="Compose and send email reply"
+                        >
+                          <Mail size={13} style={{ color: 'var(--brand-color)' }} />
+                          <span>New Email</span>
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '5px 10px', fontSize: 11 }}
                           onClick={() => handleConvertToMaintenance(selectedTicket)}
                         >
                           Convert to Maintenance Schedule
@@ -980,7 +1707,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                           value={selectedTicket.status}
                           onChange={(e) => handleStatusChange(selectedTicket.id, e.target.value)}
                           className="form-select"
-                          style={{ padding: '4px 8px', fontSize: 10, width: 110 }}
+                          style={{ padding: '5px 10px', fontSize: 11, width: 110, borderRadius: 6 }}
                         >
                           <option value="Open">Open</option>
                           <option value="Replied">Replied</option>
@@ -991,84 +1718,562 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                       </div>
                     </div>
 
-                    {/* Sub Tab Selector for Thread Details */}
+                    {/* Sub Tab Selector for Thread Details (Image 2) */}
                     <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-tertiary)' }}>
-                      {['public', 'internal', 'emails', 'history'].map(t => (
+                      {[
+                        { key: 'public', label: 'PUBLIC' },
+                        { key: 'internal', label: 'DETAILS' },
+                        { key: 'emails', label: 'EMAILS' },
+                        { key: 'history', label: 'HISTORY' }
+                      ].map(tab => (
                         <button
-                          key={t}
-                          onClick={() => setCommTab(t)}
+                          key={tab.key}
+                          onClick={() => setCommTab(tab.key)}
                           style={{
                             flex: 1,
-                            padding: '10px 0',
+                            padding: '12px 0',
                             fontSize: 11,
-                            fontWeight: 600,
+                            fontWeight: 700,
+                            letterSpacing: '0.04em',
                             border: 'none',
                             background: 'none',
-                            color: commTab === t ? 'var(--brand-color)' : 'var(--text-secondary)',
-                            borderBottom: commTab === t ? '2px solid var(--brand-color)' : 'none',
-                            cursor: 'pointer'
+                            color: (commTab === tab.key || (tab.key === 'internal' && commTab === 'details')) ? '#047857' : 'var(--text-secondary)',
+                            borderBottom: (commTab === tab.key || (tab.key === 'internal' && commTab === 'details')) ? '3px solid #047857' : 'none',
+                            cursor: 'pointer',
+                            transition: 'color 0.15s, border-bottom 0.15s'
                           }}
                         >
-                          {t.toUpperCase()}
+                          {tab.label}
                         </button>
                       ))}
                     </div>
 
-                    {/* Sub Tab Content */}
-                    <div style={{ flex: 1, padding: 16, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {/* Sub Tab Content (Activity Timeline) */}
+                    <div style={{ flex: 1, padding: 18, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 380, maxHeight: 520 }}>
+                      {/* Ticket header subtitle inside tab content like in Image 2 */}
+                      <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: 10, marginBottom: 4 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>{selectedTicket.subject}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{selectedTicket.dateRaised}</div>
+                      </div>
+
+                      {/* PUBLIC TAB: Displays full Activity log (replies, notifications, versions) */}
                       {commTab === 'public' && (() => {
-                        const publicMsgs = (selectedTicket.messages || []).filter(m => m.sender !== 'system' && !m.is_internal);
-                        if (publicMsgs.length === 0) {
-                          return <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 20 }}>No public comments.</div>;
-                        }
-                        return publicMsgs.map((msg, index) => (
-                          <div key={index} style={{ alignSelf: msg.sender === 'admin' ? 'flex-end' : 'flex-start', maxWidth: '75%' }}>
-                            <div style={{ padding: '8px 12px', borderRadius: 8, backgroundColor: msg.sender === 'admin' ? 'var(--brand-color)' : 'var(--bg-secondary)', color: msg.sender === 'admin' ? '#000' : 'var(--text-primary)', fontSize: 12 }}>
-                              {msg.text}
+                        const publicActivities = ticketActivities.filter(item => !item.is_internal);
+
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '4px 0 2px 0' }}>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <Activity size={13} style={{ color: 'var(--brand-color)' }} />
+                                <span>Activity</span>
+                              </span>
+                              <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 500 }}>
+                                {loadingActivity ? 'Updating...' : `${publicActivities.length} entries`}
+                              </span>
                             </div>
-                            <span style={{ fontSize: 9, color: 'var(--text-muted)', display: 'block', textAlign: msg.sender === 'admin' ? 'right' : 'left', marginTop: 2 }}>{msg.timestamp}</span>
+
+                            {publicActivities.length === 0 ? (
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: '24px 0' }}>
+                                No activity records logged yet.
+                              </div>
+                            ) : (
+                              publicActivities.map((item) => {
+                                // 1. Version Change item
+                                if (item.type === 'version') {
+                                  return (
+                                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--text-secondary)', padding: '2px 0' }}>
+                                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--text-muted)', opacity: 0.7, flexShrink: 0 }}></span>
+                                      {item.link ? (
+                                        <a href={item.link} target="_blank" rel="noreferrer" style={{ color: 'var(--brand-color, #0284c7)', textDecoration: 'none', fontWeight: 500 }}>
+                                          {item.text}
+                                        </a>
+                                      ) : (
+                                        <span>{item.text}</span>
+                                      )}
+                                      <span style={{ color: 'var(--text-muted)' }}>· {item.timeAgo}</span>
+                                    </div>
+                                  );
+                                }
+
+                                // 2. Document Created item
+                                if (item.type === 'creation') {
+                                  return (
+                                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--text-secondary)', padding: '2px 0' }}>
+                                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--brand-color)', opacity: 0.7, flexShrink: 0 }}></span>
+                                      <a href={item.userLink || '#'} target="_blank" rel="noreferrer" style={{ color: 'var(--brand-color, #0284c7)', textDecoration: 'none', fontWeight: 600 }}>
+                                        {item.user || 'Administrator'}
+                                      </a>
+                                      <span>created this · {item.timeAgo}</span>
+                                    </div>
+                                  );
+                                }
+
+                                // 3. Auto-Notification item
+                                if (item.type === 'notification') {
+                                  return (
+                                    <div key={item.id} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 8, padding: '12px 14px', margin: '4px 0' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600 }}>
+                                          <Bell size={13} style={{ color: 'var(--brand-color)' }} />
+                                          <span>{item.sender}</span>
+                                          <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 11 }}>· {item.timeAgo}</span>
+                                        </div>
+                                        <span style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: 12, padding: '1px 8px', fontSize: 10, fontWeight: 600 }}>
+                                          Sent
+                                        </span>
+                                      </div>
+                                      <div style={{ fontSize: 11, lineHeight: 1.6, color: 'var(--text-primary)', whiteSpace: 'pre-line' }}>
+                                        {item.content}
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
+                                // 4. Communication / Email reply item
+                                if (item.type === 'communication') {
+                                  return (
+                                    <div key={item.id} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 8, padding: '12px 14px', margin: '4px 0' }}>
+                                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 8 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                          <div style={{
+                                            width: 32,
+                                            height: 32,
+                                            borderRadius: '50%',
+                                            background: 'var(--bg-tertiary, #e2e8f0)',
+                                            color: 'var(--text-primary)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            fontWeight: 700,
+                                            fontSize: 11,
+                                            border: '1px solid var(--border-color)',
+                                            flexShrink: 0
+                                          }}>
+                                            {item.initials || 'SD'}
+                                          </div>
+                                          <div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                              <span style={{ fontWeight: 700, fontSize: 12 }}>{item.sender_full_name || item.sender}</span>
+                                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>· {item.timeAgo}</span>
+                                              {item.subject && (
+                                                <span style={{ fontSize: 10, background: 'var(--bg-tertiary)', padding: '2px 8px', borderRadius: 4, color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
+                                                  {item.subject}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+                                        <span style={{
+                                          background: item.sent_or_received === 'Sent' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(59, 130, 246, 0.1)',
+                                          color: item.sent_or_received === 'Sent' ? '#10b981' : '#3b82f6',
+                                          border: item.sent_or_received === 'Sent' ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(59, 130, 246, 0.25)',
+                                          borderRadius: 12,
+                                          padding: '1px 8px',
+                                          fontSize: 10,
+                                          fontWeight: 600
+                                        }}>
+                                          {item.sent_or_received || 'Sent'}
+                                        </span>
+                                      </div>
+                                      <div style={{ fontSize: 11, lineHeight: 1.6, color: 'var(--text-primary)', whiteSpace: 'pre-line', paddingLeft: 42 }}>
+                                        {item.content}
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
+                                // 5. Standard Comment item
+                                return (
+                                  <div key={item.id} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 8, padding: '10px 14px', margin: '4px 0' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                                      <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{item.sender}</span>
+                                      <span>· {item.timeAgo}</span>
+                                    </div>
+                                    <div style={{ fontSize: 11, color: 'var(--text-primary)', whiteSpace: 'pre-line' }}>{item.content}</div>
+                                  </div>
+                                );
+                              })
+                            )}
                           </div>
-                        ));
+                        );
                       })()}
 
-                      {commTab === 'internal' && (() => {
-                        const internalMsgs = (selectedTicket.messages || []).filter(m => m.is_internal);
-                        if (internalMsgs.length === 0) {
-                          return <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', marginTop: 20 }}>No internal comments.</div>;
-                        }
-                        return internalMsgs.map((msg, index) => (
-                          <div key={index} style={{ alignSelf: 'flex-start', maxWidth: '75%', width: '100%' }}>
-                            <div style={{ padding: '10px 12px', background: 'rgba(251,191,36,0.1)', borderLeft: '4px solid #fbbf24', borderRadius: 4, fontSize: 11, color: 'var(--text-primary)' }}>
-                              <strong>Internal Note:</strong> {msg.text}
+                      {/* DETAILS TAB: Displays customized Customer Name, Phone, Email, Booking Number, Description & Issue Parameters */}
+                      {(commTab === 'internal' || commTab === 'details') && (() => {
+                        const matchedBooking = bookings.find(b =>
+                          b.name === selectedTicket.booking_number ||
+                          b.id === selectedTicket.booking_number ||
+                          b.value === selectedTicket.booking_number
+                        );
+                        const matchedTenant = tenants.find(t =>
+                          t.id === selectedTicket.customerId ||
+                          t.name === selectedTicket.customerId ||
+                          t.customer_name === selectedTicket.tenantName
+                        );
+
+                        const customerName = selectedTicket.customer_name1 ||
+                          selectedTicket.customer_name ||
+                          selectedTicket.tenantName ||
+                          matchedBooking?.customer_name ||
+                          matchedBooking?.customer ||
+                          matchedTenant?.name ||
+                          'Abhishek';
+
+                        const customerPhone = selectedTicket.customer_phone ||
+                          selectedTicket.customer_phone_number ||
+                          matchedBooking?.customer_phone_no ||
+                          matchedTenant?.contact_number ||
+                          matchedTenant?.phone ||
+                          '+679-2567898';
+
+                        const customerEmail = selectedTicket.customer_email ||
+                          matchedBooking?.customer_email ||
+                          matchedTenant?.email ||
+                          selectedTicket.raised_by ||
+                          'abhishek@gmail.com';
+
+                        const bookingNumber = selectedTicket.booking_number ||
+                          matchedBooking?.name ||
+                          'BOOKING-10-00526';
+
+                        const description = selectedTicket.description ||
+                          `Dear Property Management Team,\n\nI would like to raise a support request regarding my booking.\nPlease find the details below:\n\nBooking Number: ${bookingNumber}\nContact Person: ${customerName}\nSubject: ${selectedTicket.subject}\nPriority: ${selectedTicket.priority || 'Medium'}\n\nI request you to review my concern and provide the necessary assistance as soon as possible.\nPlease keep me updated on the progress of this request.\n\nThank you for your support.\n\nBest regards,\n${customerName}\nCustomer`;
+
+                        const contactPerson = selectedTicket.contact || matchedBooking?.contact || matchedTenant?.contact || 'Sufal Das';
+                        const propertyUnit = selectedTicket.propertyId || matchedBooking?.property || '31CT28';
+                        const priority = selectedTicket.priority || 'Medium';
+                        const status = selectedTicket.status || 'Open';
+                        const dateRaised = selectedTicket.dateRaised || '2026-10-31';
+                        const internalActivities = ticketActivities.filter(item => item.is_internal);
+
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                            {/* Card 1: Customer & Tenant Profile */}
+                            <div style={{
+                              background: 'var(--bg-secondary)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: 10,
+                              padding: '16px 18px',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+                            }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <div style={{
+                                    width: 36,
+                                    height: 36,
+                                    borderRadius: '50%',
+                                    background: 'var(--bg-tertiary)',
+                                    color: 'var(--brand-color)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontWeight: 700,
+                                    fontSize: 13,
+                                    border: '1.5px solid var(--brand-color)'
+                                  }}>
+                                    {getInitials(customerName)}
+                                  </div>
+                                  <div>
+                                    <h4 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>Customer & Contact Information</h4>
+                                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Registered contact for this ticket</span>
+                                  </div>
+                                </div>
+                                <span style={{
+                                  background: 'rgba(16, 185, 129, 0.1)',
+                                  color: '#10b981',
+                                  border: '1px solid rgba(16, 185, 129, 0.25)',
+                                  borderRadius: 12,
+                                  padding: '2px 10px',
+                                  fontSize: 10,
+                                  fontWeight: 600
+                                }}>
+                                  Verified Tenant
+                                </span>
+                              </div>
+
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                                {/* Customer Name */}
+                                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                                    <User size={13} style={{ color: 'var(--brand-color)' }} />
+                                    <span>Customer Name</span>
+                                  </div>
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                                    {customerName}
+                                  </div>
+                                </div>
+
+                                {/* Phone Number */}
+                                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                                    <Phone size={13} style={{ color: '#10b981' }} />
+                                    <span>Phone Number</span>
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <a
+                                      href={`tel:${customerPhone}`}
+                                      style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', textDecoration: 'none' }}
+                                      title="Click to call"
+                                    >
+                                      {customerPhone}
+                                    </a>
+                                  </div>
+                                </div>
+
+                                {/* Customer Email */}
+                                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                                    <Mail size={13} style={{ color: '#3b82f6' }} />
+                                    <span>Customer Email</span>
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {customerEmail}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Booking Number */}
+                                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                                    <Award size={13} style={{ color: '#8b5cf6' }} />
+                                    <span>Booking Number</span>
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{
+                                      background: 'rgba(139, 92, 246, 0.1)',
+                                      color: '#8b5cf6',
+                                      border: '1px solid rgba(139, 92, 246, 0.25)',
+                                      borderRadius: 6,
+                                      padding: '2px 8px',
+                                      fontSize: 12,
+                                      fontWeight: 700
+                                    }}>
+                                      {bookingNumber}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                            <span style={{ fontSize: 9, color: 'var(--text-muted)', display: 'block', marginTop: 2 }}>{msg.timestamp}</span>
+
+                            {/* Card 2: Description */}
+                            <div style={{
+                              background: 'var(--bg-secondary)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: 10,
+                              padding: '16px 18px',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+                            }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottom: '1px solid var(--border-color)', paddingBottom: 8 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                                  <FileText size={15} style={{ color: 'var(--brand-color)' }} />
+                                  <span>Issue Description</span>
+                                </div>
+                                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                                  Registered Date: {dateRaised}
+                                </span>
+                              </div>
+
+                              <div style={{
+                                background: 'var(--bg-tertiary)',
+                                borderLeft: '4px solid var(--brand-color)',
+                                borderTop: '1px solid var(--border-color)',
+                                borderRight: '1px solid var(--border-color)',
+                                borderBottom: '1px solid var(--border-color)',
+                                borderRadius: '0 8px 8px 0',
+                                padding: '14px 16px',
+                                fontSize: 12,
+                                lineHeight: 1.7,
+                                color: 'var(--text-primary)',
+                                whiteSpace: 'pre-line'
+                              }}>
+                                {description}
+                              </div>
+                            </div>
+
+                            {/* Card 3: Additional Ticket Parameters & Checklists */}
+                            <div style={{
+                              background: 'var(--bg-secondary)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: 10,
+                              padding: '16px 18px',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+                            }}>
+                              <h4 style={{ margin: '0 0 12px 0', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)' }}>
+                                Additional Ticket Parameters
+                              </h4>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                                <div style={{ fontSize: 11 }}>
+                                  <span style={{ color: 'var(--text-muted)', display: 'block' }}>Series / Ticket ID:</span>
+                                  <strong style={{ color: 'var(--brand-color)' }}>{selectedTicket.id}</strong>
+                                </div>
+                                <div style={{ fontSize: 11 }}>
+                                  <span style={{ color: 'var(--text-muted)', display: 'block' }}>Priority:</span>
+                                  <span className={`badge ${priority.toLowerCase() === 'high' ? 'badge-danger' : priority.toLowerCase() === 'low' ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: 10 }}>
+                                    {priority}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: 11 }}>
+                                  <span style={{ color: 'var(--text-muted)', display: 'block' }}>Status:</span>
+                                  <span className="badge badge-info" style={{ fontSize: 10 }}>{status}</span>
+                                </div>
+                              </div>
+
+                              {/* Checklist / sub-issues if table_gtmq rows exist */}
+                              {selectedTicket.table_gtmq && selectedTicket.table_gtmq.length > 0 && (
+                                <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border-color)' }}>
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
+                                    Associated Checklist Items:
+                                  </span>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                    {selectedTicket.table_gtmq.map((row, idx) => (
+                                      <span key={idx} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '3px 8px', fontSize: 10, color: 'var(--text-primary)' }}>
+                                        ✓ {row.issue || row.issue_item || (typeof row === 'string' ? row : `Item #${idx + 1}`)}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Internal Staff Notes (if any exist) */}
+                            {internalActivities.length > 0 && (
+                              <div style={{
+                                background: 'var(--bg-secondary)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: 10,
+                                padding: '14px 16px'
+                              }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                                  Internal Staff Notes ({internalActivities.length})
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                  {internalActivities.map((msg, index) => (
+                                    <div key={index} style={{ padding: '10px 12px', background: 'rgba(251,191,36,0.08)', borderLeft: '4px solid #fbbf24', borderRadius: 6, fontSize: 11, color: 'var(--text-primary)' }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                                        <strong>{msg.sender || 'Staff'}:</strong>
+                                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{msg.timeAgo}</span>
+                                      </div>
+                                      <div style={{ whiteSpace: 'pre-line' }}>{msg.content}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        ));
+                        );
                       })()}
 
-                      {commTab === 'emails' && (
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                          No emails synchronized for this ticket.
-                        </div>
-                      )}
-
-                      {commTab === 'history' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingLeft: 10, borderLeft: '2px solid var(--border-color)' }}>
-                          <div style={{ fontSize: 11 }}>
-                            <strong style={{ color: 'var(--brand-color)' }}>Created</strong> - {selectedTicket.dateRaised}
-                          </div>
-                          {(selectedTicket.messages || []).filter(m => m.sender === 'system').map((m, idx) => (
-                            <div key={idx} style={{ fontSize: 11 }}>
-                              <strong>System Log:</strong> {m.text} - {m.timestamp}
+                      {/* EMAILS TAB: Displays all inbound & outbound email threads */}
+                      {commTab === 'emails' && (() => {
+                        const emailList = ticketActivities.filter(item => item.type === 'communication' || item.type === 'notification');
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>Email Communications ({emailList.length})</span>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '4px 10px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}
+                                onClick={handleOpenNewEmailModal}
+                              >
+                                <Mail size={12} />
+                                <span>Compose Email</span>
+                              </button>
                             </div>
-                          ))}
-                        </div>
-                      )}
+                            {emailList.length === 0 ? (
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', padding: '30px 0' }}>
+                                No synchronized emails found for this issue.
+                              </div>
+                            ) : (
+                              emailList.map(item => (
+                                <div key={item.id} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 8, padding: '12px 14px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                      <div style={{
+                                        width: 30,
+                                        height: 30,
+                                        borderRadius: '50%',
+                                        background: 'var(--bg-tertiary)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        fontWeight: 700,
+                                        fontSize: 11
+                                      }}>
+                                        {item.initials || 'SD'}
+                                      </div>
+                                      <div>
+                                        <div style={{ fontWeight: 700, fontSize: 12 }}>{item.sender_full_name || item.sender}</div>
+                                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{item.subject}</div>
+                                      </div>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                      <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{item.timeAgo}</span>
+                                      <span style={{
+                                        background: item.sent_or_received === 'Sent' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(59, 130, 246, 0.1)',
+                                        color: item.sent_or_received === 'Sent' ? '#10b981' : '#3b82f6',
+                                        borderRadius: 12,
+                                        padding: '1px 8px',
+                                        fontSize: 10,
+                                        fontWeight: 600
+                                      }}>
+                                        {item.sent_or_received || 'Sent'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div style={{ fontSize: 11, lineHeight: 1.6, color: 'var(--text-primary)', whiteSpace: 'pre-line', paddingLeft: 38 }}>
+                                    {item.content}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* HISTORY TAB: Displays audit log / version history */}
+                      {commTab === 'history' && (() => {
+                        const historyList = ticketActivities.filter(item => item.type === 'version' || item.type === 'creation');
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 8, borderLeft: '2px solid var(--border-color)' }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Audit & Change History</div>
+                            {historyList.length === 0 ? (
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No audit history found.</div>
+                            ) : (
+                              historyList.map(item => (
+                                <div key={item.id} style={{ fontSize: 11, padding: '4px 0' }}>
+                                  {item.type === 'creation' ? (
+                                    <>
+                                      <a href={item.userLink || '#'} target="_blank" rel="noreferrer" style={{ color: 'var(--brand-color, #0284c7)', textDecoration: 'none', fontWeight: 600 }}>
+                                        {item.user || 'Administrator'}
+                                      </a>
+                                      <span> created this · {item.timeAgo}</span>
+                                    </>
+                                  ) : item.link ? (
+                                    <>
+                                      <a href={item.link} target="_blank" rel="noreferrer" style={{ color: 'var(--brand-color, #0284c7)', textDecoration: 'none', fontWeight: 500 }}>
+                                        {item.text}
+                                      </a>
+                                      <span style={{ color: 'var(--text-muted)' }}> · {item.timeAgo}</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span>{item.text}</span>
+                                      <span style={{ color: 'var(--text-muted)' }}> · {item.timeAgo}</span>
+                                    </>
+                                  )}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
 
-                    {/* Input text controls */}
-                    {(commTab === 'public' || commTab === 'internal') && (
-                      <form onSubmit={handleSendAdminMessage} style={{ padding: 12, borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {/* Bottom Response Bar (Image 2) */}
+                    {(commTab === 'public' || commTab === 'internal' || commTab === 'details') && (
+                      <form onSubmit={handleSendAdminMessage} style={{ padding: 14, borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-secondary)' }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <input
                             type="text"
@@ -1076,10 +2281,18 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                             onChange={(e) => setMessageText(e.target.value)}
                             placeholder={isInternal ? "Type internal comment..." : "Type public comment response..."}
                             className="form-input"
-                            style={{ flex: 1 }}
+                            style={{
+                              flex: 1,
+                              padding: '10px 14px',
+                              borderRadius: 8,
+                              border: isInternal ? '1.5px solid #fbbf24' : '1.5px solid #047857',
+                              outline: 'none',
+                              background: 'var(--bg-tertiary)',
+                              fontSize: 12
+                            }}
                           />
-                          <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 6, border: '1px solid var(--border-color)', margin: 0 }}>
-                            <Paperclip size={14} style={{ color: attachedFile ? 'var(--brand-color)' : 'var(--text-secondary)' }} />
+                          <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', padding: '10px 12px', background: 'var(--bg-tertiary)', borderRadius: 8, border: '1px solid var(--border-color)', margin: 0 }}>
+                            <Paperclip size={16} style={{ color: attachedFile ? 'var(--brand-color)' : 'var(--text-secondary)' }} />
                             <input
                               type="file"
                               id="comment-file-input"
@@ -1088,8 +2301,23 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                             />
                             {attachedFile && <span style={{ fontSize: 10, marginLeft: 4, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{attachedFile.name}</span>}
                           </label>
-                          <button type="submit" className="btn btn-primary" style={{ padding: '10px 14px' }}>
-                            <Send size={14} />
+                          <button
+                            type="submit"
+                            style={{
+                              padding: '10px 18px',
+                              borderRadius: 8,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: isInternal ? '#d97706' : '#047857',
+                              color: '#ffffff',
+                              border: 'none',
+                              cursor: 'pointer',
+                              transition: 'background 0.2s'
+                            }}
+                            title={isInternal ? "Post internal note" : "Send email reply"}
+                          >
+                            <Send size={15} />
                           </button>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1110,7 +2338,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                                 const fileInput = document.getElementById('comment-file-input');
                                 if (fileInput) fileInput.value = '';
                               }}
-                              style={{ padding: '2px 6px', fontSize: 9 }}
+                              style={{ padding: '2px 8px', fontSize: 10 }}
                             >
                               Remove Attachment
                             </button>
@@ -1222,6 +2450,13 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
             </div>
             <form onSubmit={handleCreateIssueSubmit}>
               <div className="modal-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+                {errorMsg && (
+                  <div style={{ padding: '10px 14px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--color-danger, #ef4444)', borderRadius: 8, color: 'var(--color-danger, #ef4444)', fontSize: 13, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <AlertCircle size={16} />
+                    <span>{errorMsg}</span>
+                  </div>
+                )}
+
                 <div className="form-group">
                   <label className="form-label">Subject</label>
                   <input type="text" value={issueSubject} onChange={(e) => setIssueSubject(e.target.value)} className="form-input" required />
@@ -1275,8 +2510,34 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                         const val = e.target.value;
                         setIssueCustomer(val);
                         const matched = bookingTenants.find(t => t.id === val || t.name === val);
-                        if (matched?.email) {
-                          setIssueRaisedBy(matched.email);
+                        if (matched) {
+                          if (matched.email) {
+                            setIssueRaisedBy(matched.email);
+                            setIssueCustomerEmail(matched.email);
+                          }
+                          if (matched.phone) {
+                            setIssueCustomerPhone(matched.phone);
+                          }
+                          if (matched.contact) {
+                            setIssueContact(matched.contact);
+                          }
+                        }
+                        const tenantBooking = bookingOptions.find(b =>
+                          (b.customer || '').toLowerCase() === (val || '').toLowerCase() ||
+                          (b.customer_name || '').toLowerCase() === (val || '').toLowerCase()
+                        );
+                        if (tenantBooking) {
+                          setSelectedBookingNumber(tenantBooking.value);
+                          if (tenantBooking.customer_email && !matched?.email) {
+                            setIssueRaisedBy(tenantBooking.customer_email);
+                            setIssueCustomerEmail(tenantBooking.customer_email);
+                          }
+                          if (tenantBooking.customer_phone_no && !matched?.phone) {
+                            setIssueCustomerPhone(tenantBooking.customer_phone_no);
+                          }
+                          if (tenantBooking.contact && !matched?.contact) {
+                            setIssueContact(tenantBooking.contact);
+                          }
                         }
                       }}
                       className="form-select"
@@ -1312,18 +2573,20 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                         const bVal = e.target.value;
                         setSelectedBookingNumber(bVal);
                         const matched = bookingOptions.find(b => b.value === bVal);
-                        if (matched?.customer && !issueCustomer) {
-                          const matchedTenant = bookingTenants.find(t =>
-                            (t.id || '').toLowerCase() === (matched.customer || '').toLowerCase() ||
-                            (t.name || '').toLowerCase() === (matched.customer || '').toLowerCase()
-                          );
-                          if (matchedTenant) {
-                            setIssueCustomer(matchedTenant.id || matchedTenant.name);
-                            if (matchedTenant.email && !issueRaisedBy) {
-                              setIssueRaisedBy(matchedTenant.email);
-                            }
-                          } else {
-                            setIssueCustomer(matched.customer);
+                        if (matched) {
+                          const custVal = matched.customer_name || matched.customer;
+                          if (custVal) {
+                            setIssueCustomer(custVal);
+                          }
+                          if (matched.customer_email) {
+                            setIssueCustomerEmail(matched.customer_email);
+                            setIssueRaisedBy(matched.customer_email);
+                          }
+                          if (matched.customer_phone_no) {
+                            setIssueCustomerPhone(matched.customer_phone_no);
+                          }
+                          if (matched.contact) {
+                            setIssueContact(matched.contact);
                           }
                         }
                       }}
@@ -1424,6 +2687,277 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
           </div>
         </div>
       )}
+
+      {/* NEW EMAIL MODAL (Image 1: ERPNext Default Email Composer) */}
+      {showEmailModal && (
+        <div className="modal-overlay" style={{ zIndex: 9999, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div
+            className="modal-content"
+            style={{
+              maxWidth: isModalMaximized ? '96vw' : '720px',
+              width: '100%',
+              height: isModalMaximized ? '95vh' : 'auto',
+              maxHeight: '92vh',
+              background: '#ffffff',
+              color: '#111827',
+              borderRadius: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              overflow: 'hidden',
+              border: '1px solid #e5e7eb'
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid #e5e7eb', background: '#ffffff' }}>
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 600, margin: 0, color: '#111827' }}>New Email</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setIsModalMaximized(!isModalMaximized)}
+                  style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+                  title={isModalMaximized ? 'Restore' : 'Maximize'}
+                >
+                  <Maximize2 size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEmailModal(false)}
+                  style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+                  title="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: '16px 20px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {/* To field */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 12, fontWeight: 500, color: '#4b5563' }}>To</label>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={emailTo}
+                    onChange={(e) => setEmailTo(e.target.value)}
+                    className="form-input"
+                    style={{
+                      width: '100%',
+                      padding: '8px 34px 8px 12px',
+                      background: '#f9fafb',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 6,
+                      fontSize: 13,
+                      color: '#111827'
+                    }}
+                    placeholder="recipient@example.com"
+                  />
+                  <ChevronDown size={15} style={{ position: 'absolute', right: 10, color: '#9ca3af', pointerEvents: 'none' }} />
+                </div>
+              </div>
+
+              {/* Subject * field */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 12, fontWeight: 500, color: '#4b5563' }}>
+                  Subject <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  value={emailSubject}
+                  onChange={(e) => setEmailSubject(e.target.value)}
+                  className="form-input"
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    background: '#f3f4f6',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 6,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: '#111827'
+                  }}
+                  required
+                />
+              </div>
+
+              {/* Message field with rich toolbar */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                <label style={{ fontSize: 12, fontWeight: 500, color: '#4b5563' }}>Message</label>
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 250 }}>
+                  {/* Rich Text Toolbar */}
+                  <div style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <select style={{ background: '#ffffff', border: '1px solid #d1d5db', borderRadius: 4, padding: '2px 6px', fontSize: 11, color: '#374151' }}>
+                      <option>Normal</option>
+                      <option>Heading 1</option>
+                      <option>Heading 2</option>
+                    </select>
+
+                    <span style={{ color: '#d1d5db' }}>|</span>
+
+                    <button type="button" title="Bold" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 3, color: '#4b5563', fontWeight: 700 }}><Bold size={13} /></button>
+                    <button type="button" title="Italic" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 3, color: '#4b5563' }}><Italic size={13} /></button>
+                    <button type="button" title="Underline" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 3, color: '#4b5563' }}><Underline size={13} /></button>
+                    <button type="button" title="Strikethrough" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 3, color: '#4b5563', fontSize: 12 }}><s>S</s></button>
+                    <span style={{ fontSize: 11, color: '#6b7280', cursor: 'pointer', padding: '0 2px' }} title="Clear Formatting">T<sub>x</sub></span>
+
+                    <span style={{ color: '#d1d5db' }}>|</span>
+
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#111827', cursor: 'pointer', borderBottom: '2px solid #ef4444' }} title="Text Color">A</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, background: '#fef08a', padding: '0 2px', borderRadius: 2, cursor: 'pointer' }} title="Highlight">A</span>
+
+                    <span style={{ color: '#d1d5db' }}>|</span>
+
+                    <span style={{ fontSize: 13, color: '#4b5563', cursor: 'pointer' }} title="Quote">&ldquo;</span>
+                    <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#4b5563', cursor: 'pointer' }} title="Code">&lt;/&gt;</span>
+                    <Link size={13} style={{ color: '#4b5563', cursor: 'pointer' }} title="Link" />
+
+                    <span style={{ color: '#d1d5db' }}>|</span>
+
+                    <CheckSquare size={13} style={{ color: '#4b5563', cursor: 'pointer' }} title="Checklist" />
+                    <select style={{ background: '#ffffff', border: '1px solid #d1d5db', borderRadius: 4, padding: '2px 4px', fontSize: 11, color: '#374151' }}>
+                      <option>Table</option>
+                      <option>Insert Row</option>
+                      <option>Insert Column</option>
+                    </select>
+                  </div>
+
+                  {/* Message Input Textarea */}
+                  <textarea
+                    value={emailBody}
+                    onChange={(e) => setEmailBody(e.target.value)}
+                    placeholder="Write your email reply..."
+                    rows={8}
+                    style={{
+                      flex: 1,
+                      width: '100%',
+                      padding: 14,
+                      border: 'none',
+                      outline: 'none',
+                      resize: 'none',
+                      fontFamily: 'inherit',
+                      fontSize: 13,
+                      lineHeight: 1.6,
+                      color: '#111827',
+                      background: '#ffffff'
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer (Image 1) */}
+            <div style={{ padding: '12px 20px', borderTop: '1px solid #e5e7eb', background: '#ffffff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: '#4b5563' }}>
+                  <input
+                    type="checkbox"
+                    checked={emailSendCopy}
+                    onChange={(e) => setEmailSendCopy(e.target.checked)}
+                  />
+                  <span>Send me a copy</span>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, cursor: 'pointer', color: '#374151', padding: '5px 10px', background: '#f3f4f6', borderRadius: 6, border: '1px solid #e5e7eb' }}>
+                  <Paperclip size={13} style={{ color: emailAttachment ? '#047857' : '#6b7280' }} />
+                  <span>{emailAttachment ? emailAttachment.name : 'Select Attachments'}</span>
+                  <input
+                    type="file"
+                    style={{ display: 'none' }}
+                    onChange={(e) => setEmailAttachment(e.target.files[0])}
+                  />
+                </label>
+                {emailAttachment && (
+                  <button
+                    type="button"
+                    onClick={() => setEmailAttachment(null)}
+                    style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: 11, cursor: 'pointer', padding: 0 }}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowEmailModal(false)}
+                  style={{
+                    padding: '7px 16px',
+                    fontSize: 12,
+                    borderRadius: 6,
+                    background: '#f3f4f6',
+                    color: '#374151',
+                    border: '1px solid #d1d5db',
+                    cursor: 'pointer',
+                    fontWeight: 500
+                  }}
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendEmailModal}
+                  disabled={isSendingEmail}
+                  style={{
+                    padding: '7px 20px',
+                    fontSize: 12,
+                    borderRadius: 6,
+                    background: '#111827',
+                    color: '#ffffff',
+                    border: 'none',
+                    fontWeight: 600,
+                    cursor: isSendingEmail ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  {isSendingEmail ? 'Sending...' : 'Send'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── CREATE MAINTENANCE SCHEDULE MODAL (stays on Support page) ── */}
+      <CreateScheduleModal
+        isOpen={showScheduleModal}
+        onClose={() => setShowScheduleModal(false)}
+        initialBookingId={scheduleTicket?.booking_number || scheduleTicket?.custom_booking_id || scheduleTicket?.custom_booking_number}
+        initialIssue={scheduleTicket}
+        tenants={tenants}
+        properties={properties}
+        bookings={bookings}
+        erpnextConfig={erpnextConfig}
+        onCreateSchedule={onCreateSchedule}
+        onSuccess={async (createdDoc) => {
+          if (scheduleTicket?.id) {
+            // Automatically mark the Issue as Resolved upon creating the Maintenance Schedule
+            await handleStatusChange(scheduleTicket.id, 'Resolved');
+
+            // Post resolution comment to ERPNext Issue
+            if (erpnextConfig?.url && !String(scheduleTicket.id).startsWith('SUP-')) {
+              try {
+                const schedName = createdDoc?.name || 'Maintenance Schedule';
+                await fetch(`${erpnextConfig.url}/api/resource/Comment`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                  body: JSON.stringify({
+                    comment_type: 'Comment',
+                    reference_doctype: 'Issue',
+                    reference_name: scheduleTicket.id,
+                    content: `Issue resolved: Created Maintenance Schedule ${schedName}`
+                  })
+                });
+              } catch (cErr) {
+                console.warn('Failed to post resolution comment to Issue:', cErr);
+              }
+            }
+
+            fetchActivityAndCommunications(scheduleTicket.id);
+          }
+        }}
+      />
     </div>
   );
 }

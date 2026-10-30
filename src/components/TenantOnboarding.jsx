@@ -650,7 +650,7 @@ const getSelectedCaseUnits = (caseDoc, unitFieldsSchema = [], allFields = [], it
       unitCode: unitCode || `Unit ${idx + 1}`,
       isService,
       serviceLabel: row.item_name || row.unit_name || cachedItem.item_name || unitCode,
-      serviceRateDesc: (row.charges || cachedItem.charges) ? `Rate: $${Number(row.charges || cachedItem.charges).toLocaleString()}/sqft × ${Number(area || 0).toLocaleString()} sqft` : '',
+      serviceRateDesc: (row.charges || cachedItem.charges) ? `Rate: F$${Number(row.charges || cachedItem.charges).toLocaleString()}/sqft × ${Number(area || 0).toLocaleString()} sqft` : '',
       valRate: Number(valRate) || 0,
       offeredRate: Number(offeredRate) || 0,
       propGroup,
@@ -1641,7 +1641,7 @@ const DynamicFormField = ({ field, value, onChange, linkOptionsCache, fetchLinkO
   }
 };
 
-export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
+export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNavigateToQuotation }) {
   const [onboardings, setOnboardings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -4748,6 +4748,12 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       name={selectedCase.name}
                       approved={(workflowState?.current_state || selectedCase.workflow_state) === 'Approved' && selectedCase.docstatus !== 2}
                       baseUrl={erpnextConfig?.url}
+                      onNavigateToQuotation={(qId) => {
+                        setSelectedCase(null);
+                        if (typeof onNavigateToQuotation === 'function') {
+                          onNavigateToQuotation(qId);
+                        }
+                      }}
                     />}
                     {!isEditingDetails && workflowState?.next_actions?.filter(act => {
                       if (!act.allowed) return false;
@@ -6292,7 +6298,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                                 <span>{nameVal}</span>
                                                 {parseFloat(item.discount_amount || 0) > 0 && (
                                                   <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 600, marginLeft: 6 }}>
-                                                    (Disc: -${parseFloat(item.discount_amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })})
+                                                    (Disc: -F${parseFloat(item.discount_amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })})
                                                   </span>
                                                 )}
                                               </td>
@@ -6300,7 +6306,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                                                 {areaVal}
                                               </td>
                                               <td style={{ padding: '8px 12px', textAlign: 'right', color: '#111827', fontWeight: 700 }}>
-                                                ${amtVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                                                F${amtVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                                               </td>
                                             </tr>
                                           );
@@ -6332,23 +6338,23 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                               </div>
                             </div>
                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Charges ($)</span>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Rental Charges (F$)</span>
                               <div style={{ fontSize: '13px', fontWeight: 700, color: '#065f46', marginTop: '2px' }}>
                                 {(!selectedCase.rental_charges || Number(selectedCase.rental_charges) === 0)
-                                  ? (totalMonthlyAmount > 0 ? `$${totalMonthlyAmount.toLocaleString()}` : '-')
-                                  : `$${Number(selectedCase.rental_charges).toLocaleString()}`}
+                                  ? (totalMonthlyAmount > 0 ? `F$${totalMonthlyAmount.toLocaleString()}` : '-')
+                                  : `F$${Number(selectedCase.rental_charges).toLocaleString()}`}
                               </div>
                             </div>
                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
-                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Promo / Service Charges ($)</span>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Promo / Service Charges (F$)</span>
                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
-                                {(!selectedCase.service_promotional_charges || Number(selectedCase.service_promotional_charges) === 0) ? '-' : `$${Number(selectedCase.service_promotional_charges).toLocaleString()}`}
+                                {(!selectedCase.service_promotional_charges || Number(selectedCase.service_promotional_charges) === 0) ? '-' : `F$${Number(selectedCase.service_promotional_charges).toLocaleString()}`}
                               </div>
                             </div>
                             <div style={{ border: '1px solid var(--border-color)', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-secondary)' }}>
                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Security Deposit / Fee</span>
                               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
-                                {(!selectedCase.security_deposit_booking_fee || Number(selectedCase.security_deposit_booking_fee) === 0) ? '-' : `$${Number(selectedCase.security_deposit_booking_fee).toLocaleString()}`}
+                                {(!selectedCase.security_deposit_booking_fee || Number(selectedCase.security_deposit_booking_fee) === 0) ? '-' : `F$${Number(selectedCase.security_deposit_booking_fee).toLocaleString()}`}
                               </div>
                             </div>
                           </div>
@@ -7402,7 +7408,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       <h4 style={{ margin: 0, fontSize: '11.5px', color: 'var(--brand-color)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Financial Terms</h4>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                         <div>
-                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Rental Charges ($)</label>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Rental Charges (F$)</label>
                           <input
                             type="number"
                             min="0"
@@ -7413,7 +7419,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                           />
                         </div>
                         <div>
-                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Service / Promo Charges ($)</label>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Service / Promo Charges (F$)</label>
                           <input
                             type="number"
                             min="0"
@@ -7426,7 +7432,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken }) {
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                         <div>
-                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Security Deposit Fee ($)</label>
+                          <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>Security Deposit Fee (F$)</label>
                           <input
                             type="number"
                             min="0"

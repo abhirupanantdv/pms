@@ -2823,7 +2823,7 @@
 
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Hammer, User, Clock, CheckCircle, CheckCircle2, AlertTriangle, Plus, X, Calendar as CalendarIcon, List, BarChart3, ClipboardList, Building, Search, Activity, Settings, DollarSign, PenTool, Archive, Check, ArrowRight, UserCheck, ShieldCheck, Mail, Phone, MapPin, Award, Trash, Save, RefreshCw, Users, Briefcase } from 'lucide-react';
+import { Hammer, User, Clock, CheckCircle, CheckCircle2, AlertTriangle, Plus, X, Calendar as CalendarIcon, List, BarChart3, ClipboardList, Building, Search, Activity, Settings, DollarSign, PenTool, Archive, Check, ArrowRight, UserCheck, ShieldCheck, Mail, Phone, MapPin, Award, Trash, Save, RefreshCw, Users, Briefcase, Receipt, ExternalLink } from 'lucide-react';
 import TaskItemsPanel from './TaskItemsPanel';
 import { getAuthHeaders, getCsrfToken, ensureCsrfToken } from '../config';
 
@@ -3222,16 +3222,23 @@ export default function Maintenance({
   vendors = [],
   onAssignResource,
   onCreateVisit,
-  onNavigateToQuotation
+  onNavigateToQuotation,
+  onNavigateToInvoice,
+  preSelectedTaskId = '',
+  clearPreSelectedTaskId
 }) {
   const [activeSection, setActiveSection] = useState('schedule');
   const [viewMode, setViewMode] = useState('list');
   const [maintenanceSearch, setMaintenanceSearch] = useState('');
 
   const [selectedSchedule, setSelectedSchedule] = useState(null);
+  const [detailPropertyGroup, setDetailPropertyGroup] = useState('');
+  const [loadingDetailPropertyGroup, setLoadingDetailPropertyGroup] = useState(false);
 
   const handleSelectSchedule = async (sch) => {
     setSelectedSchedule(sch);
+    const initialGroup = sch?.custom_property_group || sch?.property_group || '';
+    setDetailPropertyGroup(initialGroup);
     if (!erpnextConfig?.url || !sch?.name) return;
     try {
       const res = await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(sch.name)}`, { credentials: 'include' });
@@ -3239,6 +3246,10 @@ export default function Maintenance({
         const json = await res.json();
         const fullDoc = json.data || json;
         setSelectedSchedule(fullDoc);
+        const docGroup = fullDoc.custom_property_group || fullDoc.property_group || '';
+        if (docGroup) {
+          setDetailPropertyGroup(docGroup);
+        }
       }
     } catch (e) {
       console.warn("Failed fetching detailed schedule on select:", e);
@@ -3261,6 +3272,7 @@ export default function Maintenance({
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showWOModal, setShowWOModal] = useState(false);
   const [custom_maintenance_schedule, setCustomMaintenanceSchedule] = useState(null);
+  const isAdhocMaintenance = custom_maintenance_schedule === 'Adhoc Maintenance';
   const [showConsumeModal, setShowConsumeModal] = useState(false);
   const [scheduleRows, setScheduleRows] = useState([]);
   const [busyTasks, setBusyTasks] = useState(false);
@@ -3285,12 +3297,39 @@ export default function Maintenance({
   const [customerBookings, setCustomerBookings] = useState([]);
   const [customerUnits, setCustomerUnits] = useState([]);
 
-  // ── Schedule items child table ──────────────────────────────────────────────
+  // ── Schedule items child table & date rules ──────────────────────────────────
+  const getTodayStr = () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const resolveSchedStartDate = (val) => {
+    const today = getTodayStr();
+    if (!val) return today;
+    if (val >= today) return val;
+    return today;
+  };
+
+  const resolveSchedEndDate = (endVal, startVal) => {
+    if (!endVal) return '';
+    const today = getTodayStr();
+    const effectiveStart = resolveSchedStartDate(startVal);
+    const minAllowed = effectiveStart > today ? effectiveStart : today;
+    if (endVal < minAllowed) {
+      return minAllowed;
+    }
+    return endVal;
+  };
+
   const [schedItems, setSchedItems] = useState([
-    { itemCode: '', itemName: '', startDate: '', periodicity: 'Weekly', noOfVisits: 1, endDate: '' }
+    { itemCode: '', itemName: '', propertyGroup: '', startDate: getTodayStr(), periodicity: 'Weekly', noOfVisits: 1, endDate: '' }
   ]);
   const [itemNameCache, setItemNameCache] = useState({});
   const [itemDetailCache, setItemDetailCache] = useState({});
+  const [loadingPropertyGroup, setLoadingPropertyGroup] = useState(false);
 
   const [schedIssueNumber, setSchedIssueNumber] = useState('');
   const [schedPropertyId, setSchedPropertyId] = useState('');
@@ -3368,30 +3407,210 @@ export default function Maintenance({
   };
 
   const fetchItemDetails = async (itemCode) => {
-    if (!itemCode || !erpnextConfig?.url) return { itemName: itemCode, propertyGroup: '' };
+    if (!itemCode || !erpnextConfig?.url) return { itemName: itemCode, propertyGroup: '', item_group: '' };
+    const trimmedCode = (itemCode || '').toString().trim();
+    if (!trimmedCode) return { itemName: itemCode, propertyGroup: '', item_group: '' };
+
+    if (itemDetailCache[trimmedCode]) return itemDetailCache[trimmedCode];
     if (itemDetailCache[itemCode]) return itemDetailCache[itemCode];
+
+    // Check pre-loaded schedUnits commercial items first
+    const inSched = (schedUnits || []).find(u =>
+      (u.name && u.name.toString().trim().toLowerCase() === trimmedCode.toLowerCase()) ||
+      (u.item_code && u.item_code.toString().trim().toLowerCase() === trimmedCode.toLowerCase()) ||
+      (u.item_name && u.item_name.toString().trim().toLowerCase() === trimmedCode.toLowerCase())
+    );
+    if (inSched && (inSched.custom_property_group || inSched.custom_property_reference)) {
+      const propGroupVal = inSched.custom_property_group || inSched.custom_property_reference || '';
+      const result = {
+        itemName: inSched.item_name || inSched.name || trimmedCode,
+        propertyGroup: propGroupVal,
+        item_group: inSched.item_group || ''
+      };
+      setItemDetailCache(prev => ({ ...prev, [trimmedCode]: result, [itemCode]: result }));
+      setItemNameCache(prev => ({ ...prev, [trimmedCode]: result.itemName, [itemCode]: result.itemName }));
+      return result;
+    }
+
+    setLoadingPropertyGroup(true);
+    let foundPropGroup = '';
+    let foundName = '';
+    let foundItemGroup = '';
+
+    // Search Item DocType by itemCode for custom_property_group
     try {
-      const fields = encodeURIComponent(JSON.stringify(["item_name", "property_group", "item_group", "custom_property_group"]));
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Item/${encodeURIComponent(itemCode)}?fields=${fields}`, {
+      const fields = encodeURIComponent(JSON.stringify(["name", "item_code", "item_name", "item_group", "custom_property_group", "custom_property_reference"]));
+
+      // 1. Try direct GET /api/resource/Item/{trimmedCode}
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Item/${encodeURIComponent(trimmedCode)}?fields=${fields}`, {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' }
       });
       if (res.ok) {
         const json = await res.json();
-        const data = json.data || {};
-        const itemName = data.item_name || itemCode;
-        const propertyGroup = data.property_group || data.item_group || data.custom_property_group || '';
-        const item_group = data.item_group || '';
-        const result = { itemName, propertyGroup, item_group };
-        setItemDetailCache(prev => ({ ...prev, [itemCode]: result }));
-        setItemNameCache(prev => ({ ...prev, [itemCode]: itemName }));
-        return result;
+        const data = json.data || json || {};
+        foundPropGroup = data.custom_property_group || data.custom_property_reference || '';
+        foundName = data.item_name || data.name || trimmedCode;
+        foundItemGroup = data.item_group || '';
+      }
+
+      // 2. Try filter by item_code in Item DocType
+      if (!foundPropGroup) {
+        const itemFilters = encodeURIComponent(JSON.stringify([["item_code", "=", trimmedCode]]));
+        const listRes = await fetch(`${erpnextConfig.url}/api/resource/Item?filters=${itemFilters}&fields=${fields}&limit_page_length=1`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (listRes.ok) {
+          const lJson = await listRes.json();
+          if (Array.isArray(lJson.data) && lJson.data.length > 0) {
+            const data = lJson.data[0];
+            foundPropGroup = data.custom_property_group || data.custom_property_reference || '';
+            if (!foundName) foundName = data.item_name || data.name || trimmedCode;
+            foundItemGroup = data.item_group || '';
+          }
+        }
+      }
+
+      // 3. Try filter by name in Item DocType
+      if (!foundPropGroup) {
+        const nameFilters = encodeURIComponent(JSON.stringify([["name", "=", trimmedCode]]));
+        const nameRes = await fetch(`${erpnextConfig.url}/api/resource/Item?filters=${nameFilters}&fields=${fields}&limit_page_length=1`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (nameRes.ok) {
+          const nJson = await nameRes.json();
+          if (Array.isArray(nJson.data) && nJson.data.length > 0) {
+            const data = nJson.data[0];
+            foundPropGroup = data.custom_property_group || data.custom_property_reference || '';
+            if (!foundName) foundName = data.item_name || data.name || trimmedCode;
+            foundItemGroup = data.item_group || '';
+          }
+        }
+      }
+
+      // 4. Try filter by item_name in Item DocType
+      if (!foundPropGroup) {
+        const itemNameFilters = encodeURIComponent(JSON.stringify([["item_name", "=", trimmedCode]]));
+        const inameRes = await fetch(`${erpnextConfig.url}/api/resource/Item?filters=${itemNameFilters}&fields=${fields}&limit_page_length=1`, {
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (inameRes.ok) {
+          const inJson = await inameRes.json();
+          if (Array.isArray(inJson.data) && inJson.data.length > 0) {
+            const data = inJson.data[0];
+            foundPropGroup = data.custom_property_group || data.custom_property_reference || '';
+            if (!foundName) foundName = data.item_name || data.name || trimmedCode;
+            foundItemGroup = data.item_group || '';
+          }
+        }
       }
     } catch (e) {
-      // ignore
+      console.warn('Item DocType search error for custom_property_group:', e);
+    } finally {
+      setLoadingPropertyGroup(false);
     }
-    return { itemName: itemCode, propertyGroup: '', item_group: '' };
+
+    const itemName = foundName || trimmedCode;
+    const propertyGroup = foundPropGroup || '';
+    const item_group = foundItemGroup || '';
+    const result = { itemName, propertyGroup, item_group };
+    setItemDetailCache(prev => ({ ...prev, [trimmedCode]: result, [itemCode]: result }));
+    setItemNameCache(prev => ({ ...prev, [trimmedCode]: itemName, [itemCode]: itemName }));
+    return result;
   };
+
+  // ── Auto-search Property Group from Item DocType by Unit Code for selectedSchedule ──
+  useEffect(() => {
+    if (!selectedSchedule) {
+      setDetailPropertyGroup('');
+      return;
+    }
+
+    let isMounted = true;
+    const directGroup = selectedSchedule.custom_property_group || selectedSchedule.property_group || '';
+    if (directGroup) {
+      setDetailPropertyGroup(directGroup);
+    }
+
+    // Collect candidate identifiers (unit code / item name) from items child table, schedules, or selectedSchedule
+    const candidates = [];
+    if (Array.isArray(selectedSchedule.items)) {
+      selectedSchedule.items.forEach(it => {
+        if (it.item_code) candidates.push(it.item_code);
+        if (it.item_name) candidates.push(it.item_name);
+      });
+    }
+    if (Array.isArray(selectedSchedule.schedules)) {
+      selectedSchedule.schedules.forEach(s => {
+        if (s.item_code) candidates.push(s.item_code);
+        if (s.item_name) candidates.push(s.item_name);
+      });
+    }
+    if (selectedSchedule.custom_property) candidates.push(selectedSchedule.custom_property);
+    if (scheduleRows.length > 0) {
+      scheduleRows.forEach(r => {
+        if (r.item_code) candidates.push(r.item_code);
+      });
+    }
+
+    const uniqueCandidates = [...new Set(candidates.filter(Boolean).map(c => c.toString().trim()))];
+
+    (async () => {
+      setLoadingDetailPropertyGroup(true);
+      let foundGroup = directGroup;
+
+      for (const candidate of uniqueCandidates) {
+        if (foundGroup) break;
+        try {
+          const details = await fetchItemDetails(candidate);
+          if (details?.propertyGroup) {
+            foundGroup = details.propertyGroup;
+            break;
+          }
+        } catch (err) {
+          console.warn('Auto search property group error for candidate:', candidate, err);
+        }
+      }
+
+      // If still not found, check linked booking doc and its items
+      const bookingId = selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number;
+      if (!foundGroup && bookingId) {
+        try {
+          const bDoc = await fetchBookingDetailsById(bookingId);
+          if (bDoc) {
+            foundGroup = bDoc.property_group || bDoc.custom_property_group || bDoc.property || '';
+            if (!foundGroup && Array.isArray(bDoc.booking_item)) {
+              for (const bItem of bDoc.booking_item) {
+                const bCode = bItem.item_code || bItem.item_name;
+                if (bCode) {
+                  const bDetails = await fetchItemDetails(bCode);
+                  if (bDetails?.propertyGroup) {
+                    foundGroup = bDetails.propertyGroup;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        } catch (bErr) {
+          console.warn('Auto search property group from booking error:', bErr);
+        }
+      }
+
+      if (isMounted) {
+        if (foundGroup) {
+          setDetailPropertyGroup(foundGroup);
+          setScheduleRows(prev => prev.map(r => (!r.property_group || r.property_group === '—') ? { ...r, property_group: foundGroup } : r));
+        }
+        setLoadingDetailPropertyGroup(false);
+      }
+    })();
+
+    return () => { isMounted = false; };
+  }, [selectedSchedule?.name, selectedSchedule?.items, selectedSchedule?.custom_booking_id]);
 
   const handleSchedBookingChange = (value) => {
     setSchedBookingId(value);
@@ -3400,10 +3619,23 @@ export default function Maintenance({
     setSchedPropertyGroup('');
     setSchedUnitSpec('');
     setBookingDetails(null);
-    setSchedItems(prev => prev.map(row => ({ ...row, itemCode: '', itemName: '', startDate: new Date().toISOString().split('T')[0] })));
+    setSchedItems(prev => prev.map(row => ({ ...row, itemCode: '', itemName: '', propertyGroup: '', startDate: new Date().toISOString().split('T')[0] })));
   };
   const handlemaintenanceChange = (value) => {
     setCustomMaintenanceSchedule(value);
+    if (value === 'Adhoc Maintenance') {
+      setSchedItems(prev => prev.map(row => ({
+        ...row,
+        periodicity: 'Random',
+        noOfVisits: 1
+      })));
+    } else {
+      setSchedItems(prev => prev.map(row => ({
+        ...row,
+        periodicity: row.periodicity === 'Random' ? 'Weekly' : (row.periodicity || 'Weekly'),
+        noOfVisits: row.noOfVisits || 1
+      })));
+    }
   };
   const availableSchedUnits = useMemo(() => {
     // 1. If customerUnits from all bookings of the selected customer is populated, use it!
@@ -3458,6 +3690,169 @@ export default function Maintenance({
 
     return filtered.length > 0 ? filtered : [];
   }, [schedUnits, bookingDetails, customerUnits]);
+
+  // Units available specifically for the currently selected Linked Booking
+  const bookingUnits = useMemo(() => {
+    const isFee = (str) => {
+      const s = (str || '').toString().trim().toLowerCase();
+      return (
+        s === 'promotional fee' ||
+        s === 'service charge' ||
+        s === 'security deposit' ||
+        s === 'booking fee' ||
+        s === 'advance amount' ||
+        s.includes('promotional fee') ||
+        s.includes('service charge')
+      );
+    };
+
+    const result = [];
+    const seen = new Set();
+
+    // 1. From customerUnits for the selected booking
+    if (customerUnits && customerUnits.length > 0) {
+      customerUnits.forEach(u => {
+        if (!schedBookingId || u.booking_id === schedBookingId) {
+          const key = u.item_code || u.name;
+          if (key && !seen.has(key) && !isFee(key) && !isFee(u.item_name)) {
+            seen.add(key);
+            result.push(u);
+          }
+        }
+      });
+    }
+
+    // 2. From bookingDetails.booking_item if not already added
+    if (bookingDetails && Array.isArray(bookingDetails.booking_item)) {
+      bookingDetails.booking_item.forEach(item => {
+        const code = item.item_code || item.name;
+        const name = item.item_name || item.name || code;
+        if (code && !seen.has(code) && !isFee(code) && !isFee(name)) {
+          seen.add(code);
+          result.push({
+            name: code,
+            item_code: code,
+            item_name: name,
+            property_group: item.property_group || item.custom_property_group || bookingDetails.property_group || schedPropertyGroup || '',
+            booking_id: bookingDetails.name || schedBookingId,
+            start_date: bookingDetails.start_date || bookingDetails.starting_date,
+            end_date: bookingDetails.end_date || bookingDetails.ending_date,
+            bookingDoc: bookingDetails
+          });
+        }
+      });
+    }
+
+    // 3. Fallback to availableSchedUnits matching this booking
+    if (result.length === 0 && availableSchedUnits && availableSchedUnits.length > 0) {
+      availableSchedUnits.forEach(u => {
+        if (!schedBookingId || !u.booking_id || u.booking_id === schedBookingId) {
+          const key = u.item_code || u.name;
+          if (key && !seen.has(key) && !isFee(key) && !isFee(u.item_name)) {
+            seen.add(key);
+            result.push(u);
+          }
+        }
+      });
+    }
+
+    return result;
+  }, [schedBookingId, customerUnits, bookingDetails, availableSchedUnits, schedPropertyGroup]);
+
+  // Handler to add the next unit or another unit row from this booking
+  const handleAddSchedUnit = () => {
+    const addedCodes = new Set(schedItems.map(r => r.itemCode).filter(Boolean));
+    const nextUnit = bookingUnits.find(u => !addedCodes.has(u.item_code || u.name)) || bookingUnits[0] || null;
+
+    const baseStart = nextUnit?.start_date || bookingDetails?.start_date || (schedItems[0]?.startDate ? schedItems[0].startDate : getTodayStr());
+    const baseEnd = nextUnit?.end_date || bookingDetails?.end_date || schedItems[0]?.endDate || '';
+    const startD = resolveSchedStartDate(baseStart);
+    const endD = resolveSchedEndDate(baseEnd, startD);
+
+    const unitCode = nextUnit ? (nextUnit.item_code || nextUnit.name) : '';
+    const unitName = nextUnit?.item_name || unitCode || '';
+    const propGroup = nextUnit?.property_group || schedPropertyGroup || '';
+
+    const newRow = {
+      itemCode: unitCode,
+      itemName: unitName,
+      propertyGroup: propGroup,
+      startDate: startD,
+      periodicity: isAdhocMaintenance ? 'Random' : (schedItems[0]?.periodicity || 'Weekly'),
+      noOfVisits: isAdhocMaintenance ? 1 : (schedItems[0]?.noOfVisits || 1),
+      endDate: endD,
+      bookingId: schedBookingId || nextUnit?.booking_id || ''
+    };
+
+    if (schedItems.length === 1 && !schedItems[0].itemCode) {
+      setSchedItems([newRow]);
+      if (unitCode) {
+        fetchItemDetails(unitCode).then(details => {
+          setSchedItems(prev => prev.map((r, i) => i === 0 ? {
+            ...r,
+            itemName: details.itemName || r.itemName,
+            propertyGroup: details.propertyGroup || r.propertyGroup
+          } : r));
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    const targetIdx = schedItems.length;
+    setSchedItems(prev => [...prev, newRow]);
+
+    if (unitCode) {
+      fetchItemDetails(unitCode).then(details => {
+        setSchedItems(prev => prev.map((r, i) => i === targetIdx ? {
+          ...r,
+          itemName: details.itemName || r.itemName,
+          propertyGroup: details.propertyGroup || r.propertyGroup
+        } : r));
+      }).catch(() => {});
+    }
+  };
+
+  // Handler to add all remaining units for this booking at once
+  const handleAddAllBookingUnits = () => {
+    const addedCodes = new Set(schedItems.map(r => r.itemCode).filter(Boolean));
+    const unadded = bookingUnits.filter(u => !addedCodes.has(u.item_code || u.name));
+    if (unadded.length === 0) return;
+
+    const replaceFirst = (schedItems.length === 1 && !schedItems[0].itemCode);
+    const startIdx = replaceFirst ? 0 : schedItems.length;
+
+    const newRows = unadded.map(unit => {
+      const baseStart = unit.start_date || bookingDetails?.start_date || (schedItems[0]?.startDate ? schedItems[0].startDate : getTodayStr());
+      const baseEnd = unit.end_date || bookingDetails?.end_date || schedItems[0]?.endDate || '';
+      const startD = resolveSchedStartDate(baseStart);
+      const endD = resolveSchedEndDate(baseEnd, startD);
+      return {
+        itemCode: unit.item_code || unit.name,
+        itemName: unit.item_name || unit.name || unit.item_code,
+        propertyGroup: unit.property_group || schedPropertyGroup || '',
+        startDate: startD,
+        periodicity: isAdhocMaintenance ? 'Random' : (schedItems[0]?.periodicity || 'Weekly'),
+        noOfVisits: isAdhocMaintenance ? 1 : (schedItems[0]?.noOfVisits || 1),
+        endDate: endD,
+        bookingId: schedBookingId || unit.booking_id || ''
+      };
+    });
+
+    setSchedItems(prev => replaceFirst ? newRows : [...prev, ...newRows]);
+
+    newRows.forEach((row, offset) => {
+      const targetIdx = startIdx + offset;
+      if (row.itemCode) {
+        fetchItemDetails(row.itemCode).then(details => {
+          setSchedItems(prev => prev.map((r, idx) => idx === targetIdx ? {
+            ...r,
+            itemName: details.itemName || r.itemName,
+            propertyGroup: details.propertyGroup || r.propertyGroup
+          } : r));
+        }).catch(() => {});
+      }
+    });
+  };
 
   useEffect(() => {
     if (!schedBookingId) {
@@ -3520,23 +3915,29 @@ export default function Maintenance({
         return isCommercial;
       });
 
-      const bookingItems = filteredBookingItems.map((item, idx) => ({
-        itemCode: item.item_code || '',
-        itemName: item.item_name || '',
-        startDate: bookingDetails.start_date || new Date().toISOString().split('T')[0],
-        periodicity: 'Weekly',
-        noOfVisits: 1,
-        endDate: bookingDetails.end_date || '',
-        bookingId: bookingDetails.name || ''
-      }));
+      const bookingItems = filteredBookingItems.map((item, idx) => {
+        const startD = resolveSchedStartDate(bookingDetails.start_date);
+        const endD = resolveSchedEndDate(bookingDetails.end_date, startD);
+        return {
+          itemCode: item.item_code || '',
+          itemName: item.item_name || '',
+          propertyGroup: item.property_group || item.custom_property_group || bookingDetails.property_group || '',
+          startDate: startD,
+          periodicity: isAdhocMaintenance ? 'Random' : 'Weekly',
+          noOfVisits: 1,
+          endDate: endD,
+          bookingId: bookingDetails.name || ''
+        };
+      });
 
       setSchedItems(bookingItems.length > 0 ? bookingItems : [{
         itemCode: '',
         itemName: '',
-        startDate: bookingDetails.start_date || new Date().toISOString().split('T')[0],
-        periodicity: 'Weekly',
+        propertyGroup: '',
+        startDate: resolveSchedStartDate(bookingDetails.start_date),
+        periodicity: isAdhocMaintenance ? 'Random' : 'Weekly',
         noOfVisits: 1,
-        endDate: bookingDetails.end_date || '',
+        endDate: resolveSchedEndDate(bookingDetails.end_date, bookingDetails.start_date),
         bookingId: bookingDetails.name || ''
       }]);
 
@@ -3544,9 +3945,9 @@ export default function Maintenance({
       bookingItems.forEach((item, idx) => {
         if (item.itemCode) {
           fetchItemDetails(item.itemCode).then(details => {
-            setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, itemName: details.itemName } : r));
-            if (!bookingPropertyGroup && details.propertyGroup) {
-              setSchedPropertyGroup(details.propertyGroup);
+            setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, itemName: details.itemName, propertyGroup: details.propertyGroup || r.propertyGroup } : r));
+            if (details.propertyGroup) {
+              setSchedPropertyGroup(prev => prev || details.propertyGroup);
             }
           });
         }
@@ -3558,9 +3959,9 @@ export default function Maintenance({
       const isCommercial = schedGrp === 'commercial' || !schedGrp;
 
       if (isCommercial) {
-        setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: '', bookingId: bookingDetails.name || '' } : row));
+        setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: '', propertyGroup: '', bookingId: bookingDetails.name || '' } : row));
         fetchItemDetails(unitCode).then(details => {
-          setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: details.itemName } : row));
+          setSchedItems(prev => prev.map((row, idx) => idx === 0 ? { ...row, itemCode: unitCode, itemName: details.itemName, propertyGroup: details.propertyGroup || row.propertyGroup } : row));
           if (!bookingPropertyGroup && details.propertyGroup) {
             setSchedPropertyGroup(details.propertyGroup);
           }
@@ -3690,6 +4091,7 @@ export default function Maintenance({
 
     const details = value ? await fetchItemDetails(value) : { itemName: '', propertyGroup: '' };
     const itemName = matchedUnit?.item_name || details.itemName || value;
+    const propGroup = details.propertyGroup || matchedUnit?.property_group || '';
 
     // Target booking ID for this unit
     const targetBookingId = matchedUnit?.booking_id || bIdPart;
@@ -3698,8 +4100,9 @@ export default function Maintenance({
       ...r,
       itemCode: value,
       itemName: itemName,
-      startDate: matchedUnit?.start_date || r.startDate || new Date().toISOString().split('T')[0],
-      endDate: matchedUnit?.end_date || r.endDate || '',
+      propertyGroup: propGroup,
+      startDate: resolveSchedStartDate(matchedUnit?.start_date || r.startDate),
+      endDate: resolveSchedEndDate(matchedUnit?.end_date || r.endDate, matchedUnit?.start_date || r.startDate),
       bookingId: targetBookingId || r.bookingId || ''
     } : r));
 
@@ -3710,8 +4113,8 @@ export default function Maintenance({
     if (matchedUnit?.property) {
       setSchedProperty(matchedUnit.property);
     }
-    if (matchedUnit?.property_group || details.propertyGroup) {
-      setSchedPropertyGroup(matchedUnit.property_group || details.propertyGroup);
+    if (propGroup) {
+      setSchedPropertyGroup(propGroup);
     }
     if (matchedUnit?.bookingDoc) {
       setBookingDetails(matchedUnit.bookingDoc);
@@ -3736,24 +4139,68 @@ export default function Maintenance({
       if (propId) setSchedProperty(propId);
       if (bDoc.property_group) setSchedPropertyGroup(bDoc.property_group);
 
-      // Find first unit belonging to this booking
-      const firstUnit = (customerUnits || []).find(u => u.booking_id === newBookingId);
+      const isFee = (str) => {
+        const s = (str || '').toString().trim().toLowerCase();
+        return (
+          s === 'promotional fee' ||
+          s === 'service charge' ||
+          s === 'security deposit' ||
+          s === 'booking fee' ||
+          s === 'advance amount' ||
+          s.includes('promotional fee') ||
+          s.includes('service charge')
+        );
+      };
+
+      // Find first unit belonging to this booking from customerUnits or bDoc.booking_item
+      let firstUnit = (customerUnits || []).find(u => u.booking_id === newBookingId && !isFee(u.item_code) && !isFee(u.item_name));
+      if (!firstUnit && Array.isArray(bDoc.booking_item)) {
+        const validItem = bDoc.booking_item.find(it => {
+          const c = it.item_code || it.name;
+          const n = it.item_name || c;
+          return c && !isFee(c) && !isFee(n);
+        });
+        if (validItem) {
+          firstUnit = {
+            item_code: validItem.item_code || validItem.name,
+            item_name: validItem.item_name || validItem.name || validItem.item_code,
+            property_group: validItem.property_group || validItem.custom_property_group || bDoc.property_group || '',
+            start_date: bDoc.start_date || bDoc.starting_date,
+            end_date: bDoc.end_date || bDoc.ending_date,
+            booking_id: newBookingId
+          };
+        }
+      }
+
       if (firstUnit) {
-        setSchedItems(prev => prev.map((r, i) => i === 0 ? {
-          ...r,
+        const startD = resolveSchedStartDate(firstUnit.start_date);
+        const endD = resolveSchedEndDate(firstUnit.end_date, startD);
+        setSchedItems([{
           itemCode: firstUnit.item_code,
           itemName: firstUnit.item_name,
-          startDate: firstUnit.start_date || r.startDate,
-          endDate: firstUnit.end_date || r.endDate,
+          propertyGroup: firstUnit.property_group || bDoc.property_group || '',
+          startDate: startD,
+          periodicity: isAdhocMaintenance ? 'Random' : 'Weekly',
+          noOfVisits: isAdhocMaintenance ? 1 : 1,
+          endDate: endD,
           bookingId: newBookingId
-        } : r));
+        }]);
+
+        if (firstUnit.item_code) {
+          fetchItemDetails(firstUnit.item_code).then(details => {
+            if (details.propertyGroup) {
+              setSchedPropertyGroup(details.propertyGroup);
+              setSchedItems(prev => prev.map((r, i) => i === 0 ? { ...r, propertyGroup: details.propertyGroup, itemName: details.itemName || r.itemName } : r));
+            }
+          });
+        }
       }
     }
   };
 
   useEffect(() => {
     if (!erpnextConfig?.url) return;
-    const fields = encodeURIComponent(JSON.stringify(["name", "item_name", "item_group"]));
+    const fields = encodeURIComponent(JSON.stringify(["name", "item_name", "item_group", "custom_property_group", "custom_property_reference"]));
     const filters = encodeURIComponent(JSON.stringify([["item_group", "=", "Commercial"]]));
     fetch(`${erpnextConfig.url}/api/resource/Item?fields=${fields}&filters=${filters}&limit_page_length=1000`, { credentials: 'include', headers: { 'Content-Type': 'application/json' } })
       .then(r => r.ok ? r.json() : null)
@@ -3900,17 +4347,94 @@ export default function Maintenance({
 
   useEffect(() => {
     if (preSelectedIssue) {
-      setSchedIssueNumber(preSelectedIssue.id || ''); setSchedDescription(preSelectedIssue.subject || '');
-      const mt = tenants.find(t => t.name === preSelectedIssue.tenantName || t.id === preSelectedIssue.customerId || t.name === preSelectedIssue.customerId);
-      if (mt) {
-        setSchedCustomer(mt.id);
-        if (mt.propertyId) { setSchedPropertyId(mt.propertyId); setSchedProperty(mt.propertyId); }
-        if (mt.unitSpec) setSchedUnitSpec(mt.unitSpec);
-      }
-      setShowScheduleModal(true);
-      if (clearPreSelectedIssue) clearPreSelectedIssue();
+      setSchedIssueNumber(preSelectedIssue.id || '');
+      setSchedDescription(preSelectedIssue.subject || '');
+
+      const bookingId = preSelectedIssue.booking_number || preSelectedIssue.custom_booking_id || preSelectedIssue.custom_booking_number;
+
+      const initScheduleFromIssue = async () => {
+        let bDoc = null;
+        if (bookingId) {
+          bDoc = await fetchBookingDetailsById(bookingId);
+          if (!bDoc && bookings?.length) {
+            bDoc = bookings.find(b => b.name === bookingId || b.id === bookingId);
+          }
+        }
+
+        if (bDoc) {
+          const cust = bDoc.customer || bDoc.customer_name || preSelectedIssue.customerId;
+          if (cust) await handleSchedCustomerChange(cust);
+          setSchedBookingId(bDoc.name || bookingId);
+          if (bDoc.property_group) setSchedPropertyGroup(bDoc.property_group);
+        } else {
+          const mt = tenants.find(t => t.name === preSelectedIssue.tenantName || t.id === preSelectedIssue.customerId || t.name === preSelectedIssue.customerId);
+          if (mt) {
+            setSchedCustomer(mt.id);
+            if (mt.propertyId) { setSchedPropertyId(mt.propertyId); setSchedProperty(mt.propertyId); }
+            if (mt.unitSpec) setSchedUnitSpec(mt.unitSpec);
+          }
+        }
+        setShowScheduleModal(true);
+        if (clearPreSelectedIssue) clearPreSelectedIssue();
+      };
+
+      initScheduleFromIssue();
     }
-  }, [preSelectedIssue, tenants, clearPreSelectedIssue]);
+  }, [preSelectedIssue, tenants, bookings, clearPreSelectedIssue]);
+
+  useEffect(() => {
+    if (preSelectedTaskId) {
+      setActiveSection('task');
+      const loadPreselectedTask = async () => {
+        const taskId = preSelectedTaskId;
+        const matched = (workOrders || []).find(w => w.name === taskId || w.id === taskId);
+        setSelectedWorkOrder(matched || { name: taskId, id: taskId });
+        if (erpnextConfig?.url) {
+          try {
+            const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskId)}`, {
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+            });
+            if (res.ok) {
+              const json = await res.json();
+              setSelectedWorkOrder(json.data || json);
+            }
+          } catch (err) {
+            console.warn('Failed fetching preSelectedTaskId Task document:', err);
+          }
+        }
+        if (clearPreSelectedTaskId) clearPreSelectedTaskId();
+      };
+      loadPreselectedTask();
+    }
+  }, [preSelectedTaskId, erpnextConfig, clearPreSelectedTaskId]);
+
+  useEffect(() => {
+    const handleNav = async (e) => {
+      const taskId = e.detail?.taskId;
+      if (taskId) {
+        setActiveSection('task');
+        const matched = (workOrders || []).find(w => w.name === taskId || w.id === taskId);
+        setSelectedWorkOrder(matched || { name: taskId, id: taskId });
+        if (erpnextConfig?.url) {
+          try {
+            const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(taskId)}`, {
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+            });
+            if (res.ok) {
+              const json = await res.json();
+              setSelectedWorkOrder(json.data || json);
+            }
+          } catch (err) {
+            console.warn('Failed fetching Task doc on pms:navigate-task:', err);
+          }
+        }
+      }
+    };
+    window.addEventListener('pms:navigate-task', handleNav);
+    return () => window.removeEventListener('pms:navigate-task', handleNav);
+  }, [erpnextConfig, workOrders]);
 
   const getPropertyNameById = (propId) => {
     const prop = (properties || []).find(p => p.id === propId || p.name === propId);
@@ -3932,6 +4456,8 @@ export default function Maintenance({
   const handleOpenScheduleModal = () => {
     setSchedCustomer('');
     setSchedBookingId('');
+    setSchedProperty('');
+    setSchedPropertyGroup('');
     setBookingDetails(null);
     setCustomerBookings([]);
     setCustomerUnits([]);
@@ -3939,6 +4465,7 @@ export default function Maintenance({
     setSchedItems([{
       itemCode: '',
       itemName: '',
+      propertyGroup: '',
       startDate: new Date().toISOString().split('T')[0],
       periodicity: 'Weekly',
       noOfVisits: 1,
@@ -3953,12 +4480,50 @@ export default function Maintenance({
   const handleCreateScheduleSubmit = async (e) => {
     e.preventDefault();
     setSubmittingSchedule(true); setScheduleStatusMessage(null);
+
+    const today = getTodayStr();
+    for (const r of schedItems) {
+      const sDate = resolveSchedStartDate(r.startDate);
+      if (sDate < today) {
+        showToast("Start Date cannot be before today.", "error");
+        setSubmittingSchedule(false);
+        return;
+      }
+      if (r.endDate) {
+        if (r.endDate < sDate || r.endDate < today) {
+          showToast(`End Date cannot be before Start Date (${sDate}) and today.`, "error");
+          setSubmittingSchedule(false);
+          return;
+        }
+      }
+    }
+
     const tenantObj = (tenants || []).find(t => t.id === schedCustomer || t.name === schedCustomer);
     const customerName = tenantObj ? (tenantObj.customer_name || tenantObj.name) : schedCustomer;
     const payload = {
-      customer: schedCustomer, customer_name: customerName, transaction_date: schedTransDate,
-      custom_booking_id: schedBookingId, custom_property: schedProperty, status: 'Draft', custom_maintenance_schedule: custom_maintenance_schedule,
-      items: schedItems.map(r => ({ item_code: r.itemCode, item_name: r.itemName || r.itemCode, start_date: r.startDate, periodicity: r.periodicity, no_of_visits: Number(r.noOfVisits) || 1, end_date: r.endDate }))
+      customer: schedCustomer,
+      customer_name: customerName,
+      transaction_date: schedTransDate,
+      custom_booking_id: schedBookingId,
+      custom_property: schedProperty,
+      custom_property_group: schedPropertyGroup,
+      property_group: schedPropertyGroup,
+      status: 'Draft',
+      custom_maintenance_schedule: custom_maintenance_schedule,
+      items: schedItems.map(r => {
+        const sDate = resolveSchedStartDate(r.startDate);
+        const eDate = resolveSchedEndDate(r.endDate, sDate);
+        return {
+          item_code: r.itemCode,
+          item_name: r.itemName || r.itemCode,
+          property_group: r.propertyGroup || schedPropertyGroup || '',
+          custom_property_group: r.propertyGroup || schedPropertyGroup || '',
+          start_date: sDate,
+          periodicity: isAdhocMaintenance ? 'Random' : (r.periodicity || 'Weekly'),
+          no_of_visits: isAdhocMaintenance ? 1 : (Number(r.noOfVisits) || 1),
+          end_date: eDate
+        };
+      })
     };
     try {
       await onCreateSchedule(payload);
@@ -4071,6 +4636,8 @@ export default function Maintenance({
           custom_mantainence_sechedule: selectedSchedule.name,
           custom_maintenance_schedule: selectedSchedule.name,
           custom_property: selectedSchedule.custom_property || '',
+          custom_property_group: detailPropertyGroup || selectedSchedule.custom_property_group || selectedSchedule.property_group || '',
+          property_group: detailPropertyGroup || selectedSchedule.custom_property_group || selectedSchedule.property_group || '',
           custom_customer_name: selectedSchedule.customer_name || selectedSchedule.customer || '',
           custom_booking_id: selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || '',
           custom_booking_number: selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || '',
@@ -4315,44 +4882,65 @@ export default function Maintenance({
         const prev = sameSchedule ? prevRows.find(p => p.id === rowId || p.scheduled_date === (r.scheduled_date || selectedSchedule.transaction_date)) : null;
 
         const rowDate = r.scheduled_date || selectedSchedule.transaction_date;
+        const currentTaskId = r.task_id || r.custom_task_id || prev?.task_id || '';
         const matchedTask = (workOrders || []).find(w =>
-          (w.custom_mantainence_sechedule === selectedSchedule.name ||
+          (currentTaskId && (w.name === currentTaskId || w.id === currentTaskId)) ||
+          (w.description && (w.description.includes(rowId) || (r.name && w.description.includes(r.name)))) ||
+          ((w.custom_mantainence_sechedule === selectedSchedule.name ||
            w.custom_maintenance_schedule === selectedSchedule.name ||
            w.scheduleId === selectedSchedule.name) &&
-          (w.exp_start_date === rowDate || (w.subject && w.subject.includes(rowDate)))
+          (w.exp_start_date === rowDate || (w.subject && w.subject.includes(rowDate))))
         );
 
-        const taskId = r.task_id || r.custom_task_id || prev?.task_id || matchedTask?.name || matchedTask?.id || '';
+        const taskId = currentTaskId || matchedTask?.name || matchedTask?.id || '';
         const taskStatus = r.task_status || r.custom_task_status || prev?.task_status || matchedTask?.status || (taskId ? 'Open' : '');
 
-        let initialPersons = prev?.persons;
-        if (!initialPersons || initialPersons.length === 0) {
-          if (r.persons && Array.isArray(r.persons)) {
-            initialPersons = r.persons;
-          } else if (r.custom_assign_to) {
-            initialPersons = typeof r.custom_assign_to === 'string'
-              ? r.custom_assign_to.split(',').map(s => s.trim()).filter(Boolean)
-              : [r.custom_assign_to];
-          } else if (matchedTask?.custom_assign_to_ && Array.isArray(matchedTask.custom_assign_to_)) {
-            initialPersons = matchedTask.custom_assign_to_.map(e => e.emp_id || e.employee || e.name).filter(Boolean);
-          } else if (matchedTask?.custom_assign_to_vendor && Array.isArray(matchedTask.custom_assign_to_vendor)) {
-            initialPersons = matchedTask.custom_assign_to_vendor.map(v => v.vendor_name || v.vendor || v.name).filter(Boolean);
-          } else {
-            initialPersons = [];
+        let initialPersons = null;
+        if (r.custom_select_person) {
+          initialPersons = typeof r.custom_select_person === 'string'
+            ? r.custom_select_person.split(',').map(s => s.trim()).filter(Boolean)
+            : [r.custom_select_person];
+        } else if (r.persons && Array.isArray(r.persons) && r.persons.length > 0) {
+          initialPersons = r.persons;
+        } else if (r.custom_assign_to) {
+          initialPersons = typeof r.custom_assign_to === 'string'
+            ? r.custom_assign_to.split(',').map(s => s.trim()).filter(Boolean)
+            : [r.custom_assign_to];
+        } else if (prev?.persons && prev.persons.length > 0) {
+          initialPersons = prev.persons;
+        } else if (matchedTask?.custom_assign_to_vendor && Array.isArray(matchedTask.custom_assign_to_vendor) && matchedTask.custom_assign_to_vendor.length > 0) {
+          initialPersons = matchedTask.custom_assign_to_vendor.map(v => v.vendor_name || v.vendor || v.name).filter(Boolean);
+        } else if (matchedTask?.custom_assign_to_ && Array.isArray(matchedTask.custom_assign_to_) && matchedTask.custom_assign_to_.length > 0) {
+          initialPersons = matchedTask.custom_assign_to_.map(e => e.emp_name || e.emp_id || e.employee || e.name).filter(Boolean);
+        } else if (matchedTask?.description) {
+          const matchPersons = matchedTask.description.match(/Persons:\s*([^\n\r]+)/i);
+          if (matchPersons && matchPersons[1]) {
+            initialPersons = matchPersons[1].split(',').map(s => s.trim()).filter(Boolean);
           }
         }
+        if (!initialPersons) initialPersons = [];
+
+        let rowAssignType = r.custom_assign || prev?.assign_type || r.assign_type || matchedTask?.custom_assign;
+        if (!rowAssignType && matchedTask?.description) {
+          const matchAssign = matchedTask.description.match(/Assign:\s*([^\n\r]+)/i);
+          if (matchAssign && matchAssign[1]) {
+            rowAssignType = matchAssign[1].trim();
+          }
+        }
+        if (!rowAssignType) rowAssignType = 'Employee';
 
         return {
           id: rowId,
           schedule_name: selectedSchedule.name,
           schedule_id: r.name || `row-${idx}`,
           item_code: r.item_code || selectedSchedule.items?.[0]?.item_code || '001',
+          property_group: r.custom_property_group || r.property_group || prev?.property_group || detailPropertyGroup || selectedSchedule.custom_property_group || selectedSchedule.property_group || '',
           scheduled_date: rowDate,
           maintenance_visit: r.maintenance_visit || '',
           visit_status: r.completion_status || r.visit_status || '',
           task_id: taskId,
           task_status: taskStatus,
-          assign_type: prev?.assign_type || r.assign_type || r.custom_assign || (matchedTask?.custom_assign || 'Employee'),
+          assign_type: rowAssignType,
           persons: initialPersons,
           selected: prev ? prev.selected : false,
           subject: `${selectedSchedule.name} - ${r.item_code || selectedSchedule.items?.[0]?.item_code || '001'} - ${rowDate}`
@@ -4360,6 +4948,80 @@ export default function Maintenance({
       });
     });
   }, [selectedSchedule?.name, selectedSchedule?.schedules, workOrders]);
+
+  // ── Auto-resolve person names and assignments from Task doc if missing on child table ───
+  useEffect(() => {
+    if (!erpnextConfig?.url || !selectedSchedule) return;
+    const rowsNeedingPersons = scheduleRows.filter(r => r.task_id && (!r.persons || r.persons.length === 0));
+    if (rowsNeedingPersons.length === 0) return;
+
+    let isMounted = true;
+    (async () => {
+      for (const row of rowsNeedingPersons) {
+        try {
+          const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(row.task_id)}`, {
+            credentials: 'include',
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+          });
+          if (res.ok) {
+            const json = await res.json();
+            const taskDoc = json.data || json;
+            let fetchedPersons = [];
+            let fetchedAssign = taskDoc.custom_assign || row.assign_type || 'Employee';
+
+            if (taskDoc.custom_assign_to_vendor && Array.isArray(taskDoc.custom_assign_to_vendor) && taskDoc.custom_assign_to_vendor.length > 0) {
+              fetchedPersons = taskDoc.custom_assign_to_vendor.map(v => v.vendor_name || v.vendor || v.name).filter(Boolean);
+              if (!taskDoc.custom_assign) fetchedAssign = 'Vendor';
+            } else if (taskDoc.custom_assign_to_ && Array.isArray(taskDoc.custom_assign_to_) && taskDoc.custom_assign_to_.length > 0) {
+              fetchedPersons = taskDoc.custom_assign_to_.map(e => e.emp_name || e.emp_id || e.employee || e.name).filter(Boolean);
+              if (!taskDoc.custom_assign) fetchedAssign = 'Employee';
+            }
+
+            if (fetchedPersons.length === 0 && taskDoc.description) {
+              const matchPersons = taskDoc.description.match(/Persons:\s*([^\n\r]+)/i);
+              if (matchPersons && matchPersons[1]) {
+                fetchedPersons = matchPersons[1].split(',').map(s => s.trim()).filter(Boolean);
+              }
+              const matchAssign = taskDoc.description.match(/Assign:\s*([^\n\r]+)/i);
+              if (matchAssign && matchAssign[1]) {
+                fetchedAssign = matchAssign[1].trim();
+              }
+            }
+
+            if (isMounted && fetchedPersons.length > 0) {
+              setScheduleRows(prev => prev.map(pr => pr.id === row.id ? { ...pr, persons: fetchedPersons, assign_type: fetchedAssign } : pr));
+
+              // Also persist back to child table in ERPNext so next time it is already saved
+              if (row.schedule_id && !row.schedule_id.startsWith('sched-') && !row.schedule_id.startsWith('row-')) {
+                const personVal = fetchedPersons[0] || fetchedPersons.join(', ');
+                try {
+                  await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({
+                      doctype: 'Maintenance Schedule Detail',
+                      name: row.schedule_id,
+                      fieldname: {
+                        custom_assign: fetchedAssign,
+                        custom_select_person: personVal,
+                        custom_assign_to: personVal
+                      }
+                    })
+                  });
+                } catch {}
+              }
+            }
+          }
+        } catch (err) {
+          console.warn(`Failed fetching Task ${row.task_id} to resolve person:`, err);
+        }
+      }
+    })();
+
+    return () => { isMounted = false; };
+  }, [scheduleRows.map(r => `${r.id}:${r.task_id}:${r.persons?.length || 0}`).join(','), erpnextConfig, selectedSchedule]);
+
 
   const get_persons = (row) => {
     if (!row) return [];
@@ -4528,6 +5190,8 @@ export default function Maintenance({
             custom_customer_contact: selectedSchedule.custom_customer_contact || selectedSchedule.contact_no || '',
             custom_customer_name: selectedSchedule.customer_name || selectedSchedule.customer || '',
             custom_property: selectedSchedule.custom_property || '',
+            custom_property_group: detailPropertyGroup || row.property_group || selectedSchedule.custom_property_group || selectedSchedule.property_group || '',
+            property_group: detailPropertyGroup || row.property_group || selectedSchedule.custom_property_group || selectedSchedule.property_group || '',
             custom_assign: row.assign_type,
             custom_assign_to_: isEmp ? empRows : [],
             custom_assign_to_vendor: isEmp ? [] : vendorRows,
@@ -4686,19 +5350,45 @@ export default function Maintenance({
             ...r,
             task_id: updatedRowsMap[r.id].task_id,
             task_status: updatedRowsMap[r.id].task_status,
+            assign_type: r.assign_type,
+            persons: r.persons,
             selected: false
           };
         }
         return r;
       }));
 
+      // Update selectedSchedule state locally so custom_assign and custom_select_person persist in view
+      setSelectedSchedule(prev => {
+        if (!prev) return prev;
+        const updated = (prev.schedules || []).map(s => {
+          const matched = scheduleRows.find(r => r.schedule_id === s.name || r.id === s.name || r.scheduled_date === s.scheduled_date);
+          if (matched) {
+            const up = updatedRowsMap[matched.id];
+            const pVal = Array.isArray(matched.persons) && matched.persons.length > 0 ? matched.persons[0] : (matched.persons || '');
+            return {
+              ...s,
+              task_id: up ? up.task_id : (s.task_id || matched.task_id),
+              custom_assign: matched.assign_type,
+              custom_select_person: pVal,
+              custom_assign_to: pVal
+            };
+          }
+          return s;
+        });
+        return { ...prev, schedules: updated };
+      });
+
       // Sync schedule child table & docstatus in ERPNext
       if (erpnextConfig?.url && selectedSchedule?.name) {
         try {
           const updatedSchedules = scheduleRows.map(r => {
             const up = updatedRowsMap[r.id];
+            const pList = Array.isArray(r.persons) ? r.persons : (r.persons ? [r.persons] : []);
+            const personVal = pList[0] || pList.join(', ') || '';
+            const isRealRow = r.schedule_id && !r.schedule_id.startsWith('sched-') && !r.schedule_id.startsWith('row-');
             return {
-              name: r.schedule_id.startsWith('sched-') ? undefined : r.schedule_id,
+              name: isRealRow ? r.schedule_id : undefined,
               item_code: r.item_code,
               scheduled_date: r.scheduled_date,
               maintenance_visit: r.maintenance_visit || undefined,
@@ -4706,16 +5396,107 @@ export default function Maintenance({
               task_id: up ? up.task_id : (r.task_id || undefined),
               task_status: up ? up.task_status : (r.task_status || undefined),
               custom_assign: r.assign_type,
-              custom_assign_to: Array.isArray(r.persons) ? r.persons.join(', ') : (r.persons || undefined)
+              custom_select_person: personVal,
+              custom_assign_to: personVal
             };
           });
 
-          await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(selectedSchedule.name)}`, {
-            method: 'PUT',
-            credentials: 'include',
-            headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
-            body: JSON.stringify({ schedules: updatedSchedules, status: 'Submitted', docstatus: 1, csrf_token: activeCsrfToken })
-          });
+          // 1. Direct PUT on Maintenance Schedule
+          try {
+            await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(selectedSchedule.name)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+              body: JSON.stringify({ schedules: updatedSchedules, status: 'Submitted', docstatus: 1, csrf_token: activeCsrfToken })
+            });
+          } catch (putErr) {
+            console.warn("Parent Maintenance Schedule PUT error:", putErr);
+          }
+
+          // 2. Direct set_value on each child row in Maintenance Schedule Detail
+          for (let row of selected) {
+            const childRowName = row.schedule_id;
+            if (!childRowName || childRowName.startsWith('sched-') || childRowName.startsWith('row-')) continue;
+            const up = updatedRowsMap[row.id];
+            const pList = Array.isArray(row.persons) ? row.persons : (row.persons ? [row.persons] : []);
+            const personVal = pList[0] || pList.join(', ') || '';
+
+            const childFields = {
+              custom_assign: row.assign_type,
+              custom_select_person: personVal,
+              custom_assign_to: personVal
+            };
+            if (up?.task_id) {
+              childFields.task_id = up.task_id;
+            }
+
+            // Method A: Call custom backend API (direct frappe.db.set_value, bypasses docstatus lock)
+            try {
+              await fetch(`${erpnextConfig.url}/api/method/pms.utils.update_maintenance_schedule_row`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                body: JSON.stringify({
+                  schedule_name: selectedSchedule.name,
+                  row_name: childRowName,
+                  custom_assign: row.assign_type,
+                  custom_select_person: personVal,
+                  task_id: up?.task_id || row.task_id,
+                  csrf_token: activeCsrfToken
+                })
+              });
+            } catch (pmsErr) {
+              console.warn("pms.utils.update_maintenance_schedule_row error:", pmsErr);
+            }
+
+            // Method B: frappe.client.set_value with field dictionary
+            try {
+              await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                body: JSON.stringify({
+                  doctype: 'Maintenance Schedule Detail',
+                  name: childRowName,
+                  fieldname: childFields,
+                  csrf_token: activeCsrfToken
+                })
+              });
+            } catch (setErr) {
+              console.warn("frappe.client.set_value dict error:", setErr);
+            }
+
+            // Method C: frappe.client.set_value with individual fields
+            for (const [fKey, fVal] of Object.entries(childFields)) {
+              if (fVal === undefined || fVal === null) continue;
+              try {
+                await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                  body: JSON.stringify({
+                    doctype: 'Maintenance Schedule Detail',
+                    name: childRowName,
+                    fieldname: fKey,
+                    value: fVal,
+                    csrf_token: activeCsrfToken
+                  })
+                });
+              } catch (singleErr) {}
+            }
+
+            // Method D: REST PUT fallback on child row
+            try {
+              await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule%20Detail/${encodeURIComponent(childRowName)}`, {
+                method: 'PUT',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                body: JSON.stringify({ ...childFields, csrf_token: activeCsrfToken })
+              });
+            } catch (innerErr) {
+              console.warn(`Failed updating child row ${childRowName}:`, innerErr);
+            }
+          }
         } catch (schedSyncErr) {
           console.warn("Failed syncing Maintenance Schedule:", schedSyncErr);
         }
@@ -4792,10 +5573,13 @@ export default function Maintenance({
       setCustomerBookings([]);
       setCustomerUnits([]);
       setSchedBookingId('');
+      setSchedProperty('');
+      setSchedPropertyGroup('');
       setBookingDetails(null);
       setSchedItems([{
         itemCode: '',
         itemName: '',
+        propertyGroup: '',
         startDate: new Date().toISOString().split('T')[0],
         periodicity: 'Weekly',
         noOfVisits: 1,
@@ -5017,15 +5801,31 @@ export default function Maintenance({
         if (firstUnit.property) setSchedProperty(firstUnit.property);
         if (firstUnit.property_group) setSchedPropertyGroup(firstUnit.property_group);
 
+        const startD = resolveSchedStartDate(firstUnit.start_date);
+        const endD = resolveSchedEndDate(firstUnit.end_date, startD);
         setSchedItems([{
           itemCode: firstUnit.item_code,
           itemName: firstUnit.item_name,
-          startDate: firstUnit.start_date,
+          propertyGroup: firstUnit.property_group || '',
+          startDate: startD,
           periodicity: "Weekly",
           noOfVisits: 1,
-          endDate: firstUnit.end_date,
+          endDate: endD,
           bookingId: firstUnit.booking_id
         }]);
+
+        // Search from Item DocType by Unit Code for custom_property_group
+        if (firstUnit.item_code) {
+          fetchItemDetails(firstUnit.item_code).then(details => {
+            if (details.itemName) {
+              setSchedItems(prev => prev.map((r, i) => i === 0 ? { ...r, itemName: details.itemName, propertyGroup: details.propertyGroup || r.propertyGroup } : r));
+            }
+            if (details.propertyGroup) {
+              setSchedPropertyGroup(details.propertyGroup);
+              setSchedItems(prev => prev.map((r, i) => i === 0 ? { ...r, propertyGroup: details.propertyGroup } : r));
+            }
+          });
+        }
       } else if (fullBookings.length > 0) {
         const firstB = fullBookings[0];
         setSchedBookingId(firstB.name);
@@ -5034,13 +5834,16 @@ export default function Maintenance({
         if (propId) setSchedProperty(propId);
         if (firstB.property_group) setSchedPropertyGroup(firstB.property_group);
 
+        const startD = resolveSchedStartDate(firstB.start_date || firstB.starting_date);
+        const endD = resolveSchedEndDate(firstB.end_date || firstB.ending_date, startD);
         setSchedItems([{
           itemCode: "",
           itemName: "",
-          startDate: firstB.start_date || firstB.starting_date || new Date().toISOString().split('T')[0],
+          propertyGroup: firstB.property_group || '',
+          startDate: startD,
           periodicity: "Weekly",
           noOfVisits: 1,
-          endDate: firstB.end_date || firstB.ending_date || "",
+          endDate: endD,
           bookingId: firstB.name
         }]);
       }
@@ -5346,41 +6149,20 @@ export default function Maintenance({
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
                   <div>Type: <strong>{selectedSchedule.custom_maintenance_schedule || 'PM Schedule'}</strong></div>
-                  <div>Unit Name: <strong>{selectedSchedule.items?.[0]?.item_name || '—'}</strong></div>
                   <div>Tenant: <strong>{selectedSchedule.customer_name || selectedSchedule.customer}</strong></div>
                   <div>Date: <strong>{selectedSchedule.transaction_date}</strong></div>
                   {/* <div>Task Id: <strong>{selectedSchedule.type || '—'}</strong></div> */}
                   <div>Status: <span className={`badge ${selectedSchedule.status === 'Completed' ? 'badge-success' : isScheduleSubmitted(selectedSchedule) ? 'badge-info' : 'badge-warning'}`}>{getScheduleDisplayStatus(selectedSchedule)}</span></div>
                 </div>
 
-                {/* ── Customer & Booking ID (Matching 2nd Image) ── */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
-                  <div>
-                    <label style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-secondary, #64748b)', marginBottom: 4, display: 'block' }}>customer</label>
-                    <input
-                      type="text"
-                      readOnly
-                      value={selectedSchedule.customer || selectedSchedule.customer_name || ''}
-                      style={{
-                        width: '100%',
-                        background: 'var(--bg-tertiary, #f8fafc)',
-                        border: '1px solid var(--border-color, #e2e8f0)',
-                        borderRadius: 6,
-                        padding: '8px 12px',
-                        fontSize: 12.5,
-                        color: 'var(--text-primary, #0f172a)',
-                        outline: 'none',
-                        cursor: 'default',
-                        boxSizing: 'border-box'
-                      }}
-                    />
-                  </div>
+                {/* ── Booking ID & Property Group Name ── */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, marginTop: 4 }}>
                   <div>
                     <label style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-secondary, #64748b)', marginBottom: 4, display: 'block' }}>Booking ID</label>
                     <input
                       type="text"
                       readOnly
-                      value={selectedSchedule.custom_booking_id || ''}
+                      value={selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || ''}
                       placeholder="—"
                       style={{
                         width: '100%',
@@ -5396,9 +6178,35 @@ export default function Maintenance({
                       }}
                     />
                   </div>
+                  <div>
+                    <label style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-secondary, #64748b)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Building size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
+                      Property Group Name
+                      {loadingDetailPropertyGroup && <span style={{ fontSize: 10, color: 'var(--brand-color, #065f46)', fontWeight: 400 }}>(Searching Item DocType…)</span>}
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={detailPropertyGroup || selectedSchedule.custom_property_group || selectedSchedule.property_group || ''}
+                      placeholder={loadingDetailPropertyGroup ? 'Searching Item DocType by Unit Code...' : '—'}
+                      style={{
+                        width: '100%',
+                        background: 'var(--bg-tertiary, #f8fafc)',
+                        border: '1px solid var(--border-color, #e2e8f0)',
+                        borderRadius: 6,
+                        padding: '8px 12px',
+                        fontSize: 12.5,
+                        color: 'var(--text-primary, #0f172a)',
+                        outline: 'none',
+                        cursor: 'default',
+                        boxSizing: 'border-box',
+                        fontWeight: 500
+                      }}
+                    />
+                  </div>
                 </div>
 
-                {/* ── Schedule Rows Table (Matching 2nd Image) ── */}
+                {/* ── Schedule Rows Table ── */}
                 <div style={{
                   border: '1px solid var(--border-color, #e2e8f0)',
                   borderRadius: 6,
@@ -5420,10 +6228,9 @@ export default function Maintenance({
                             style={{ cursor: 'pointer' }}
                           />
                         </th>
-                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Item Code</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Unit Code</th>
+                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Property Group Name</th>
                         <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Scheduled Date</th>
-                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Maintenance Visit</th>
-                        <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Visit Status</th>
                         <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Task ID</th>
                         <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>Task Status</th>
                         <th style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)', width: 100 }}>Assign</th>
@@ -5434,7 +6241,7 @@ export default function Maintenance({
                     <tbody>
                       {scheduleRows.length === 0 ? (
                         <tr>
-                          <td colSpan="10" style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                          <td colSpan="9" style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)' }}>
                             No schedule visits available.
                           </td>
                         </tr>
@@ -5463,9 +6270,10 @@ export default function Maintenance({
                                 />
                               </td>
                               <td style={{ padding: '8px 10px', fontWeight: 500 }}>{row.item_code}</td>
+                              <td style={{ padding: '8px 10px', color: 'var(--text-secondary)' }}>
+                                {row.property_group || detailPropertyGroup || selectedSchedule.custom_property_group || selectedSchedule.property_group || (loadingDetailPropertyGroup ? '…' : '—')}
+                              </td>
                               <td style={{ padding: '8px 10px', color: 'var(--text-secondary)' }}>{row.scheduled_date}</td>
-                              <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{row.maintenance_visit || '—'}</td>
-                              <td style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{row.visit_status || '—'}</td>
                               <td style={{ padding: '8px 10px' }}>
                                 {row.task_id ? (
                                   <span
@@ -5528,69 +6336,58 @@ export default function Maintenance({
                                 {hasTask ? (
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                                     {Array.isArray(row.persons) && row.persons.length > 0 ? (
-                                      row.persons.map(p => (
-                                        <span key={p} style={{ background: 'var(--bg-tertiary, #f1f5f9)', border: '1px solid var(--border-color, #e2e8f0)', padding: '2px 6px', borderRadius: 4, fontSize: 10.5, fontWeight: 500 }}>
-                                          {p}
-                                        </span>
-                                      ))
+                                      row.persons.map(p => {
+                                        let displayName = p;
+                                        if (row.assign_type === 'Employee') {
+                                          const emp = (employees || []).find(e => e.id === p || e.name === p);
+                                          if (emp?.name && emp.name !== p) displayName = emp.name;
+                                        } else {
+                                          const v = (vendorDir || vendors || []).find(x => x.id === p || x.name === p);
+                                          if (v?.name && v.name !== p) displayName = v.name;
+                                        }
+                                        return (
+                                          <span
+                                            key={p}
+                                            style={{
+                                              background: 'var(--bg-tertiary, #f1f5f9)',
+                                              border: '1px solid var(--border-color, #e2e8f0)',
+                                              padding: '3px 8px',
+                                              borderRadius: 4,
+                                              fontSize: 11,
+                                              fontWeight: 600,
+                                              color: 'var(--text-primary, #0f172a)'
+                                            }}
+                                          >
+                                            {displayName}
+                                          </span>
+                                        );
+                                      })
                                     ) : (
                                       <span style={{ color: 'var(--text-muted)' }}>—</span>
                                     )}
                                   </div>
                                 ) : (
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-                                    {Array.isArray(row.persons) && row.persons.map(pId => (
-                                      <span
-                                        key={pId}
-                                        style={{
-                                          background: 'var(--bg-tertiary, #f1f5f9)',
-                                          border: '1px solid var(--border-color, #e2e8f0)',
-                                          borderRadius: 4,
-                                          padding: '2px 6px',
-                                          fontSize: 10.5,
-                                          fontWeight: 500,
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: 4
-                                        }}
-                                      >
-                                        {pId}
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setScheduleRows(prev => prev.map(r => r.id === row.id ? { ...r, persons: (r.persons || []).filter(x => x !== pId) } : r));
-                                          }}
-                                          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#ef4444', fontWeight: 700, fontSize: 12, lineHeight: 1 }}
-                                        >
-                                          ×
-                                        </button>
-                                      </span>
-                                    ))}
                                     <select
                                       className="form-select"
-                                      value=""
+                                      value={row.persons?.[0] || ""}
                                       onChange={(e) => {
                                         const val = e.target.value;
-                                        if (!val) return;
                                         setScheduleRows(prev => prev.map(r => {
                                           if (r.id !== row.id) return r;
-                                          const current = Array.isArray(r.persons) ? r.persons : [];
-                                          if (!current.includes(val)) {
-                                            return { ...r, persons: [...current, val] };
-                                          }
-                                          return r;
+                                          return { ...r, persons: val ? [val] : [] };
                                         }));
                                       }}
-                                      style={{ fontSize: 11, padding: '2px 6px', height: 26, minWidth: (row.persons?.length || 0) > 0 ? 95 : 130 }}
+                                      style={{ fontSize: 11, padding: '3px 6px', height: 28, borderRadius: 4, width: '100%', minWidth: 140 }}
                                     >
-                                      <option value="">{(row.persons?.length || 0) > 0 ? '+ Add' : (row.assign_type === 'Employee' ? 'Select Employee' : 'Select Vendor')}</option>
-                                      {(row.assign_type === 'Employee' ? employees : vendorDir).map(item => {
-                                        const id = item.id || item.name;
-                                        const name = item.employee_name || item.name;
-                                        if (row.persons?.includes(id)) return null;
+                                      <option value="">{row.assign_type === 'Employee' ? 'Select Employee' : 'Select Vendor'}</option>
+                                      {(row.assign_type === 'Employee' ? employees : (vendorDir.length > 0 ? vendorDir : vendors)).map(item => {
+                                        const val = item.name || item.id || item.employee_name || item.supplier_name;
+                                        const label = item.name || item.employee_name || item.supplier_name || item.id;
+                                        const sub = item.id && item.id !== label ? ` (${item.id})` : (item.type || item.designation ? ` (${item.type || item.designation})` : '');
                                         return (
-                                          <option key={id} value={id}>
-                                            {id}{name && name !== id ? ` (${name})` : ''}
+                                          <option key={val} value={val}>
+                                            {label}{sub}
                                           </option>
                                         );
                                       })}
@@ -5653,36 +6450,8 @@ export default function Maintenance({
                   </table>
                 </div>
 
-                {/* ── Submit / Create Task Action Button (Matching 1st Image) ── */}
-                {(!scheduleRows.length || !scheduleRows.every(r => Boolean(r.task_id))) ? (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    style={{
-                      marginTop: 10,
-                      width: '100%',
-                      background: '#ffdd00',
-                      color: '#000',
-                      fontWeight: 700,
-                      fontSize: 13,
-                      padding: '10px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 8,
-                      borderRadius: 6,
-                      border: 'none',
-                      cursor: busyTasks ? 'not-allowed' : 'pointer',
-                      opacity: busyTasks ? 0.7 : 1,
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
-                    }}
-                    disabled={busyTasks}
-                    onClick={() => submit_tasks()}
-                  >
-                    <Hammer size={15} />
-                    {busyTasks && !busyRowId ? 'Creating Task(s)…' : `Create Task${scheduleRows.filter(r => r.selected && !r.task_id).length > 0 ? ` (${scheduleRows.filter(r => r.selected && !r.task_id).length} selected)` : ''}`}
-                  </button>
-                ) : (
+                {/* ── Bottom status / All Scheduled Tasks Created Message (Bottom Create Task button hidden per request) ── */}
+                {scheduleRows.length > 0 && scheduleRows.every(r => Boolean(r.task_id)) && (
                   <div style={{
                     marginTop: 10,
                     padding: '10px 14px',
@@ -5731,7 +6500,7 @@ export default function Maintenance({
                       }} style={{ cursor: 'pointer', backgroundColor: selectedWorkOrder?.name === wo.id || selectedWorkOrder?.id === wo.id ? 'var(--bg-accent-alpha)' : '' }}>
                         <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{wo.id}</td>
                         <td>{wo.property}</td><td>{wo.category}</td>
-                        <td>${wo.estCost.toLocaleString()}</td>
+                        <td>F${wo.estCost.toLocaleString()}</td>
                         <td><span className={`badge ${wo.status === 'Completed' ? 'badge-success' : wo.status === 'Pending Approval' ? 'badge-warning' : 'badge-info'}`}>{wo.status}</span></td>
                       </tr>
                     ))}
@@ -5754,33 +6523,46 @@ export default function Maintenance({
 
                 {/* Status badges */}
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                  {selectedWorkOrder.status === 'Completed' ? (
-                    <span className="badge" style={{ fontSize: 10, padding: "2px 8px", backgroundColor: "#10b981", color: "#fff", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      <Check size={11} /> Submitted (Locked)
-                    </span>
-                  ) : selectedWorkOrder.status === 'Cancelled' || selectedWorkOrder.docstatus === 2 ? (
-                    <span className="badge badge-danger" style={{ fontSize: 10, padding: "2px 8px" }}>Cancelled</span>
-                  ) : (
-                    <span className="badge badge-secondary" style={{ fontSize: 10, padding: "2px 8px" }}>Draft</span>
+                  <span className={`badge ${selectedWorkOrder.status === 'Completed' ? 'badge-success' : selectedWorkOrder.status === 'Cancelled' ? 'badge-danger' : 'badge-info'}`} style={{ fontSize: 10, padding: "2px 8px" }}>
+                    {selectedWorkOrder.status || 'Open'}
+                  </span>
+                  <span className="badge badge-warning" style={{ fontSize: 10, padding: "2px 8px" }}>
+                    {selectedWorkOrder.priority || 'Low'}
+                  </span>
+                  {(selectedWorkOrder.status === 'Completed' || selectedWorkOrder.docstatus === 1) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        window.dispatchEvent(new CustomEvent('pms:generate-task-invoice', { detail: { task: selectedWorkOrder } }));
+                      }}
+                      style={{
+                        marginLeft: "auto",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        padding: "3px 10px",
+                        borderRadius: 6,
+                        background: "#2563eb",
+                        color: "#fff",
+                        border: "none",
+                        cursor: "pointer"
+                      }}
+                    >
+                      <Receipt size={12} />
+                      <span>{(selectedWorkOrder.custom_sales_invoice || selectedWorkOrder.custom_sales_invoice_id) ? "Go To Invoice" : "Genarate Sales Invoice"}</span>
+                      {(selectedWorkOrder.custom_sales_invoice || selectedWorkOrder.custom_sales_invoice_id) && <ExternalLink size={11} />}
+                    </button>
                   )}
-                  <span className="badge badge-info" style={{ fontSize: 10, padding: "2px 8px" }}>{selectedWorkOrder.status || 'Open'}</span>
-                  <span className="badge badge-warning" style={{ fontSize: 10, padding: "2px 8px" }}>{selectedWorkOrder.priority || 'Low'}</span>
-                  <span className="badge badge-success" style={{ fontSize: 10, padding: "2px 8px" }}>{selectedWorkOrder.progress || 0}% Complete</span>
                 </div>
-
-                {/* Submitted status banner */}
-                {selectedWorkOrder.status === 'Completed' && (
-                  <div style={{ padding: "8px 12px", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.25)", borderRadius: 6, color: "#10b981", fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
-                    <CheckCircle2 size={13} style={{ flexShrink: 0 }} />
-                    <span><strong>Submitted State:</strong> Task is finalized and locked for modifications.</span>
-                  </div>
-                )}
 
                 {/* Reference info */}
                 <Section title="Reference">
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                     <Info title="Schedule" value={selectedWorkOrder.custom_mantainence_sechedule || selectedWorkOrder.custom_maintenance_schedule || selectedWorkOrder.scheduleId} />
                     <Info title="Booking" value={selectedWorkOrder.custom_booking_number || selectedWorkOrder.custom_booking_id} />
+                    <Info title="Property Group" value={selectedWorkOrder.custom_property_group || selectedWorkOrder.property_group || '—'} />
                     <Info title="Tenant" value={selectedWorkOrder.custom_customer_name} />
                     <Info title="Contact" value={selectedWorkOrder.custom_customer_contact} />
                     <Info title="Company" value={selectedWorkOrder.company} />
@@ -5793,8 +6575,8 @@ export default function Maintenance({
                 {/* Cost - Hidden as requested, code retained */}
                 {/* <Section title="Cost">
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <Info title="Costing" value={`$${Number(selectedWorkOrder.total_costing_amount || 0).toLocaleString()}`} />
-                    <Info title="Billing" value={`$${Number(selectedWorkOrder.total_billing_amount || 0).toLocaleString()}`} />
+                    <Info title="Costing" value={`F$${Number(selectedWorkOrder.total_costing_amount || 0).toLocaleString()}`} />
+                    <Info title="Billing" value={`F$${Number(selectedWorkOrder.total_billing_amount || 0).toLocaleString()}`} />
                   </div>
                 </Section> */}
 
@@ -5808,6 +6590,7 @@ export default function Maintenance({
                     getCsrfToken={getCsrfToken}
                     showToast={showToast}
                     onNavigateToQuotation={onNavigateToQuotation}
+                    onNavigateToInvoice={onNavigateToInvoice}
                     // onSaved={(updatedData) => {
                     //   setSelectedWorkOrder(updatedData);
                     //   setWorkOrders(prev => prev.map(wo => wo.id === updatedData.name ? { ...wo, technician: (updatedData.custom_assign_to_ || [])[0]?.employee || wo.technician, vendor: (updatedData.custom_assign_to_vendor || [])[0]?.vendor || wo.vendor } : wo));
@@ -5879,8 +6662,8 @@ export default function Maintenance({
             <h3 style={{ fontSize: 15, marginBottom: 14 }}>Vendor Directory & Quotations Log</h3>
             <div className="table-container">
               <table className="custom-table">
-                <thead><tr><th>Vendor ID</th><th>Vendor Name</th><th>Service Category</th><th>Rating</th></tr></thead>
-                <tbody>{vendorDir.map(v => <tr key={v.id} onClick={() => setSelectedVendor(v)} style={{ cursor: 'pointer', backgroundColor: selectedVendor?.id === v.id ? 'var(--bg-accent-alpha)' : '' }}><td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{v.id}</td><td>{v.name}</td><td>{v.type}</td><td>⭐ {v.rating}</td></tr>)}</tbody>
+                <thead><tr><th>Vendor ID</th><th>Vendor Name</th><th>Service Category</th></tr></thead>
+                <tbody>{vendorDir.map(v => <tr key={v.id} onClick={() => setSelectedVendor(v)} style={{ cursor: 'pointer', backgroundColor: selectedVendor?.id === v.id ? 'var(--bg-accent-alpha)' : '' }}><td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{v.id}</td><td>{v.name}</td><td>{v.type}</td></tr>)}</tbody>
               </table>
             </div>
           </div>
@@ -5914,8 +6697,22 @@ export default function Maintenance({
 
       {/* ── CREATE MAINTENANCE SCHEDULE MODAL ── */}
       {showScheduleModal && (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: 880, width: '96vw', display: 'flex', flexDirection: 'column', maxHeight: '90vh', borderRadius: 12, boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.04)', overflow: 'hidden' }}>
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.45)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          animation: 'fadeIn 0.2s ease-out'
+        }}>
+          <div className="modal-content" style={{ maxWidth: 880, width: '96vw', display: 'flex', flexDirection: 'column', maxHeight: '90vh', borderRadius: 16, boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0,0,0,0.05)', overflow: 'hidden', background: 'var(--bg-primary, #ffffff)' }}>
             <div className="modal-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)', flexShrink: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div style={{ width: 38, height: 38, borderRadius: 8, background: 'var(--bg-accent-alpha, rgba(6, 95, 70, 0.1))', color: 'var(--brand-color, #065f46)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -5956,7 +6753,7 @@ export default function Maintenance({
                 )}
 
                 {/* Single-Row Balanced Header Fields */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 1fr', gap: '16px 20px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '16px 16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
                       <User size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
@@ -6043,65 +6840,125 @@ export default function Maintenance({
 
                 {/* Items Child Table */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <label style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>Scheduled Items & Units</label>
                       <span style={{ fontSize: 11, background: 'var(--bg-accent-alpha, rgba(6, 95, 70, 0.1))', color: 'var(--brand-color, #065f46)', padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
                         {schedItems.length} {schedItems.length === 1 ? 'item' : 'items'}
                       </span>
+                      {bookingUnits && bookingUnits.length > 1 && (
+                        <span style={{ fontSize: 11, background: 'rgba(2, 132, 199, 0.1)', color: '#0284c7', padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
+                          {bookingUnits.length} units available for this booking
+                        </span>
+                      )}
                     </div>
-                    {/* <button
-                      type="button"
-                      onClick={() => setSchedItems(prev => [
-                        ...prev,
-                        {
-                          itemCode: '',
-                          itemName: '',
-                          startDate: schedTransDate || new Date().toISOString().split('T')[0],
-                          periodicity: 'Weekly',
-                          noOfVisits: 1,
-                          endDate: '',
-                          bookingId: schedBookingId || ''
-                        }
-                      ])}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 5,
-                        padding: '4px 10px',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        borderRadius: 6,
-                        border: '1px solid var(--border-color)',
-                        background: 'var(--bg-secondary)',
-                        color: 'var(--brand-color, #065f46)',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <Plus size={13} />
-                      Add Unit
-                    </button> */}
+                    {bookingUnits && bookingUnits.length > 1 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {schedItems.length < bookingUnits.length && (
+                          <button
+                            type="button"
+                            onClick={handleAddAllBookingUnits}
+                            disabled={submittingSchedule}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: 'var(--brand-color, #065f46)',
+                              background: 'var(--bg-accent-alpha, rgba(6, 95, 70, 0.08))',
+                              border: '1px solid var(--brand-color, #065f46)',
+                              borderRadius: 6,
+                              padding: '5px 10px',
+                              cursor: 'pointer',
+                              transition: 'all 0.15s ease'
+                            }}
+                            title="Add all units from this booking at once"
+                          >
+                            <Check size={13} />
+                            Add All Units ({bookingUnits.length})
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleAddSchedUnit}
+                          disabled={submittingSchedule}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: '#ffffff',
+                            background: 'var(--brand-color, #065f46)',
+                            border: 'none',
+                            borderRadius: 6,
+                            padding: '5px 12px',
+                            cursor: 'pointer',
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+                            transition: 'all 0.15s ease'
+                          }}
+                          title="Add unit to schedule"
+                        >
+                          <Plus size={14} />
+                          Add Unit
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-secondary)' }}>
                     <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto' }}>
                       <table style={{ width: '100%', minWidth: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 12 }}>
                         <colgroup>
-                          <col style={{ width: '21%' }} />
-                          <col style={{ width: '20%' }} />
-                          <col style={{ width: '16%' }} />
-                          <col style={{ width: '15%' }} />
-                          <col style={{ width: '11%' }} />
-                          <col style={{ width: '14%' }} />
-                          <col style={{ width: '3%' }} />
+                          {isAdhocMaintenance ? (
+                            <>
+                              <col style={{ width: '25%' }} />
+                              <col style={{ width: '25%' }} />
+                              <col style={{ width: '20%' }} />
+                              <col style={{ width: '13%' }} />
+                              <col style={{ width: '13%' }} />
+                              <col style={{ width: '4%' }} />
+                            </>
+                          ) : (
+                            <>
+                              <col style={{ width: '18%' }} />
+                              <col style={{ width: '17%' }} />
+                              <col style={{ width: '17%' }} />
+                              <col style={{ width: '14%' }} />
+                              <col style={{ width: '13%' }} />
+                              <col style={{ width: '8%' }} />
+                              <col style={{ width: '10%' }} />
+                              <col style={{ width: '3%' }} />
+                            </>
+                          )}
                         </colgroup>
                         <thead>
                           <tr style={{ background: 'var(--bg-tertiary, #f8fafc)', position: 'sticky', top: 0, zIndex: 1, borderBottom: '1px solid var(--border-color)' }}>
-                            {['Unit Code', 'Unit Name', 'Start Date', 'Periodicity', 'No. of Visits', 'End Date', ''].map((h, i) => (
-                              <th key={i} style={{ ...thStyle, textTransform: 'uppercase', letterSpacing: '0.03em', fontSize: 11, fontWeight: 600, padding: i === 4 ? '10px 4px' : '10px 8px', textAlign: i === 4 || i === 6 ? 'center' : 'left', whiteSpace: 'nowrap' }}>
-                                {h}
-                              </th>
-                            ))}
+                            {(isAdhocMaintenance
+                              ? ['Unit Code', 'Unit Name', 'Property Group', 'Start Date', 'End Date', '']
+                              : ['Unit Code', 'Unit Name', 'Property Group', 'Start Date', 'Periodicity', 'No. of Visits', 'End Date', '']
+                            ).map((h, i, arr) => {
+                              const isLast = i === arr.length - 1;
+                              const isVisits = !isAdhocMaintenance && i === 5;
+                              return (
+                                <th
+                                  key={i}
+                                  style={{
+                                    ...thStyle,
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.03em',
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    padding: isVisits ? '10px 4px' : '10px 8px',
+                                    textAlign: isVisits || isLast ? 'center' : 'left',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                >
+                                  {h}
+                                </th>
+                              );
+                            })}
                           </tr>
                         </thead>
                         <tbody>
@@ -6134,42 +6991,122 @@ export default function Maintenance({
                                     style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)', fontWeight: 500 }}
                                   >
                                     <option value="">-- Select Unit --</option>
-                                    {availableSchedUnits.map((u, uIdx) => {
-                                      const optVal = u.booking_id ? `${u.booking_id}::${u.item_code || u.name}` : (u.item_code || u.name);
-                                      const hasMultipleBookings = customerBookings && customerBookings.length > 1;
-                                      const optLabel = u.booking_id && hasMultipleBookings
-                                        ? `${u.name || u.item_code} · ${u.booking_id}`
-                                        : (u.name || u.item_code);
-                                      return (
-                                        <option key={`${optVal}-${uIdx}`} value={optVal}>
-                                          {optLabel}
-                                        </option>
-                                      );
-                                    })}
+                                    {bookingUnits && bookingUnits.length > 0 ? (
+                                      <>
+                                        <optgroup label={`Units in ${schedBookingId || 'Selected Booking'} (${bookingUnits.length})`}>
+                                          {bookingUnits.map((u, uIdx) => {
+                                            const uCode = u.item_code || u.name;
+                                            const optVal = u.booking_id ? `${u.booking_id}::${uCode}` : uCode;
+                                            const isAddedInOtherRow = schedItems.some((r, i) => i !== idx && r.itemCode === uCode);
+                                            return (
+                                              <option key={`bu-${optVal}-${uIdx}`} value={optVal}>
+                                                {uCode}{u.item_name && u.item_name !== uCode ? ` · ${u.item_name}` : ''}{isAddedInOtherRow ? ' (Added)' : ''}
+                                              </option>
+                                            );
+                                          })}
+                                        </optgroup>
+                                        {availableSchedUnits.filter(u => {
+                                          const uCode = u.item_code || u.name;
+                                          return (!u.booking_id || u.booking_id !== schedBookingId) && !bookingUnits.some(bu => (bu.item_code || bu.name) === uCode);
+                                        }).length > 0 && (
+                                          <optgroup label="Other Units">
+                                            {availableSchedUnits
+                                              .filter(u => {
+                                                const uCode = u.item_code || u.name;
+                                                return (!u.booking_id || u.booking_id !== schedBookingId) && !bookingUnits.some(bu => (bu.item_code || bu.name) === uCode);
+                                              })
+                                              .map((u, uIdx) => {
+                                                const optVal = u.booking_id ? `${u.booking_id}::${u.item_code || u.name}` : (u.item_code || u.name);
+                                                return (
+                                                  <option key={`oth-${optVal}-${uIdx}`} value={optVal}>
+                                                    {u.name || u.item_code}{u.booking_id ? ` · ${u.booking_id}` : ''}
+                                                  </option>
+                                                );
+                                              })}
+                                          </optgroup>
+                                        )}
+                                      </>
+                                    ) : (
+                                      availableSchedUnits.map((u, uIdx) => {
+                                        const optVal = u.booking_id ? `${u.booking_id}::${u.item_code || u.name}` : (u.item_code || u.name);
+                                        const hasMultipleBookings = customerBookings && customerBookings.length > 1;
+                                        const optLabel = u.booking_id && hasMultipleBookings
+                                          ? `${u.name || u.item_code} · ${u.booking_id}`
+                                          : (u.name || u.item_code);
+                                        return (
+                                          <option key={`${optVal}-${uIdx}`} value={optVal}>
+                                            {optLabel}
+                                          </option>
+                                        );
+                                      })
+                                    )}
                                   </select>
                                 )}
                               </td>
                               <td style={{ padding: '8px 10px', color: 'var(--text-secondary, #6b7280)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {row.itemName || (row.itemCode ? '…' : '—')}
                               </td>
-                              <td style={{ padding: '8px 10px' }}>
-                                <input type="date" value={row.startDate} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, startDate: e.target.value } : r))} className="form-input" required style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }} />
+                              <td style={{ padding: '8px 10px', color: 'var(--text-secondary, #6b7280)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {row.propertyGroup || schedPropertyGroup || (row.itemCode ? '…' : '—')}
                               </td>
                               <td style={{ padding: '8px 10px' }}>
-                                <select value={row.periodicity} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, periodicity: e.target.value } : r))} className="form-select" required style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }}>
-                                  <option value="Weekly">Weekly</option>
-                                  <option value="Monthly">Monthly</option>
-                                  <option value="Quarterly">Quarterly</option>
-                                  <option value="Half Yearly">Half Yearly</option>
-                                  <option value="Yearly">Yearly</option>
-                                  <option value="Random">Random</option>
-                                </select>
+                                <input
+                                  type="date"
+                                  min={getTodayStr()}
+                                  value={resolveSchedStartDate(row.startDate)}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const today = getTodayStr();
+                                    const finalStart = val && val < today ? today : val;
+                                    setSchedItems(prev => prev.map((r, i) => {
+                                      if (i !== idx) return r;
+                                      const newEndDate = (r.endDate && r.endDate < finalStart) ? finalStart : r.endDate;
+                                      return { ...r, startDate: finalStart, endDate: newEndDate };
+                                    }));
+                                  }}
+                                  className="form-input"
+                                  required
+                                  style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }}
+                                />
                               </td>
+                              {!isAdhocMaintenance && (
+                                <>
+                                  <td style={{ padding: '8px 10px' }}>
+                                    <select value={row.periodicity} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, periodicity: e.target.value } : r))} className="form-select" required style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                                      <option value="Weekly">Weekly</option>
+                                      <option value="Monthly">Monthly</option>
+                                      <option value="Quarterly">Quarterly</option>
+                                      <option value="Half Yearly">Half Yearly</option>
+                                      <option value="Yearly">Yearly</option>
+                                      <option value="Random">Random</option>
+                                    </select>
+                                  </td>
+                                  <td style={{ padding: '8px 10px' }}>
+                                    <input type="number" min="1" value={row.noOfVisits} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, noOfVisits: Number(e.target.value) || 1 } : r))} className="form-input" required style={{ ...inputStyle, height: 32, textAlign: 'center', borderRadius: 6, border: '1px solid var(--border-color)' }} />
+                                  </td>
+                                </>
+                              )}
                               <td style={{ padding: '8px 10px' }}>
-                                <input type="number" min="1" value={row.noOfVisits} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, noOfVisits: Number(e.target.value) || 1 } : r))} className="form-input" required style={{ ...inputStyle, height: 32, textAlign: 'center', borderRadius: 6, border: '1px solid var(--border-color)' }} />
-                              </td>
-                              <td style={{ padding: '8px 10px' }}>
-                                <input type="date" value={row.endDate} onChange={(e) => setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, endDate: e.target.value } : r))} className="form-input" required style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }} />
+                                <input
+                                  type="date"
+                                  min={resolveSchedStartDate(row.startDate) > getTodayStr() ? resolveSchedStartDate(row.startDate) : getTodayStr()}
+                                  value={resolveSchedEndDate(row.endDate, row.startDate)}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const today = getTodayStr();
+                                    const currentStart = resolveSchedStartDate(row.startDate);
+                                    const minAllowed = currentStart > today ? currentStart : today;
+                                    let finalEnd = val;
+                                    if (val && val < minAllowed) {
+                                      finalEnd = minAllowed;
+                                      showToast?.(`End Date cannot be before ${minAllowed === currentStart ? 'Start Date' : 'today'}.`, 'warning');
+                                    }
+                                    setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, endDate: finalEnd } : r));
+                                  }}
+                                  className="form-input"
+                                  required
+                                  style={{ ...inputStyle, height: 32, borderRadius: 6, border: '1px solid var(--border-color)' }}
+                                />
                               </td>
                               <td style={{ padding: '8px 10px', textAlign: 'center' }}>
                                 <button
@@ -6187,6 +7124,50 @@ export default function Maintenance({
                         </tbody>
                       </table>
                     </div>
+                    {bookingUnits && bookingUnits.length > 1 && (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 14px',
+                        background: 'var(--bg-tertiary, #f8fafc)',
+                        borderTop: '1px solid var(--border-color)',
+                        fontSize: 12,
+                        color: 'var(--text-secondary)'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span>
+                            Booking <strong>{schedBookingId}</strong> has <strong>{bookingUnits.length} units</strong> ({schedItems.length} selected)
+                          </span>
+                        </div>
+                        {schedItems.length < bookingUnits.length ? (
+                          <button
+                            type="button"
+                            onClick={handleAddSchedUnit}
+                            disabled={submittingSchedule}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: 'var(--brand-color, #065f46)',
+                              background: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                              padding: '2px 6px'
+                            }}
+                          >
+                            <Plus size={13} />
+                            Add next unit
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: 11, color: 'var(--brand-color, #065f46)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <Check size={13} /> All {bookingUnits.length} units added
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -6314,7 +7295,7 @@ export default function Maintenance({
                 {consumeItemsList.map((entry, idx) => (
                   <div key={idx} style={{ border: '1px solid var(--border-color)', padding: 10, borderRadius: 6, position: 'relative', background: 'var(--bg-tertiary)' }}>
                     {consumeItemsList.length > 1 && <button type="button" onClick={() => setConsumeItemsList(prev => prev.filter((_, i) => i !== idx))} style={{ position: 'absolute', top: 6, right: 6, background: 'none', border: 'none', color: 'var(--text-danger)', fontSize: 14, cursor: 'pointer' }}>Remove</button>}
-                    <div className="form-group" style={{ marginBottom: 8 }}><label className="form-label" style={{ fontSize: 11 }}>Select Stock Item</label><select value={entry.itemCode} onChange={(e) => setConsumeItemsList(prev => prev.map((item, i) => i === idx ? { ...item, itemCode: e.target.value } : item))} className="form-select" required><option value="">-- Select Item --</option>{stockItems.map(s => <option key={s.code} value={s.code}>{s.name} (Qty: {s.qty} - ${s.unitCost}/ea)</option>)}</select></div>
+                    <div className="form-group" style={{ marginBottom: 8 }}><label className="form-label" style={{ fontSize: 11 }}>Select Stock Item</label><select value={entry.itemCode} onChange={(e) => setConsumeItemsList(prev => prev.map((item, i) => i === idx ? { ...item, itemCode: e.target.value } : item))} className="form-select" required><option value="">-- Select Item --</option>{stockItems.map(s => <option key={s.code} value={s.code}>{s.name} (Qty: {s.qty} - F${s.unitCost}/ea)</option>)}</select></div>
                     <div className="grid-2col" style={{ gap: 8, gridTemplateColumns: '1fr 2fr' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}><label className="form-label" style={{ fontSize: 11 }}>Qty</label><input type="number" value={entry.qty} onChange={(e) => setConsumeItemsList(prev => prev.map((item, i) => i === idx ? { ...item, qty: Number(e.target.value) } : item))} className="form-input" min="1" required /></div>
                       <div className="form-group" style={{ marginBottom: 0 }}><label className="form-label" style={{ fontSize: 11 }}>Comment</label><input type="text" value={entry.comment} onChange={(e) => setConsumeItemsList(prev => prev.map((item, i) => i === idx ? { ...item, comment: e.target.value } : item))} className="form-input" placeholder="Note on usage" /></div>
@@ -6338,7 +7319,7 @@ export default function Maintenance({
               <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div className="form-group"><label className="form-label">Estimate Type</label><select value={estType} onChange={(e) => setEstType(e.target.value)} className="form-select"><option value="Material">Material</option><option value="Labour">Labour</option></select></div>
                 {estType === 'Material' ? (
-                  <div className="form-group"><label className="form-label">Select Item</label><select value={estItemCode} onChange={(e) => setEstItemCode(e.target.value)} className="form-select" required><option value="">-- Choose Item --</option>{stockItems.map(s => <option key={s.code} value={s.code}>{s.name} (${s.unitCost}/ea)</option>)}</select></div>
+                  <div className="form-group"><label className="form-label">Select Item</label><select value={estItemCode} onChange={(e) => setEstItemCode(e.target.value)} className="form-select" required><option value="">-- Choose Item --</option>{stockItems.map(s => <option key={s.code} value={s.code}>{s.name} (F${s.unitCost}/ea)</option>)}</select></div>
                 ) : (
                   <div className="form-group"><label className="form-label">Labour Description</label><input type="text" value={estName} onChange={(e) => setEstName(e.target.value)} className="form-input" placeholder="e.g. Technician Labour" required /></div>
                 )}

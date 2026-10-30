@@ -46,7 +46,7 @@ export default function Listings({ properties }) {
               <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <span style={{ fontSize: 10, color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase' }}>Monthly Asking</span>
-                  <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--brand-color)' }}>${listing.rent.toLocaleString()}</span>
+                  <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--brand-color)' }}>F${listing.rent.toLocaleString()}</span>
                 </div>
                 <button className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 12, gap: 4 }}>
                   <CheckCircle2 size={13} /> Apply Space
