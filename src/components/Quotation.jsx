@@ -5592,10 +5592,13 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     if (parts.length > 3) {
       const lastNum = parseInt(parts[parts.length - 1], 10);
       if (!isNaN(lastNum)) {
-        // -1 (standard Frappe 1st amendment) is Version 2
-        // -2 (e.g. QTN-10-00531-2) is Version 2
-        // -3 is Version 3, etc.
-        const vNum = lastNum === 1 ? 2 : lastNum;
+        // In Frappe ERPNext:
+        // Base document has no suffix: Version 1
+        // 1st amendment has suffix -1: Version 2 (1 + 1)
+        // 2nd amendment has suffix -2: Version 3 (2 + 1)
+        // 3rd amendment has suffix -3: Version 4 (3 + 1)
+        // 4th amendment has suffix -4: Version 5 (4 + 1)
+        const vNum = lastNum + 1;
         return { version_no: vNum, isAmendment: true };
       }
     }
@@ -6016,8 +6019,18 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         setSelectedQuotationDetail(activeDoc);
 
         // 4. Build version history / negotiations array from actual quotation documents
+        const seenVerNos = new Set();
+        let maxVerAssigned = 0;
+
         const parsedNegotiations = detailedVersions.map((vDoc, index) => {
           const vInfo = getQuotationVersionInfo(vDoc.name, rootName);
+          let assignedVerNo = vInfo.version_no;
+          if (seenVerNos.has(assignedVerNo) || assignedVerNo <= maxVerAssigned) {
+            assignedVerNo = maxVerAssigned + 1;
+          }
+          seenVerNos.add(assignedVerNo);
+          maxVerAssigned = Math.max(maxVerAssigned, assignedVerNo);
+
           const commItem = (vDoc.items || []).find(isCommercialItem);
           const itemDisc = commItem && commItem.discount_amount !== undefined ? parseFloat(commItem.discount_amount) : 0;
           const docDisc = parseFloat(vDoc.discount_amount) || 0;
@@ -6043,7 +6056,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
           return {
             name: vDoc.name,
-            version_no: vInfo.version_no,
+            version_no: assignedVerNo,
             total_versions: detailedVersions.length,
             is_current: vDoc.name === activeName,
             negotiation_date: vDoc.custom_last_negotiation_date || vDoc.transaction_date || (vDoc.creation ? vDoc.creation.split(' ')[0] : '—'),
@@ -6830,6 +6843,35 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       }
     }
 
+    // Ensure custom_tenant_onboarding is populated from doc, previous version, or root
+    if (!fullDoc.custom_tenant_onboarding) {
+      const candidateOnboarding = (qDoc?.custom_tenant_onboarding || selectedQuotationDetail?.custom_tenant_onboarding || '').trim();
+      if (candidateOnboarding) {
+        fullDoc = { ...fullDoc, custom_tenant_onboarding: candidateOnboarding };
+      } else if (fullDoc.amended_from || fullDoc.name.includes('-')) {
+        const rootName = getRootQuotationName(fullDoc.name, fullDoc);
+        const rootDoc = quotations.find(q => (q.name === rootName || q.name === fullDoc.amended_from) && (q.custom_tenant_onboarding || q.tenant_onboarding));
+        if (rootDoc) {
+          fullDoc = { ...fullDoc, custom_tenant_onboarding: (rootDoc.custom_tenant_onboarding || rootDoc.tenant_onboarding || '').trim() };
+        } else if (erpnextConfig?.url) {
+          try {
+            const rootRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(fullDoc.amended_from || rootName)}?fields=["name","custom_tenant_onboarding","tenant_onboarding"]`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (rootRes.ok) {
+              const rootJson = await rootRes.json();
+              const rData = rootJson.data || rootJson;
+              const foundOnb = (rData.custom_tenant_onboarding || rData.tenant_onboarding || '').trim();
+              if (foundOnb) {
+                fullDoc = { ...fullDoc, custom_tenant_onboarding: foundOnb };
+              }
+            }
+          } catch (_) { }
+        }
+      }
+    }
+
     setVersionTargetQuotation(fullDoc);
 
     const rawItems = fullDoc.items || [];
@@ -7076,6 +7118,47 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         };
       });
 
+      // Resolve custom_tenant_onboarding from previous quotation (versionTargetQuotation, selectedQuotationDetail, or family)
+      let prevOnboarding = (versionTargetQuotation.custom_tenant_onboarding || versionTargetQuotation.tenant_onboarding || '').trim();
+      if (!prevOnboarding && selectedQuotationDetail && selectedQuotationDetail.name === versionTargetQuotation.name) {
+        prevOnboarding = (selectedQuotationDetail.custom_tenant_onboarding || selectedQuotationDetail.tenant_onboarding || '').trim();
+      }
+      if (!prevOnboarding && quotations && quotations.length > 0) {
+        const matchInList = quotations.find(q =>
+          (q.name === versionTargetQuotation.name || q.name === rootName || q.amended_from === rootName || q.name === versionTargetQuotation.amended_from) &&
+          (q.custom_tenant_onboarding || q.tenant_onboarding)
+        );
+        if (matchInList) {
+          prevOnboarding = (matchInList.custom_tenant_onboarding || matchInList.tenant_onboarding || '').trim();
+        }
+      }
+      if (!prevOnboarding && erpnextConfig?.url) {
+        try {
+          const qCheckRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(versionTargetQuotation.name)}?fields=["name","custom_tenant_onboarding","tenant_onboarding","amended_from"]`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (qCheckRes.ok) {
+            const qCheckJson = await qCheckRes.json();
+            const qCheckDoc = qCheckJson.data || qCheckJson;
+            prevOnboarding = (qCheckDoc.custom_tenant_onboarding || qCheckDoc.tenant_onboarding || '').trim();
+            if (!prevOnboarding && (qCheckDoc.amended_from || rootName)) {
+              const rootCheckRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(qCheckDoc.amended_from || rootName)}?fields=["name","custom_tenant_onboarding","tenant_onboarding"]`, {
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' }
+              });
+              if (rootCheckRes.ok) {
+                const rootCheckJson = await rootCheckRes.json();
+                const rootDoc = rootCheckJson.data || rootCheckJson;
+                prevOnboarding = (rootDoc.custom_tenant_onboarding || rootDoc.tenant_onboarding || '').trim();
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Could not query previous quotation for custom_tenant_onboarding:', err);
+        }
+      }
+
       // 1. Primary path: Use dedicated server-side endpoint in pms.utils
       let createdName = null;
       let usedCustomApi = false;
@@ -7090,7 +7173,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             items: JSON.stringify(erpItems),
             start_date: versionStartDate,
             end_date: versionEndDate,
-            remarks: versionNote && versionNote.trim() ? `Version ${nextVersionNo}: ${versionNote.trim()}` : ''
+            remarks: versionNote && versionNote.trim() ? `Version ${nextVersionNo}: ${versionNote.trim()}` : '',
+            custom_tenant_onboarding: prevOnboarding || undefined,
+            tenant_onboarding: prevOnboarding || undefined
           })
         });
 
@@ -7238,12 +7323,16 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const versionTaxes = versionNetTotal * versionTaxRatePct;
         const versionGrandTotal = versionNetTotal + versionTaxes;
 
-        // Calculate version candidate name (e.g. QTN-10-00531 -> QTN-10-00531-2)
+        // Calculate version candidate name (e.g. QTN-10-00531 -> QTN-10-00531-1, QTN-10-00531-2)
         const parts = latestSource.name.split('-');
-        const nextNum = parts.length > 3 && !isNaN(parseInt(parts[parts.length - 1], 10))
+        let nextNum = parts.length > 3 && !isNaN(parseInt(parts[parts.length - 1], 10))
           ? parseInt(parts[parts.length - 1], 10) + 1
-          : 2;
-        const candidateName = `${rootName}-${nextNum}`;
+          : 1;
+        let candidateName = `${rootName}-${nextNum}`;
+        while (quotations && quotations.some(q => q.name === candidateName)) {
+          nextNum++;
+          candidateName = `${rootName}-${nextNum}`;
+        }
 
         const payload = {
           name: candidateName,
@@ -7274,6 +7363,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           custom_end_date: versionEndDate || null,
           custom_template: latestSource.custom_template || quotetamplate || "Quotation Template 1",
           taxes_and_charges: latestSource.taxes_and_charges || "Fiji Tax - CFPL",
+          custom_tenant_onboarding: prevOnboarding || latestSource.custom_tenant_onboarding || latestSource.tenant_onboarding || null,
+          tenant_onboarding: prevOnboarding || latestSource.tenant_onboarding || latestSource.custom_tenant_onboarding || null,
           amended_from: latestSource.name,
           items: erpItems,
           total: versionNetTotal,
@@ -7349,6 +7440,39 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             })
           });
         } catch (_) { }
+      }
+
+      // Explicitly ensure custom_tenant_onboarding is persisted on the newly created quotation
+      if (createdName && prevOnboarding) {
+        try {
+          await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({
+              doctype: 'Quotation',
+              name: createdName,
+              fieldname: 'custom_tenant_onboarding',
+              value: prevOnboarding
+            })
+          });
+        } catch (setErr) {
+          console.warn('Could not set custom_tenant_onboarding via set_value:', setErr);
+        }
+
+        try {
+          await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(createdName)}`, {
+            method: 'PUT',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({
+              custom_tenant_onboarding: prevOnboarding,
+              tenant_onboarding: prevOnboarding
+            })
+          });
+        } catch (putErr) {
+          console.warn('Could not set custom_tenant_onboarding via PUT:', putErr);
+        }
       }
 
       showToast('success', `Revised quotation ${createdName || ''} created successfully.`);
@@ -8714,10 +8838,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--brand-color)' }}>{selectedQuotationDetail.name}</span>
                       {(() => {
                         const root = getRootQuotationName(selectedQuotationDetail.name, selectedQuotationDetail);
-                        const vInfo = getQuotationVersionInfo(selectedQuotationDetail.name, root);
+                        const matchInNeg = negotiations.find(n => n.name === selectedQuotationDetail.name);
+                        const vNum = matchInNeg?.version_no || getQuotationVersionInfo(selectedQuotationDetail.name, root).version_no;
                         return (
                           <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
-                            V{vInfo.version_no}
+                            V{vNum}
                           </span>
                         );
                       })()}
@@ -10916,10 +11041,16 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       );
                     })()}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontSize: 11.5, color: '#64748b' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontSize: 11.5, color: '#64748b', flexWrap: 'wrap' }}>
                     <span>Source: <strong style={{ color: '#0f172a' }}>{versionTargetQuotation.name}</strong></span>
                     <span>•</span>
                     <span>Customer: <strong style={{ color: '#0f172a' }}>{versionTargetQuotation.customer_name || versionTargetQuotation.party_name}</strong></span>
+                    {(versionTargetQuotation.custom_tenant_onboarding || versionTargetQuotation.tenant_onboarding) && (
+                      <>
+                        <span>•</span>
+                        <span>Tenant Onboarding: <strong style={{ color: '#0a6c66', fontWeight: 700 }}>{versionTargetQuotation.custom_tenant_onboarding || versionTargetQuotation.tenant_onboarding}</strong></span>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

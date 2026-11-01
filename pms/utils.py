@@ -43,6 +43,29 @@ def validate_tenant_onboarding_phone(doc, method=None):
     validate_tenant_onboarding_signed_document(doc, method)
 
 
+def sync_quotation_tenant_onboarding(doc, method=None):
+    """
+    Ensures that when a Quotation is amended or created from an existing quotation,
+    custom_tenant_onboarding is inherited from the previous/parent quotation.
+    """
+    if not doc.get("custom_tenant_onboarding"):
+        parent_name = doc.get("amended_from")
+        if not parent_name and doc.name and "-" in doc.name:
+            parts = doc.name.split("-")
+            if len(parts) > 3 and parts[-1].isdigit():
+                parent_name = "-".join(parts[:-1])
+
+        if parent_name and frappe.db.exists("Quotation", parent_name):
+            onboarding_val = (
+                frappe.db.get_value("Quotation", parent_name, "custom_tenant_onboarding")
+                or frappe.db.get_value("Quotation", parent_name, "tenant_onboarding")
+            )
+            if onboarding_val:
+                doc.custom_tenant_onboarding = onboarding_val
+                if hasattr(doc, "tenant_onboarding"):
+                    doc.tenant_onboarding = onboarding_val
+
+
 def validate_quotation_payment_details(doc, method=None):
     # Skip validation if flagged (e.g. during automatic submission for cancellation/revision)
     if getattr(doc.flags, "ignore_payment_validation", False) or getattr(doc.flags, "ignore_validate", False):
@@ -574,7 +597,7 @@ def update_maintenance_schedule_row(schedule_name=None, row_name=None, custom_as
 
 
 @frappe.whitelist()
-def create_revised_quotation(source_quotation=None, items=None, start_date=None, end_date=None, remarks=None):
+def create_revised_quotation(source_quotation=None, items=None, start_date=None, end_date=None, remarks=None, custom_tenant_onboarding=None, tenant_onboarding=None):
     """
     Submits and cancels the source quotation (if not already cancelled),
     and creates an amended Quotation version (e.g. QTN-10-00531-1, QTN-10-00531-2).
@@ -589,6 +612,8 @@ def create_revised_quotation(source_quotation=None, items=None, start_date=None,
         end_date = frappe.form_dict.get("end_date")
     if not remarks:
         remarks = frappe.form_dict.get("remarks")
+    if not custom_tenant_onboarding:
+        custom_tenant_onboarding = frappe.form_dict.get("custom_tenant_onboarding") or frappe.form_dict.get("tenant_onboarding")
 
     if not source_quotation:
         frappe.throw("Source Quotation is required.")
@@ -648,7 +673,7 @@ def create_revised_quotation(source_quotation=None, items=None, start_date=None,
         next_ver = int(parts[-1]) + 1
     else:
         root_base = base_name
-        next_ver = 2
+        next_ver = 1
 
     candidate_name = f"{root_base}-{next_ver}"
     while frappe.db.exists("Quotation", candidate_name):
@@ -712,16 +737,60 @@ def create_revised_quotation(source_quotation=None, items=None, start_date=None,
     if hasattr(amended_doc, "custom_payment_details"):
         amended_doc.custom_payment_details = ""
 
+    # Inherit and set custom_tenant_onboarding from previous quotation
+    onboarding_id = (
+        custom_tenant_onboarding
+        or source_doc.get("custom_tenant_onboarding")
+        or source_doc.get("tenant_onboarding")
+    )
+    if not onboarding_id and source_doc.get("amended_from"):
+        try:
+            if frappe.db.exists("Quotation", source_doc.amended_from):
+                onboarding_id = (
+                    frappe.db.get_value("Quotation", source_doc.amended_from, "custom_tenant_onboarding")
+                    or frappe.db.get_value("Quotation", source_doc.amended_from, "tenant_onboarding")
+                )
+        except Exception:
+            pass
+
+    if not onboarding_id:
+        try:
+            if root_base and frappe.db.exists("Quotation", root_base):
+                onboarding_id = (
+                    frappe.db.get_value("Quotation", root_base, "custom_tenant_onboarding")
+                    or frappe.db.get_value("Quotation", root_base, "tenant_onboarding")
+                )
+        except Exception:
+            pass
+
+    if onboarding_id:
+        amended_doc.custom_tenant_onboarding = onboarding_id
+        if hasattr(amended_doc, "tenant_onboarding"):
+            amended_doc.tenant_onboarding = onboarding_id
+
     amended_doc.flags.ignore_validate = True
     amended_doc.flags.ignore_mandatory = True
     amended_doc.insert()
-    frappe.db.commit()
+
+    # Explicitly ensure custom_tenant_onboarding is persisted in DB
+    if onboarding_id:
+        try:
+            frappe.db.set_value("Quotation", amended_doc.name, "custom_tenant_onboarding", onboarding_id, update_modified=False)
+        except Exception:
+            pass
+        try:
+            if frappe.db.has_column("Quotation", "tenant_onboarding"):
+                frappe.db.set_value("Quotation", amended_doc.name, "tenant_onboarding", onboarding_id, update_modified=False)
+        except Exception:
+            pass
+        frappe.db.commit()
 
     return {
         "status": "success",
         "name": amended_doc.name,
         "quotation": amended_doc.name,
         "amended_from": source_doc.name,
+        "custom_tenant_onboarding": onboarding_id,
         "doc": amended_doc.as_dict()
     }
 

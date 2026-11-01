@@ -29,6 +29,7 @@ doc_events = {
         ]
     },
     "Quotation": {
+        "before_insert": "pms.utils.sync_quotation_tenant_onboarding",
         "before_submit": "pms.utils.validate_quotation_payment_details"
     }
 }
