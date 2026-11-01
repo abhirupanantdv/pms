@@ -5667,7 +5667,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
     setLoading(true);
     try {
-      const fields = ["name", "customer_name", "party_name", "transaction_date", "valid_till", "grand_total", "status", "workflow_state", "booking_id", "docstatus", "signed_document", "custom_payment_details", "custom_service_quotation", "custom_task_id", "custom_task_reference"];
+      const fields = ["name", "customer_name", "party_name", "transaction_date", "valid_till", "grand_total", "status", "workflow_state", "booking_id", "docstatus", "signed_document", "custom_payment_details", "custom_service_quotation", "custom_task_id", "custom_task_reference", "custom_tenant_onboarding"];
       let res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=${encodeURIComponent(JSON.stringify(fields))}&limit_page_length=100&order_by=creation desc`, {
         credentials: 'include',
         headers: {
@@ -5675,7 +5675,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         }
       });
       if (!res.ok) {
-        const fallbackFields = ["name", "customer_name", "party_name", "transaction_date", "valid_till", "grand_total", "status", "workflow_state", "booking_id", "docstatus", "signed_document", "custom_payment_details", "custom_service_quotation"];
+        const fallbackFields = ["name", "customer_name", "party_name", "transaction_date", "valid_till", "grand_total", "status", "workflow_state", "booking_id", "docstatus", "signed_document", "custom_payment_details", "custom_service_quotation", "custom_tenant_onboarding"];
         res = await fetch(`${erpnextConfig.url}/api/resource/Quotation?fields=${encodeURIComponent(JSON.stringify(fallbackFields))}&limit_page_length=100&order_by=creation desc`, {
           credentials: 'include',
           headers: {
@@ -8875,6 +8875,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   <div>Valid Till: <strong style={{ color: '#111827' }}>{selectedQuotationDetail.valid_till || 'N/A'}</strong></div>
                   <div>Start: <strong style={{ color: '#111827' }}>{selectedQuotationDetail.custom_start_date || 'N/A'}</strong></div>
                   <div>End: <strong style={{ color: '#111827' }}>{selectedQuotationDetail.custom_end_date || 'N/A'}</strong></div>
+                  {selectedQuotationDetail.custom_tenant_onboarding && (
+                    <div>Tenant Onboarding: <strong style={{ color: '#0a6c66', fontWeight: 700 }}>{selectedQuotationDetail.custom_tenant_onboarding}</strong></div>
+                  )}
                 </div>
               </div>
 

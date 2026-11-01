@@ -3273,6 +3273,7 @@ export default function Maintenance({
   const [showWOModal, setShowWOModal] = useState(false);
   const [custom_maintenance_schedule, setCustomMaintenanceSchedule] = useState(null);
   const isAdhocMaintenance = custom_maintenance_schedule === 'Adhoc Maintenance';
+  const [adhocScheduleDate, setAdhocScheduleDate] = useState('');
   const [showConsumeModal, setShowConsumeModal] = useState(false);
   const [scheduleRows, setScheduleRows] = useState([]);
   const [busyTasks, setBusyTasks] = useState(false);
@@ -3623,19 +3624,32 @@ export default function Maintenance({
   };
   const handlemaintenanceChange = (value) => {
     setCustomMaintenanceSchedule(value);
-    if (value === 'Adhoc Maintenance') {
-      setSchedItems(prev => prev.map(row => ({
-        ...row,
-        periodicity: 'Random',
-        noOfVisits: 1
-      })));
-    } else {
-      setSchedItems(prev => prev.map(row => ({
-        ...row,
-        periodicity: row.periodicity === 'Random' ? 'Weekly' : (row.periodicity || 'Weekly'),
-        noOfVisits: row.noOfVisits || 1
-      })));
+    const isAdhoc = value === 'Adhoc Maintenance';
+    const dateToUse = adhocScheduleDate || schedItems[0]?.endDate || '';
+    if (isAdhoc && dateToUse && !adhocScheduleDate) {
+      setAdhocScheduleDate(dateToUse);
     }
+    setSchedItems(prev => prev.map(row => ({
+      ...row,
+      periodicity: isAdhoc ? 'Random' : (row.periodicity === 'Random' ? 'Weekly' : (row.periodicity || 'Weekly')),
+      noOfVisits: isAdhoc ? 1 : (row.noOfVisits || 1),
+      endDate: isAdhoc && dateToUse ? dateToUse : row.endDate
+    })));
+  };
+
+  const handleAdhocScheduleDateChange = (val) => {
+    setAdhocScheduleDate(val);
+    setSchedItems(prev => prev.map(r => {
+      let newStart = r.startDate;
+      if (val && newStart && newStart > val) {
+        newStart = val;
+      }
+      return {
+        ...r,
+        startDate: newStart,
+        endDate: val
+      };
+    }));
   };
   const availableSchedUnits = useMemo(() => {
     // 1. If customerUnits from all bookings of the selected customer is populated, use it!
@@ -4521,6 +4535,10 @@ export default function Maintenance({
           property_group: r.propertyGroup || schedPropertyGroup || '',
           status: 'Draft',
           custom_maintenance_schedule: custom_maintenance_schedule,
+          ...(isAdhocMaintenance && (adhocScheduleDate || eDate) ? {
+            schedule_date: adhocScheduleDate || eDate,
+            custom_schedule_date: adhocScheduleDate || eDate
+          } : {}),
           items: [{
             item_code: r.itemCode,
             item_name: r.itemName || r.itemCode,
@@ -6776,7 +6794,7 @@ export default function Maintenance({
                 )}
 
                 {/* Single-Row Balanced Header Fields */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '16px 16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isAdhocMaintenance ? 'repeat(4, minmax(0, 1fr))' : 'repeat(3, minmax(0, 1fr))', gap: '16px 16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
                       <User size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
@@ -6859,6 +6877,35 @@ export default function Maintenance({
                       />
                     )}
                   </div>
+
+                  {/* Schedule Date (for Adhoc Maintenance) */}
+                  {isAdhocMaintenance && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <CalendarIcon size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
+                        Schedule Date <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <input
+                        type="date"
+                        min={getTodayStr()}
+                        value={adhocScheduleDate || ''}
+                        onChange={(e) => handleAdhocScheduleDateChange(e.target.value)}
+                        className="form-input"
+                        required={isAdhocMaintenance}
+                        disabled={submittingSchedule}
+                        style={{
+                          height: 38,
+                          fontSize: 13,
+                          boxSizing: 'border-box',
+                          background: 'var(--bg-secondary)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: 6,
+                          padding: '0 12px',
+                          fontWeight: 500
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Items Child Table */}
@@ -6959,7 +7006,7 @@ export default function Maintenance({
                         <thead>
                           <tr style={{ background: 'var(--bg-tertiary, #f8fafc)', position: 'sticky', top: 0, zIndex: 1, borderBottom: '1px solid var(--border-color)' }}>
                             {(isAdhocMaintenance
-                              ? ['Unit Code', 'Unit Name', 'Property Group', 'Start Date', 'End Date', '']
+                              ? ['Unit Code', 'Unit Name', 'Property Group', 'Start Date', 'Schedule Date', '']
                               : ['Unit Code', 'Unit Name', 'Property Group', 'Start Date', 'Periodicity', 'No. of Visits', 'End Date', '']
                             ).map((h, i, arr) => {
                               const isLast = i === arr.length - 1;
@@ -7125,6 +7172,9 @@ export default function Maintenance({
                                       showToast?.(`End Date cannot be before ${minAllowed === currentStart ? 'Start Date' : 'today'}.`, 'warning');
                                     }
                                     setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, endDate: finalEnd } : r));
+                                    if (isAdhocMaintenance && idx === 0) {
+                                      setAdhocScheduleDate(finalEnd);
+                                    }
                                   }}
                                   className="form-input"
                                   required

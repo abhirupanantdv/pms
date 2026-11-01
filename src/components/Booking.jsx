@@ -2137,7 +2137,16 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                       flexShrink: 0,
                       border: '1px solid #e2e8f0'
                     }}>
-                      <img src="https://pms.advtinni.com/files/home.png" alt="Property" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
+                      <img
+                        src="/files/home.png"
+                        alt="Property"
+                        onError={(e) => {
+                          if (homeImg && e.currentTarget.src !== homeImg) {
+                            e.currentTarget.src = homeImg;
+                          }
+                        }}
+                        style={{ width: '40px', height: '40px', objectFit: 'contain' }}
+                      />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <strong style={{ fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
@@ -2197,8 +2206,13 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     overflow: 'hidden'
                   }}>
                     <img
-                      src="https://pms.advtinni.com/files/new-house.png"
+                      src="/files/new-house.png"
                       alt="Illustration"
+                      onError={(e) => {
+                        if (houseImg && e.currentTarget.src !== houseImg) {
+                          e.currentTarget.src = houseImg;
+                        }
+                      }}
                       style={{ height: '90%', width: 'auto', objectFit: 'contain', opacity: 0.25 }}
                     />
                   </div>
@@ -2913,8 +2927,13 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     minHeight: '140px'
                   }}>
                     <img
-                      src="https://pms.advtinni.com/files/Billing.png"
+                      src="/files/Billing.png"
                       alt="Billing Summary"
+                      onError={(e) => {
+                        if (billingSummaryImg && e.currentTarget.src !== billingSummaryImg) {
+                          e.currentTarget.src = billingSummaryImg;
+                        }
+                      }}
                       style={{ width: '100%', height: '100%', objectFit: 'contain', maxHeight: '135px' }}
                     />
                   </div>

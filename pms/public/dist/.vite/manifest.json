@@ -1,6 +1,6 @@
 {
   "index.html": {
-    "file": "assets/index-CS4be2oo.js",
+    "file": "assets/index-DKR-Ucjf.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -9,7 +9,8 @@
     ],
     "assets": [
       "assets/home-D8J3-NJd.png",
-      "assets/new-house-6oOLwp4_.png"
+      "assets/new-house-6oOLwp4_.png",
+      "assets/Billing-summary-CIiJB8H7.png"
     ]
   },
   "src/assets/Billing-summary.png": {

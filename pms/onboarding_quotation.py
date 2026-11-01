@@ -34,6 +34,8 @@ def create_quotation(tenant_onboarding):
 
     existing = _existing_quotation(doc.name)
     if existing:
+        frappe.db.set_value("Quotation", existing, "custom_tenant_onboarding", doc.name)
+        frappe.db.commit()
         return {"quotation": existing, "created": False}
     if not frappe.has_permission("Quotation", "create"):
         frappe.throw("You do not have permission to create a quotation.", frappe.PermissionError)
@@ -43,4 +45,6 @@ def create_quotation(tenant_onboarding):
     name = doc.create_quotation(customer)
     if not name:
         frappe.throw("Quotation creation did not return a quotation ID.")
+    frappe.db.set_value("Quotation", name, "custom_tenant_onboarding", doc.name)
+    frappe.db.commit()
     return {"quotation": name, "created": True}

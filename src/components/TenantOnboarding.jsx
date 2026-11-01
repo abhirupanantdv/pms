@@ -4862,6 +4862,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
                     {!isEditingDetails && <OnboardingQuotationAction
                       key={selectedCase.name}
                       name={selectedCase.name}
+                      onboardingDoc={selectedCase}
                       approved={(workflowState?.current_state || selectedCase.workflow_state) === 'Approved' && selectedCase.docstatus !== 2}
                       baseUrl={erpnextConfig?.url}
                       onNavigateToQuotation={(qId) => {

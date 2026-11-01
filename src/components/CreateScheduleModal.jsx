@@ -91,6 +91,7 @@ export default function CreateScheduleModal({
       bookingId: ''
     }
   ]);
+  const [adhocScheduleDate, setAdhocScheduleDate] = useState('');
 
   const isAdhocMaintenance = customMaintenanceSchedule === 'Adhoc Maintenance';
 
@@ -98,6 +99,7 @@ export default function CreateScheduleModal({
   useEffect(() => {
     if (!isOpen) {
       setScheduleStatusMessage(null);
+      setAdhocScheduleDate('');
       return;
     }
 
@@ -240,18 +242,38 @@ export default function CreateScheduleModal({
   const handleMaintenanceTypeChange = (typeVal) => {
     setCustomMaintenanceSchedule(typeVal);
     const isAdhoc = typeVal === 'Adhoc Maintenance';
+    const dateToUse = adhocScheduleDate || schedItems[0]?.endDate || '';
+    if (isAdhoc && dateToUse && !adhocScheduleDate) {
+      setAdhocScheduleDate(dateToUse);
+    }
     setSchedItems(prev => prev.map(r => ({
       ...r,
       periodicity: isAdhoc ? 'Random' : (r.periodicity === 'Random' ? 'Weekly' : r.periodicity || 'Weekly'),
-      noOfVisits: isAdhoc ? 1 : (r.noOfVisits || 1)
+      noOfVisits: isAdhoc ? 1 : (r.noOfVisits || 1),
+      endDate: isAdhoc && dateToUse ? dateToUse : r.endDate
     })));
+  };
+
+  const handleAdhocScheduleDateChange = (val) => {
+    setAdhocScheduleDate(val);
+    setSchedItems(prev => prev.map(r => {
+      let newStart = r.startDate;
+      if (val && newStart && newStart > val) {
+        newStart = val;
+      }
+      return {
+        ...r,
+        startDate: newStart,
+        endDate: val
+      };
+    }));
   };
 
   // Add unit row
   const handleAddSchedUnit = () => {
     const unadded = bookingUnits.find(bu => !schedItems.some(si => si.itemCode === (bu.item_code || bu.name)));
     const baseStart = unadded?.start_date || schedItems[0]?.startDate || getTodayStr();
-    const baseEnd = unadded?.end_date || schedItems[0]?.endDate || '';
+    const baseEnd = (isAdhocMaintenance && adhocScheduleDate) ? adhocScheduleDate : (unadded?.end_date || schedItems[0]?.endDate || '');
     const startD = resolveSchedStartDate(baseStart);
     const endD = resolveSchedEndDate(baseEnd, startD);
 
@@ -416,6 +438,10 @@ export default function CreateScheduleModal({
           property_group: r.propertyGroup || schedPropertyGroup || '',
           status: 'Draft',
           custom_maintenance_schedule: customMaintenanceSchedule,
+          ...(isAdhocMaintenance && (adhocScheduleDate || eDate) ? {
+            schedule_date: adhocScheduleDate || eDate,
+            custom_schedule_date: adhocScheduleDate || eDate
+          } : {}),
           items: [{
             item_code: r.itemCode,
             item_name: r.itemName || r.itemCode,
@@ -625,7 +651,7 @@ export default function CreateScheduleModal({
             )}
 
             {/* Single-Row Balanced Header Fields */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '16px 16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isAdhocMaintenance ? 'repeat(4, minmax(0, 1fr))' : 'repeat(3, minmax(0, 1fr))', gap: '16px 16px' }}>
               {/* Tenant Name */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -707,6 +733,35 @@ export default function CreateScheduleModal({
                   }}
                 />
               </div>
+
+              {/* Schedule Date (for Adhoc Maintenance) */}
+              {isAdhocMaintenance && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <CalendarIcon size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
+                    Schedule Date <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <input
+                    type="date"
+                    min={getTodayStr()}
+                    value={adhocScheduleDate || ''}
+                    onChange={(e) => handleAdhocScheduleDateChange(e.target.value)}
+                    className="form-input"
+                    required={isAdhocMaintenance}
+                    disabled={submittingSchedule}
+                    style={{
+                      height: 38,
+                      fontSize: 13,
+                      boxSizing: 'border-box',
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 6,
+                      padding: '0 12px',
+                      fontWeight: 500
+                    }}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Scheduled Items & Units Child Table */}
@@ -807,7 +862,7 @@ export default function CreateScheduleModal({
                     <thead>
                       <tr style={{ background: 'var(--bg-tertiary, #f8fafc)', position: 'sticky', top: 0, zIndex: 1, borderBottom: '1px solid var(--border-color)' }}>
                         {(isAdhocMaintenance
-                          ? ['Unit Code', 'Unit Name', 'Property Group', 'Start Date', 'End Date', '']
+                          ? ['Unit Code', 'Unit Name', 'Property Group', 'Start Date', 'Schedule Date', '']
                           : ['Unit Code', 'Unit Name', 'Property Group', 'Start Date', 'Periodicity', 'No. of Visits', 'End Date', '']
                         ).map((h, i, arr) => {
                           const isLast = i === arr.length - 1;
@@ -943,6 +998,9 @@ export default function CreateScheduleModal({
                                   finalEnd = minAllowed;
                                 }
                                 setSchedItems(prev => prev.map((r, i) => i === idx ? { ...r, endDate: finalEnd } : r));
+                                if (isAdhocMaintenance && idx === 0) {
+                                  setAdhocScheduleDate(finalEnd);
+                                }
                               }}
                               className="form-input"
                               required
