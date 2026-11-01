@@ -214,10 +214,12 @@ h1, h2, h3, h4, h5, h6 {
 .sidebar-footer {
   margin-top: auto;
   border-top: 1px solid var(--border-color);
-  padding-top: 16px;
+  padding: 12px 6px 6px 6px;
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .user-avatar {

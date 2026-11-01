@@ -1,5 +1,9 @@
 frappe.ui.form.on("Quotation", {
     before_submit(frm) {
+        if (frm.doc.flags && (frm.doc.flags.ignore_payment_validation || frm.doc.flags.ignore_validate)) {
+            return;
+        }
+
         const isServiceQuotation = frm.doc.custom_service_quotation === 1 ||
             frm.doc.custom_service_quotation === "1" ||
             frm.doc.custom_service_quotation === true;

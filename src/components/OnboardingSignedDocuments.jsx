@@ -16,7 +16,10 @@ export default function OnboardingSignedDocuments({ value, baseUrl, upload, save
       if (file && !next) throw new Error('The file could not be uploaded.');
       await save(next);
     } catch (err) {
-      setError(err.message || 'Unable to save the signed document.');
+      const msg = (err?.message === 'Failed to fetch' || (err?.name === 'TypeError' && String(err).includes('fetch')))
+        ? 'Unable to connect to ERPNext server. Please check your session or network connection.'
+        : (err?.message || 'Unable to save the signed document.');
+      setError(msg);
     } finally { setBusy(false); }
   };
   return <div style={{ border: '1px solid var(--border-color)', borderRadius: 8 }}>

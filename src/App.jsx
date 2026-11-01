@@ -2946,7 +2946,8 @@ import {
   UserCheck,
   ShieldCheck,
   ChevronDown,
-  Building2
+  Building2,
+  LogOut
 } from 'lucide-react';
 
 // Import Components
@@ -4092,6 +4093,7 @@ export default function App() {
 
   const [currentUserDetails, setCurrentUserDetails] = useState({
     fullName: (typeof window !== 'undefined' && window.frappe_user && window.frappe_user !== 'Guest' ? window.frappe_user : null) || localStorage.getItem('pms_user') || 'Estate Admin',
+    email: (typeof window !== 'undefined' && window.frappe_user && window.frappe_user !== 'Guest' ? window.frappe_user : null) || localStorage.getItem('pms_user') || '',
     designation: 'Superuser',
     image: ''
   });
@@ -4104,6 +4106,7 @@ export default function App() {
     // Default values
     setCurrentUserDetails({
       fullName: loggedInUser,
+      email: loggedInUser,
       designation: 'Administrator',
       image: ''
     });
@@ -4125,6 +4128,7 @@ export default function App() {
               const emp = list[0];
               setCurrentUserDetails({
                 fullName: emp.employee_name || loggedInUser,
+                email: loggedInUser,
                 designation: emp.designation || 'Staff Member',
                 image: emp.image || ''
               });
@@ -4141,6 +4145,7 @@ export default function App() {
                 const uDoc = userJson.data || userJson;
                 setCurrentUserDetails({
                   fullName: uDoc.full_name || loggedInUser,
+                  email: uDoc.email || loggedInUser,
                   designation: uDoc.role_profile_name || 'System User',
                   image: uDoc.user_image || ''
                 });
@@ -4634,6 +4639,14 @@ export default function App() {
 
   const handleCreateMaintenanceSchedule = async (newSchedule) => {
     if (ERPNEXT_CONFIG) {
+      if (Array.isArray(newSchedule)) {
+        const results = [];
+        for (const item of newSchedule) {
+          results.push(await handleCreateMaintenanceSchedule(item));
+        }
+        return results;
+      }
+
       const payloadToSend = { ...newSchedule };
       // Never send dummy mock 'PROP-2041' or empty property links
       if (!payloadToSend.custom_property || payloadToSend.custom_property === 'PROP-2041') {
@@ -6792,40 +6805,64 @@ export default function App() {
           </li>
         </ul>
 
-        <div className="sidebar-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div className="user-avatar" style={{ padding: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {currentUserDetails.image ? (
-                <img
-                  src={currentUserDetails.image.startsWith('http') ? currentUserDetails.image : `${ERPNEXT_CONFIG.url}${currentUserDetails.image}`}
-                  alt="Profile"
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
-              ) : (
-                currentUserDetails.fullName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
-              )}
-            </div>
-            <div className="user-info">
-              <span className="user-name">{currentUserDetails.fullName}</span>
-              <span className="user-role">{currentUserDetails.designation}</span>
-            </div>
-          </div>
-          <button
-            onClick={handleLogout}
+        <div
+          className="sidebar-footer"
+          style={{
+            marginTop: 'auto',
+            borderTop: '1px solid var(--border-color)',
+            padding: '12px 6px 6px 6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            width: '100%',
+            boxSizing: 'border-box'
+          }}
+        >
+          <div
+            title={currentUserDetails.email || currentUserDetails.fullName}
             style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-muted)',
-              fontSize: '11px',
-              cursor: 'pointer',
-              textDecoration: 'underline',
-              padding: '4px'
+              fontSize: '12px',
+              fontWeight: 600,
+              color: 'var(--text-primary)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              lineHeight: 1.4,
+              width: '100%',
+              padding: '0 2px'
             }}
-            onMouseEnter={(e) => e.target.style.color = '#ef4444'}
-            onMouseLeave={(e) => e.target.style.color = 'var(--text-muted)'}
           >
-            Logout
-          </button>
+            {currentUserDetails.email || currentUserDetails.fullName}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', width: '100%' }}>
+            <button
+              onClick={handleLogout}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-muted)',
+                fontSize: '11px',
+                cursor: 'pointer',
+                padding: '2px 4px',
+                textDecoration: 'underline',
+                borderRadius: '4px',
+                transition: 'all 0.15s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = '#ef4444';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = 'var(--text-muted)';
+              }}
+              title="Log out"
+            >
+              <LogOut size={12} />
+              <span>Log out</span>
+            </button>
+          </div>
         </div>
       </aside>
 

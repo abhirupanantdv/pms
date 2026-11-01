@@ -21,9 +21,24 @@ class TenantOnboarding(Document):
         """
         Draft Tenant Onboarding can still be saved normally.
 
+        Signed Document is required before changing from Draft to Pending Approval.
         The Quotation-related mandatory validation is enforced
         only when the Tenant Onboarding is being Approved.
         """
+        curr_state = (self.get("workflow_state") or "").strip().lower()
+        if "pending" in curr_state:
+            db_state = ""
+            if not self.is_new() and self.name and frappe.db.exists("Tenant Onboarding", self.name):
+                db_state = (frappe.db.get_value("Tenant Onboarding", self.name, "workflow_state") or "Draft").strip().lower()
+            else:
+                db_state = "draft"
+
+            if db_state in ("draft", "drafted", ""):
+                signed_doc = getattr(self, "signed_document", None) or self.get("signed_document")
+                if not signed_doc or not str(signed_doc).strip():
+                    frappe.throw(
+                        _("Please upload the Signed Document before changing status from Draft to Pending Approval.")
+                    )
 
         if self.get("workflow_state") == "Approved":
             self.validate_quotation_requirements()
@@ -1831,6 +1846,21 @@ def update_tenant_onboarding_workflow(
                     f'from workflow state "{current_state}".'
                 )
             }
+
+        # =====================================================
+        # SIGNED DOCUMENT CHECK
+        #
+        # Cannot change Draft to Pending Approval without Signed Document
+        # =====================================================
+
+        next_state = (selected_transition.next_state or "").strip().lower()
+        if (current_state or "").strip().lower() in ("draft", "drafted", "") and "pending" in next_state:
+            signed_doc = getattr(doc, "signed_document", None) or doc.get("signed_document")
+            if not signed_doc or not str(signed_doc).strip():
+                return {
+                    "success": False,
+                    "error": "Please upload the Signed Document before changing status from Draft to Pending Approval."
+                }
 
         # =====================================================
         # CUSTOM ROLE CHECK

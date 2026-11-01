@@ -1,16 +1,53 @@
 import frappe  # type: ignore
 from frappe.utils import validate_phone_number  # type: ignore
 
-def validate_tenant_onboarding_phone(doc, method):
+def validate_tenant_onboarding_signed_document(doc, method=None):
+    """
+    Enforce Signed Document requirement before changing from Draft to Pending Approval.
+    Applies ONLY for Tenant Onboarding.
+    """
+    if getattr(doc, "doctype", None) != "Tenant Onboarding":
+        return
+
+    curr_state = (doc.workflow_state or "").strip().lower()
+    if not ("pending" in curr_state):
+        return
+
+    # Check previous workflow state in database
+    db_state = ""
+    if not getattr(doc, "is_new", lambda: False)():
+        if hasattr(doc, "name") and doc.name and frappe.db.exists("Tenant Onboarding", doc.name):
+            db_state = (frappe.db.get_value("Tenant Onboarding", doc.name, "workflow_state") or "Draft").strip().lower()
+        else:
+            db_state = "draft"
+    else:
+        db_state = "draft"
+
+    # Only enforce when transitioning FROM Draft TO Pending Approval
+    if db_state in ("draft", "drafted", ""):
+        signed_doc = getattr(doc, "signed_document", None) or doc.get("signed_document")
+        if not signed_doc or not str(signed_doc).strip():
+            frappe.throw(
+                frappe._("Please upload the Signed Document before changing status from Draft to Pending Approval."),
+                title=frappe._("Signed Document Required")
+            )
+
+
+def validate_tenant_onboarding_phone(doc, method=None):
     if doc.contact_number:
         if not validate_phone_number(doc.contact_number):
             frappe.throw(
                 msg=frappe._("Phone Number {0} set in field contact_number is not valid.").format(doc.contact_number),
                 title=frappe._("Invalid Phone Number")
             )
+    validate_tenant_onboarding_signed_document(doc, method)
 
 
 def validate_quotation_payment_details(doc, method=None):
+    # Skip validation if flagged (e.g. during automatic submission for cancellation/revision)
+    if getattr(doc.flags, "ignore_payment_validation", False) or getattr(doc.flags, "ignore_validate", False):
+        return
+
     # Apply validation only for non-service quotations
     if not doc.custom_service_quotation:
         text = (doc.custom_payment_details or "").strip()
@@ -534,4 +571,157 @@ def update_maintenance_schedule_row(schedule_name=None, row_name=None, custom_as
         frappe.db.set_value("Maintenance Schedule Detail", row_name, updates, update_modified=False)
         frappe.db.commit()
     return {"status": "success", "row_name": row_name, "updates": updates}
+
+
+@frappe.whitelist()
+def create_revised_quotation(source_quotation=None, items=None, start_date=None, end_date=None, remarks=None):
+    """
+    Submits and cancels the source quotation (if not already cancelled),
+    and creates an amended Quotation version (e.g. QTN-10-00531-1, QTN-10-00531-2).
+    """
+    if not source_quotation:
+        source_quotation = frappe.form_dict.get("source_quotation")
+    if not items:
+        items = frappe.form_dict.get("items")
+    if not start_date:
+        start_date = frappe.form_dict.get("start_date")
+    if not end_date:
+        end_date = frappe.form_dict.get("end_date")
+    if not remarks:
+        remarks = frappe.form_dict.get("remarks")
+
+    if not source_quotation:
+        frappe.throw("Source Quotation is required.")
+
+    if not frappe.db.exists("Quotation", source_quotation):
+        frappe.throw(f"Quotation {source_quotation} does not exist.")
+
+    source_doc = frappe.get_doc("Quotation", source_quotation)
+
+    # 1. Step 1: Submit source_doc if it is Draft (docstatus == 0)
+    if source_doc.docstatus == 0:
+        source_doc.flags.ignore_validate = True
+        source_doc.flags.ignore_mandatory = True
+        source_doc.flags.ignore_payment_validation = True
+
+        if not (source_doc.custom_payment_details or "").strip():
+            source_doc.custom_payment_details = "Quotation submitted automatically to allow revision and amendment."
+        
+        try:
+            source_doc.submit()
+        except Exception:
+            frappe.db.set_value("Quotation", source_doc.name, {"docstatus": 1, "status": "Submitted"})
+            source_doc.reload()
+
+    # 2. Step 2: Cancel source_doc if it is Submitted (docstatus == 1)
+    if source_doc.docstatus == 1:
+        source_doc.flags.ignore_validate = True
+        source_doc.flags.ignore_mandatory = True
+        try:
+            source_doc.cancel()
+        except Exception:
+            frappe.db.set_value("Quotation", source_doc.name, {"docstatus": 2, "status": "Cancelled"})
+            source_doc.reload()
+
+    # Verify source_doc is now Cancelled (docstatus == 2)
+    if source_doc.docstatus != 2:
+        frappe.throw(f"Could not cancel source Quotation {source_quotation}. Current docstatus: {source_doc.docstatus}")
+
+    # 3. Step 3: Create Amended Quotation
+    from frappe.model.mapper import make_amended_doc
+    try:
+        amended_doc = make_amended_doc("Quotation", source_doc.name)
+    except Exception:
+        amended_doc = frappe.copy_doc(source_doc, ignore_no_copy=False)
+        amended_doc.amended_from = source_doc.name
+        amended_doc.docstatus = 0
+
+    amended_doc.amended_from = source_doc.name
+    amended_doc.docstatus = 0
+    amended_doc.status = "Draft"
+
+    # Compute next amended version name (e.g. QTN-10-00531 -> QTN-10-00531-2 or QTN-10-00531-1)
+    base_name = source_doc.name
+    parts = base_name.split("-")
+    if len(parts) > 3 and parts[-1].isdigit():
+        root_base = "-".join(parts[:-1])
+        next_ver = int(parts[-1]) + 1
+    else:
+        root_base = base_name
+        next_ver = 2
+
+    candidate_name = f"{root_base}-{next_ver}"
+    while frappe.db.exists("Quotation", candidate_name):
+        next_ver += 1
+        candidate_name = f"{root_base}-{next_ver}"
+
+    amended_doc.name = candidate_name
+
+    # 4. Step 4: Apply revised items, dates, remarks if provided
+    if items and isinstance(items, str):
+        import json
+        try:
+            items = json.loads(items)
+        except Exception:
+            pass
+
+    if items and isinstance(items, list):
+        amended_doc.set("items", [])
+        net_total = 0.0
+        for item_data in items:
+            row = amended_doc.append("items", {})
+            for key, val in item_data.items():
+                if key not in ("name", "parent", "parentfield", "parenttype"):
+                    row.set(key, val)
+            rate = float(row.rate or 0)
+            qty = float(row.qty or 1)
+            row.amount = rate * qty
+            row.net_rate = rate
+            row.net_amount = row.amount
+            net_total += row.amount
+
+        amended_doc.total = net_total
+        amended_doc.net_total = net_total
+
+        # Recalculate taxes if taxes table exists
+        tax_total = 0.0
+        if amended_doc.get("taxes"):
+            for tax_row in amended_doc.taxes:
+                tax_rate = float(tax_row.rate or 12.5)
+                tax_amount = round(net_total * (tax_rate / 100.0), 2)
+                tax_row.tax_amount = tax_amount
+                tax_row.total = net_total + tax_amount
+                tax_total += tax_amount
+
+        amended_doc.total_taxes_and_charges = tax_total
+        amended_doc.grand_total = net_total + tax_total
+        amended_doc.rounded_total = round(amended_doc.grand_total)
+
+    if start_date:
+        amended_doc.custom_start_date = start_date
+    if end_date:
+        amended_doc.custom_end_date = end_date
+
+    if remarks:
+        amended_doc.remarks = remarks
+        amended_doc.custom_negotiation_status = remarks
+
+    # Clear signed document and payment details on new revision so it must be signed/paid anew
+    if hasattr(amended_doc, "signed_document"):
+        amended_doc.signed_document = None
+    if hasattr(amended_doc, "custom_payment_details"):
+        amended_doc.custom_payment_details = ""
+
+    amended_doc.flags.ignore_validate = True
+    amended_doc.flags.ignore_mandatory = True
+    amended_doc.insert()
+    frappe.db.commit()
+
+    return {
+        "status": "success",
+        "name": amended_doc.name,
+        "quotation": amended_doc.name,
+        "amended_from": source_doc.name,
+        "doc": amended_doc.as_dict()
+    }
 

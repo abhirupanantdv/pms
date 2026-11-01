@@ -37,7 +37,7 @@ import {
   Layers,
   Tag
 } from 'lucide-react';
-import { getAuthHeaders, getCsrfToken as resolveCsrfToken } from '../config';
+import { getAuthHeaders, getCsrfToken as resolveCsrfToken, ensureCsrfToken } from '../config';
 import { BookingPropertyFinder, BookingSelectedUnits } from './OnboardingBookingUnits';
 import { getUnitFields, unitDetails } from './onboardingUnitFields';
 import OnboardingSignedDocuments from './OnboardingSignedDocuments';
@@ -274,7 +274,7 @@ const resolveMediaUrl = (url, baseUrl) => {
   return `${base}${path}`;
 };
 
-const uploadFileToERPNext = async (file, erpnextConfig, getCsrfToken) => {
+const uploadFileToERPNext = async (file, erpnextConfig, getCsrfToken, docType = null, docName = null, fieldName = null) => {
   if (!file) return null;
 
   // 1. Resolve CSRF token from all possible sources
@@ -284,26 +284,13 @@ const uploadFileToERPNext = async (file, erpnextConfig, getCsrfToken) => {
       token = getCsrfToken();
     } catch { }
   }
+  if (!token && typeof ensureCsrfToken === 'function') {
+    try {
+      token = await ensureCsrfToken();
+    } catch { }
+  }
   if (!token && erpnextConfig?.csrfToken) {
     token = erpnextConfig.csrfToken;
-  }
-
-  // If still no token and erpnextConfig.url is available, try a quick ping to obtain/refresh session cookie
-  if (!token && erpnextConfig?.url) {
-    try {
-      const pingRes = await fetch(`${erpnextConfig.url}/api/method/frappe.auth.get_logged_user`, {
-        credentials: 'include'
-      });
-      if (pingRes.ok) {
-        const match = document.cookie.match(/(?:^|;\s*)(?:csrf_token|XSRF-TOKEN|CSRF-TOKEN)=([^;]*)/i);
-        if (match) {
-          token = decodeURIComponent(match[1]);
-          if (typeof window !== 'undefined') window.csrf_token = token;
-        }
-      }
-    } catch (e) {
-      console.warn("Could not retrieve session CSRF token:", e);
-    }
   }
 
   // 2. Prepare FormData with full metadata
@@ -313,6 +300,9 @@ const uploadFileToERPNext = async (file, erpnextConfig, getCsrfToken) => {
   formData.append('file_name', file.name);
   formData.append('is_private', '0');
   formData.append('folder', 'Home');
+  if (docType) formData.append('doctype', docType);
+  if (docName) formData.append('docname', docName);
+  if (fieldName) formData.append('fieldname', fieldName);
   if (token) {
     formData.append('csrf_token', token);
   }
@@ -343,15 +333,43 @@ const uploadFileToERPNext = async (file, erpnextConfig, getCsrfToken) => {
     } catch (netErr) {
       console.warn("Network error during ERPNext upload_file:", netErr);
     }
+
+    // If server upload failed, refresh token and retry upload once
+    if (typeof ensureCsrfToken === 'function') {
+      try {
+        const freshToken = await ensureCsrfToken(true);
+        if (freshToken) {
+          const retryHeaders = { 'X-Frappe-CSRF-Token': freshToken };
+          formData.set('csrf_token', freshToken);
+          const retryRes = await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: retryHeaders,
+            body: formData
+          });
+          if (retryRes.ok) {
+            const json = await retryRes.json();
+            const fileUrl = json.message?.file_url || json.file_url;
+            if (fileUrl) return fileUrl;
+          }
+        }
+      } catch (retryErr) {
+        console.warn("Retry upload_file failed:", retryErr);
+      }
+    }
   }
 
-  // 4. Fallback: Convert to DataURL so document/image attachment is NEVER blocked
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = (err) => reject(err);
-    reader.readAsDataURL(file);
-  });
+  // 4. Fallback: Convert to DataURL ONLY when no server URL is configured (offline development)
+  if (!erpnextConfig?.url) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  throw new Error("Unable to upload file to the server. Please check your connection or session.");
 };
 
 const isInternalTenantField = (field) => {
@@ -1645,8 +1663,30 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
   const [onboardings, setOnboardings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('All');
+  const [statusFilter, setStatusFilter] = useState('All'); // All, Draft, Pending for Approval, Approved
+  const [typeFilter, setTypeFilter] = useState('All');     // All, New, Existing
   const [selectedCase, setSelectedCase] = useState(null);
+
+  // Helpers for workflow status and tenant type filtering
+  const matchesWorkflowStatus = (c, filter) => {
+    if (!filter || filter === 'All') return true;
+    const state = (c.workflow_state || '').trim().toLowerCase();
+    if (filter === 'Approved') {
+      return state === 'approved';
+    }
+    if (filter === 'Pending for Approval') {
+      return state === 'pending for approval' || state.includes('pending');
+    }
+    if (filter === 'Draft') {
+      return state === 'draft' || state === 'drafted' || state === '' || !c.workflow_state;
+    }
+    return state === filter.toLowerCase();
+  };
+
+  const matchesTenantType = (c, filter) => {
+    if (!filter || filter === 'All') return true;
+    return (c.business_status || '').toLowerCase() === filter.toLowerCase();
+  };
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 5;
   const [caseDocuments, setCaseDocuments] = useState({});
@@ -1744,8 +1784,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
         (c.proposed_business_type || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (c.shop_space_location || '').toLowerCase().includes(searchQuery.toLowerCase());
 
-      if (statusFilter === 'All') return matchesSearch;
-      return matchesSearch && c.business_status === statusFilter;
+      return matchesSearch && matchesWorkflowStatus(c, statusFilter) && matchesTenantType(c, typeFilter);
     });
 
     const visibleItems = filteredCases.slice(indexOfFirstItem, indexOfLastItem);
@@ -1787,12 +1826,12 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
     };
 
     fetchDetailsForItems();
-  }, [currentPage, onboardings, searchQuery, statusFilter, erpnextConfig]);
+  }, [currentPage, onboardings, searchQuery, statusFilter, typeFilter, erpnextConfig]);
 
   // Reset page to 1 when search query or filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, statusFilter]);
+  }, [searchQuery, statusFilter, typeFilter]);
 
   // Checklist tab state for right panel (only proposal, booking, search remain)
   const [activeDetailTab, setActiveDetailTab] = useState('proposal');
@@ -2052,8 +2091,41 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
     }
   };
 
+  const getHasSignedDocument = (caseDoc) => {
+    if (!caseDoc) return false;
+    if (caseDoc.signed_document && String(caseDoc.signed_document).trim()) return true;
+    if (caseDoc.signed_documents && String(caseDoc.signed_documents).trim()) return true;
+    const dynamicField = doctypeFields?.find?.(isSignedDocumentField)?.fieldname;
+    if (dynamicField && caseDoc[dynamicField] && String(caseDoc[dynamicField]).trim()) return true;
+    for (const key of Object.keys(caseDoc)) {
+      if (/signed.*doc/i.test(key) && caseDoc[key] && String(caseDoc[key]).trim()) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const handleWorkflowAction = async (actionName, nextState) => {
     if (!selectedCase || !erpnextConfig?.url) return;
+
+    // Logic: Before Signed Document is uploaded, cannot change Draft to Pending Approval (only for Tenant Onboarding)
+    const currentStatus = (selectedCase.workflow_state || 'Draft').trim();
+    const isDraft = !currentStatus || currentStatus.toLowerCase() === 'draft' || currentStatus.toLowerCase() === 'drafted' || selectedCase.docstatus === 0;
+
+    const targetState = (nextState || '').trim();
+    const action = (actionName || '').trim();
+    const isMovingToPending = 
+      /pending/i.test(targetState) || 
+      /pending/i.test(action) || 
+      /request.*approval/i.test(action) || 
+      /submit.*approval/i.test(action);
+
+    const hasSignedDoc = getHasSignedDocument(selectedCase);
+
+    if (isDraft && isMovingToPending && !hasSignedDoc) {
+      alert('Please upload the Signed Document before changing status from Draft to Pending Approval.', 'error');
+      return;
+    }
 
     const confirmed = await confirm(`Are you sure you want to "${actionName}"?`);
     if (!confirmed) return;
@@ -2503,7 +2575,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
       }
 
       // 2. Fetch Parent Tenant Onboardings
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding?fields=%5B%22name%22%2C%22proposed_business_type%22%2C%22budget%22%2C%22required_space%22%2C%22shop_space_location%22%2C%22lease_period%22%2C%22usage_of_demised_premises%22%2C%22business_status%22%2C%22owner%22%2C%22creation%22%2C%22menu_and_business_pictures%22%2C%22fitout_period%22%2C%22rental_charges%22%2C%22security_deposit_booking_fee%22%2C%22service_promotional_charges%22%2C%22product_service_range%22%2C%22fitout_approval_timeframe%22%2C%22contact_name%22%2C%22email_id%22%2C%22contact_number%22%2C%22company_name%22%2C%22lease_commencement_date%22%2C%22vacant_possession_date%22%2C%22plans_for_approval%22%2C%22workflow_state%22%2C%22docstatus%22%5D&limit_page_length=1000&order_by=creation%20desc`, {
+      const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding?fields=%5B%22name%22%2C%22proposed_business_type%22%2C%22budget%22%2C%22required_space%22%2C%22shop_space_location%22%2C%22lease_period%22%2C%22usage_of_demised_premises%22%2C%22business_status%22%2C%22owner%22%2C%22creation%22%2C%22menu_and_business_pictures%22%2C%22fitout_period%22%2C%22rental_charges%22%2C%22security_deposit_booking_fee%22%2C%22service_promotional_charges%22%2C%22product_service_range%22%2C%22fitout_approval_timeframe%22%2C%22contact_name%22%2C%22email_id%22%2C%22contact_number%22%2C%22company_name%22%2C%22lease_commencement_date%22%2C%22vacant_possession_date%22%2C%22plans_for_approval%22%2C%22workflow_state%22%2C%22docstatus%22%2C%22signed_document%22%5D&limit_page_length=1000&order_by=creation%20desc`, {
         credentials: 'include',
         headers: getAuthHeaders({ 'Content-Type': 'application/json' })
       });
@@ -4107,8 +4179,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
       (c.proposed_business_type || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (c.shop_space_location || '').toLowerCase().includes(searchQuery.toLowerCase());
 
-    if (statusFilter === 'All') return matchesSearch;
-    return matchesSearch && c.business_status === statusFilter;
+    return matchesSearch && matchesWorkflowStatus(c, statusFilter) && matchesTenantType(c, typeFilter);
   });
 
   // Helper to calculate total completion progress based on 3 sections of checklist
@@ -4261,7 +4332,7 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
 
         {/* Filter bar */}
         <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '8px 14px', flex: 1, maxWidth: '300px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '8px 14px', flex: 1, minWidth: '220px', maxWidth: '300px' }}>
             <Search size={16} style={{ color: 'var(--text-muted)' }} />
             <input
               type="text"
@@ -4272,25 +4343,70 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '8px' }}>
-            {['All', 'New', 'Existing'].map((status) => (
-              <button
-                key={status}
-                onClick={() => setStatusFilter(status)}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  borderRadius: '6px',
-                  border: '1px solid var(--border-color)',
-                  background: statusFilter === status ? 'var(--brand-color, #2563eb)' : 'var(--bg-primary)',
-                  color: statusFilter === status ? '#fff' : 'var(--text-secondary)',
-                  cursor: 'pointer'
-                }}
-              >
-                {status}
-              </button>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+            {/* Status Filter: Approved, Pending for Approval, Draft */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Status:
+              </span>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {['All', 'Approved', 'Pending for Approval', 'Draft'].map((status) => {
+                  const isSelected = statusFilter === status;
+                  return (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => setStatusFilter(status)}
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        borderRadius: '6px',
+                        border: '1px solid var(--border-color)',
+                        background: isSelected ? 'var(--brand-color, #2563eb)' : 'var(--bg-primary)',
+                        color: isSelected ? '#fff' : 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      {status}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Type Filter: New, Existing */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Type:
+              </span>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                {['All', 'New', 'Existing'].map((type) => {
+                  const isSelected = typeFilter === type;
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setTypeFilter(type)}
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        borderRadius: '6px',
+                        border: '1px solid var(--border-color)',
+                        background: isSelected ? 'var(--brand-color, #2563eb)' : 'var(--bg-primary)',
+                        color: isSelected ? '#fff' : 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      {type}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -4767,13 +4883,20 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
                       return true;
                     }).map((act, idx) => {
                       const actionStyle = getActionButtonStyle(act.action);
+                      const currentStatus = (workflowState?.current_state || selectedCase.workflow_state || 'Draft').trim();
+                      const isDraft = !currentStatus || currentStatus.toLowerCase() === 'draft' || currentStatus.toLowerCase() === 'drafted' || selectedCase.docstatus === 0;
+                      const isMovingToPending = /pending/i.test(act.next_state || '') || /pending/i.test(act.action || '') || /request.*approval/i.test(act.action || '') || /submit/i.test(act.action || '');
+                      const hasSignedDoc = getHasSignedDocument(selectedCase);
+                      const requiresSignedDoc = isDraft && isMovingToPending && !hasSignedDoc;
+
                       return (
                         <button
                           key={idx}
                           disabled={loadingWorkflow}
                           onClick={() => handleWorkflowAction(act.action, act.next_state)}
+                          title={requiresSignedDoc ? 'Signed Document is required before changing status to Pending Approval' : ''}
                           style={{
-                            background: actionStyle.background,
+                            background: requiresSignedDoc ? '#94a3b8' : actionStyle.background,
                             border: 'none',
                             borderRadius: '20px',
                             color: '#fff',
@@ -4784,9 +4907,10 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '4px',
-                            boxShadow: actionStyle.boxShadow,
+                            boxShadow: requiresSignedDoc ? 'none' : actionStyle.boxShadow,
                             transition: 'all 0.2s ease',
-                            height: '28px'
+                            height: '28px',
+                            opacity: requiresSignedDoc ? 0.8 : 1
                           }}
                         >
                           <span>{act.action === 'Convert to Customer' ? 'Convert to Tenant' : act.action}</span>
@@ -6837,18 +6961,54 @@ export default function TenantOnboarding({ erpnextConfig, getCsrfToken, onNaviga
                             key={selectedCase.name}
                             value={selectedCase[signedDocumentFieldname] || ''}
                             baseUrl={erpnextConfig?.url}
-                            upload={file => uploadFileToERPNext(file, erpnextConfig, getCsrfToken)}
+                            upload={file => uploadFileToERPNext(file, erpnextConfig, getCsrfToken, 'Tenant Onboarding', selectedCase.name, signedDocumentFieldname)}
                             save={async fileUrl => {
                               const caseName = selectedCase.name;
-                              const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding/${encodeURIComponent(caseName)}`, {
-                                method: 'PUT',
-                                credentials: 'include',
-                                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-                                body: JSON.stringify({ [signedDocumentFieldname]: fileUrl })
-                              });
-                              if (!res.ok) throw new Error(await extractErrorMessage(res));
-                              setSelectedCase(prev => prev?.name === caseName ? { ...prev, [signedDocumentFieldname]: fileUrl } : prev);
-                              setOnboardings(prev => prev.map(item => item.name === caseName ? { ...item, [signedDocumentFieldname]: fileUrl } : item));
+                              let saved = false;
+
+                              // 1. First try frappe.client.set_value (safe POST RPC, avoids REST PUT CORS/validator issues)
+                              try {
+                                const token = typeof ensureCsrfToken === 'function' ? await ensureCsrfToken() : resolveCsrfToken();
+                                const rpcRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                                  method: 'POST',
+                                  credentials: 'include',
+                                  headers: getAuthHeaders({ 'Content-Type': 'application/json' }, token),
+                                  body: JSON.stringify({
+                                    doctype: 'Tenant Onboarding',
+                                    name: caseName,
+                                    fieldname: signedDocumentFieldname,
+                                    value: fileUrl || ''
+                                  })
+                                });
+                                if (rpcRes.ok) {
+                                  saved = true;
+                                }
+                              } catch (rpcErr) {
+                                console.warn('frappe.client.set_value for signed document failed:', rpcErr);
+                              }
+
+                              // 2. Fallback to PUT /api/resource if set_value wasn't ok
+                              if (!saved) {
+                                try {
+                                  const token = typeof ensureCsrfToken === 'function' ? await ensureCsrfToken() : resolveCsrfToken();
+                                  const res = await fetch(`${erpnextConfig.url}/api/resource/Tenant%20Onboarding/${encodeURIComponent(caseName)}`, {
+                                    method: 'PUT',
+                                    credentials: 'include',
+                                    headers: getAuthHeaders({ 'Content-Type': 'application/json' }, token),
+                                    body: JSON.stringify({ [signedDocumentFieldname]: fileUrl || '' })
+                                  });
+                                  if (res.ok) {
+                                    saved = true;
+                                  } else {
+                                    throw new Error(await extractErrorMessage(res));
+                                  }
+                                } catch (putErr) {
+                                  if (!saved) throw putErr;
+                                }
+                              }
+
+                              setSelectedCase(prev => prev?.name === caseName ? { ...prev, [signedDocumentFieldname]: fileUrl, signed_document: fileUrl } : prev);
+                              setOnboardings(prev => prev.map(item => item.name === caseName ? { ...item, [signedDocumentFieldname]: fileUrl, signed_document: fileUrl } : item));
                             }}
                             preview={url => { setPreviewDocUrl(url); setPreviewDocTitle('Signed Documents'); }}
                           />

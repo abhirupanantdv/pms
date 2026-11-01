@@ -342,36 +342,7 @@ export default function CreateScheduleModal({
       }
     }
 
-    const payload = {
-      customer: schedCustomer,
-      customer_name: schedCustomerName || schedCustomer,
-      transaction_date: schedTransDate || today,
-      custom_booking_id: schedBookingId,
-      custom_property_group: schedPropertyGroup,
-      property_group: schedPropertyGroup,
-      status: 'Draft',
-      custom_maintenance_schedule: customMaintenanceSchedule,
-      items: schedItems.map(r => {
-        const sDate = resolveSchedStartDate(r.startDate);
-        const eDate = resolveSchedEndDate(r.endDate, sDate);
-        return {
-          item_code: r.itemCode,
-          item_name: r.itemName || r.itemCode,
-          property_group: r.propertyGroup || schedPropertyGroup || '',
-          custom_property_group: r.propertyGroup || schedPropertyGroup || '',
-          start_date: sDate,
-          periodicity: isAdhocMaintenance ? 'Random' : (r.periodicity || 'Weekly'),
-          no_of_visits: isAdhocMaintenance ? 1 : (Number(r.noOfVisits) || 1),
-          end_date: eDate
-        };
-      })
-    };
-
-    if (schedProperty && schedProperty !== 'PROP-2041') {
-      payload.custom_property = schedProperty;
-    }
-
-    try {
+    const createSingleSchedule = async (payload) => {
       let createdDoc = null;
       if (onCreateSchedule) {
         try {
@@ -428,16 +399,84 @@ export default function CreateScheduleModal({
         const json = await res.json();
         createdDoc = json.data || json;
       }
+      return createdDoc;
+    };
 
-      setScheduleStatusMessage({ type: 'success', text: 'Maintenance Schedule created successfully!' });
-      if (onSuccess) onSuccess(createdDoc);
+    const createdDocs = [];
+    try {
+      for (const r of schedItems) {
+        const sDate = resolveSchedStartDate(r.startDate);
+        const eDate = resolveSchedEndDate(r.endDate, sDate);
+        const singlePayload = {
+          customer: schedCustomer,
+          customer_name: schedCustomerName || schedCustomer,
+          transaction_date: schedTransDate || today,
+          custom_booking_id: r.bookingId || schedBookingId,
+          custom_property_group: r.propertyGroup || schedPropertyGroup || '',
+          property_group: r.propertyGroup || schedPropertyGroup || '',
+          status: 'Draft',
+          custom_maintenance_schedule: customMaintenanceSchedule,
+          items: [{
+            item_code: r.itemCode,
+            item_name: r.itemName || r.itemCode,
+            property_group: r.propertyGroup || schedPropertyGroup || '',
+            custom_property_group: r.propertyGroup || schedPropertyGroup || '',
+            start_date: sDate,
+            periodicity: isAdhocMaintenance ? 'Random' : (r.periodicity || 'Weekly'),
+            no_of_visits: isAdhocMaintenance ? 1 : (Number(r.noOfVisits) || 1),
+            end_date: eDate
+          }]
+        };
+
+        if (schedProperty && schedProperty !== 'PROP-2041') {
+          singlePayload.custom_property = schedProperty;
+        }
+
+        const doc = await createSingleSchedule(singlePayload);
+        if (doc) {
+          createdDocs.push(doc);
+        }
+      }
+
+      const scheduleNames = createdDocs.map(d => d.name || d.id).filter(Boolean);
+      const successText = createdDocs.length > 1
+        ? `${createdDocs.length} Maintenance Schedules created successfully (${scheduleNames.join(', ')})!`
+        : `Maintenance Schedule created successfully! ${scheduleNames[0] ? `(${scheduleNames[0]})` : ''}`;
+
+      setScheduleStatusMessage({ type: 'success', text: successText });
+      if (onSuccess) {
+        const resultToPass = createdDocs.length === 1
+          ? createdDocs[0]
+          : Object.assign(createdDocs, {
+              name: scheduleNames.join(', '),
+              allSchedules: createdDocs
+            });
+        onSuccess(resultToPass);
+      }
 
       setTimeout(() => {
         setScheduleStatusMessage(null);
         onClose();
-      }, 1200);
+      }, 1500);
     } catch (err) {
-      setScheduleStatusMessage({ type: 'error', text: err.message || 'Error creating maintenance schedule' });
+      if (createdDocs.length > 0) {
+        const scheduleNames = createdDocs.map(d => d.name || d.id).filter(Boolean);
+        setScheduleStatusMessage({
+          type: 'error',
+          text: `Created ${createdDocs.length} schedule(s) (${scheduleNames.join(', ')}), but failed on subsequent unit: ${err.message}`
+        });
+        if (onSuccess) {
+          const resultToPass = createdDocs.length === 1
+            ? createdDocs[0]
+            : Object.assign(createdDocs, {
+                name: scheduleNames.join(', '),
+                allSchedules: createdDocs
+              });
+          onSuccess(resultToPass);
+        }
+      } else {
+        setScheduleStatusMessage({ type: 'error', text: err.message || 'Error creating maintenance schedule' });
+      }
     } finally {
       setSubmittingSchedule(false);
     }
@@ -1025,12 +1064,12 @@ export default function CreateScheduleModal({
               {submittingSchedule ? (
                 <>
                   <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                  Creating...
+                  {schedItems.length > 1 ? `Creating ${schedItems.length} Schedules...` : 'Creating...'}
                 </>
               ) : (
                 <>
                   <Check size={14} />
-                  Create Maintenance Schedule
+                  {schedItems.length > 1 ? `Create Maintenance Schedules (${schedItems.length})` : 'Create Maintenance Schedule'}
                 </>
               )}
             </button>

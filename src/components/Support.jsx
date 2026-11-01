@@ -1604,13 +1604,13 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                       <RefreshCw size={12} style={{ animation: loadingTickets ? 'spin 1s linear infinite' : 'none' }} />
                       <span>{loadingTickets ? 'Syncing...' : 'Refresh'}</span>
                     </button>
-                    <button
+                    {/* <button
                       className="btn btn-primary btn-sm"
                       style={{ padding: '6px 12px', fontSize: 11 }}
                       onClick={() => setShowCreateModal(true)}
                     >
                       Create Issue
-                    </button>
+                    </button> */}
                   </div>
                 </div>
 
@@ -1630,9 +1630,9 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                       const statusClean = (ticket.status || 'Open').toLowerCase();
                       const statusBadgeClass =
                         statusClean === 'open' ? 'badge-warning' :
-                        statusClean === 'replied' ? 'badge-info' :
-                        statusClean === 'on hold' ? 'badge-secondary' :
-                        statusClean === 'resolved' || statusClean === 'closed' ? 'badge-success' : 'badge-warning';
+                          statusClean === 'replied' ? 'badge-info' :
+                            statusClean === 'on hold' ? 'badge-secondary' :
+                              statusClean === 'resolved' || statusClean === 'closed' ? 'badge-success' : 'badge-warning';
 
                       return (
                         <div
@@ -2937,7 +2937,9 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
             // Post resolution comment to ERPNext Issue
             if (erpnextConfig?.url && !String(scheduleTicket.id).startsWith('SUP-')) {
               try {
-                const schedName = createdDoc?.name || 'Maintenance Schedule';
+                const schedName = Array.isArray(createdDoc)
+                  ? createdDoc.map(d => d?.name || d?.id).filter(Boolean).join(', ')
+                  : (createdDoc?.name || createdDoc?.id || 'Maintenance Schedule');
                 await fetch(`${erpnextConfig.url}/api/resource/Comment`, {
                   method: 'POST',
                   credentials: 'include',

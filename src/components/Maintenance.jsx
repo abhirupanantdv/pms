@@ -4483,6 +4483,11 @@ export default function Maintenance({
 
     const today = getTodayStr();
     for (const r of schedItems) {
+      if (!r.itemCode) {
+        showToast("Please specify a Unit Code for all scheduled items.", "error");
+        setSubmittingSchedule(false);
+        return;
+      }
       const sDate = resolveSchedStartDate(r.startDate);
       if (sDate < today) {
         showToast("Start Date cannot be before today.", "error");
@@ -4500,37 +4505,55 @@ export default function Maintenance({
 
     const tenantObj = (tenants || []).find(t => t.id === schedCustomer || t.name === schedCustomer);
     const customerName = tenantObj ? (tenantObj.customer_name || tenantObj.name) : schedCustomer;
-    const payload = {
-      customer: schedCustomer,
-      customer_name: customerName,
-      transaction_date: schedTransDate,
-      custom_booking_id: schedBookingId,
-      custom_property: schedProperty,
-      custom_property_group: schedPropertyGroup,
-      property_group: schedPropertyGroup,
-      status: 'Draft',
-      custom_maintenance_schedule: custom_maintenance_schedule,
-      items: schedItems.map(r => {
+
+    const createdDocs = [];
+    try {
+      for (const r of schedItems) {
         const sDate = resolveSchedStartDate(r.startDate);
         const eDate = resolveSchedEndDate(r.endDate, sDate);
-        return {
-          item_code: r.itemCode,
-          item_name: r.itemName || r.itemCode,
-          property_group: r.propertyGroup || schedPropertyGroup || '',
+        const singlePayload = {
+          customer: schedCustomer,
+          customer_name: customerName,
+          transaction_date: schedTransDate || today,
+          custom_booking_id: r.bookingId || schedBookingId,
+          custom_property: schedProperty,
           custom_property_group: r.propertyGroup || schedPropertyGroup || '',
-          start_date: sDate,
-          periodicity: isAdhocMaintenance ? 'Random' : (r.periodicity || 'Weekly'),
-          no_of_visits: isAdhocMaintenance ? 1 : (Number(r.noOfVisits) || 1),
-          end_date: eDate
+          property_group: r.propertyGroup || schedPropertyGroup || '',
+          status: 'Draft',
+          custom_maintenance_schedule: custom_maintenance_schedule,
+          items: [{
+            item_code: r.itemCode,
+            item_name: r.itemName || r.itemCode,
+            property_group: r.propertyGroup || schedPropertyGroup || '',
+            custom_property_group: r.propertyGroup || schedPropertyGroup || '',
+            start_date: sDate,
+            periodicity: isAdhocMaintenance ? 'Random' : (r.periodicity || 'Weekly'),
+            no_of_visits: isAdhocMaintenance ? 1 : (Number(r.noOfVisits) || 1),
+            end_date: eDate
+          }]
         };
-      })
-    };
-    try {
-      await onCreateSchedule(payload);
-      setScheduleStatusMessage({ type: 'success', text: 'Maintenance Schedule created successfully!' });
+        const created = await onCreateSchedule(singlePayload);
+        if (created) createdDocs.push(created);
+      }
+
+      const scheduleNames = createdDocs.map(d => d.name || d.id).filter(Boolean);
+      const successText = createdDocs.length > 1
+        ? `${createdDocs.length} Maintenance Schedules created successfully (${scheduleNames.join(', ')})!`
+        : `Maintenance Schedule created successfully! ${scheduleNames[0] ? `(${scheduleNames[0]})` : ''}`;
+
+      setScheduleStatusMessage({ type: 'success', text: successText });
       setTimeout(() => { setShowScheduleModal(false); setScheduleStatusMessage(null); fetchSchedules(); }, 1200);
     } catch (err) {
-      setScheduleStatusMessage({ type: 'error', text: err.message });
+      if (createdDocs.length > 0) {
+        const scheduleNames = createdDocs.map(d => d.name || d.id).filter(Boolean);
+        setScheduleStatusMessage({
+          type: 'error',
+          text: `Created ${createdDocs.length} schedule(s) (${scheduleNames.join(', ')}), but failed on subsequent unit: ${err.message}`
+        });
+        fetchSchedules();
+      } else {
+        setScheduleStatusMessage({ type: 'error', text: err.message });
+      }
     } finally { setSubmittingSchedule(false); }
   };
 
@@ -7179,12 +7202,12 @@ export default function Maintenance({
                   {submittingSchedule ? (
                     <>
                       <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                      Creating...
+                      {schedItems.length > 1 ? `Creating ${schedItems.length} Schedules...` : 'Creating...'}
                     </>
                   ) : (
                     <>
                       <Check size={14} />
-                      Create Maintenance Schedule
+                      {schedItems.length > 1 ? `Create Maintenance Schedules (${schedItems.length})` : 'Create Maintenance Schedule'}
                     </>
                   )}
                 </button>

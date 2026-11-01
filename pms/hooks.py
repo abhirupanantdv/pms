@@ -23,7 +23,10 @@ website_route_rules = [
 
 doc_events = {
     "Tenant Onboarding": {
-        "validate": "pms.utils.validate_tenant_onboarding_phone"
+        "validate": [
+            "pms.utils.validate_tenant_onboarding_phone",
+            "pms.utils.validate_tenant_onboarding_signed_document"
+        ]
     },
     "Quotation": {
         "before_submit": "pms.utils.validate_quotation_payment_details"
