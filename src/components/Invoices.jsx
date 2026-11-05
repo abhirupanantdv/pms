@@ -21,7 +21,9 @@ import {
   Loader2,
   Search,
   ChevronDown,
-  Percent
+  Percent,
+  CreditCard,
+  ExternalLink
 } from 'lucide-react';
 import { getAuthHeaders, getCsrfToken, ensureCsrfToken } from '../config';
 
@@ -107,7 +109,19 @@ const toErpNextDate = (val) => {
   return str;
 };
 
-export default function Invoices({ invoices, accounts = [], glEntries = [], onAddInvoice, onRecordPayment, erpnextConfig, tenants = [], properties = [], bookings = [] }) {
+export default function Invoices({
+  invoices,
+  accounts = [],
+  glEntries = [],
+  onAddInvoice,
+  onRecordPayment,
+  erpnextConfig,
+  tenants = [],
+  properties = [],
+  bookings = [],
+  preSelectedInvoiceId,
+  clearPreSelectedInvoiceId
+}) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showGLModal, setShowGLModal] = useState(false); // General Ledger & Trial Balance modal
   const [selectedInvoice, setSelectedInvoice] = useState(null);
@@ -122,6 +136,15 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
   });
   const [invoiceDetailsExtra, setInvoiceDetailsExtra] = useState(null);
   const [loadingExtra, setLoadingExtra] = useState(false);
+  const [creatingPaymentReceive, setCreatingPaymentReceive] = useState(false);
+  const [createdPaymentEntryId, setCreatedPaymentEntryId] = useState(null);
+  const [linkedPaymentEntries, setLinkedPaymentEntries] = useState([]);
+  const [loadingLinkedPayments, setLoadingLinkedPayments] = useState(false);
+  const [selectedPaymentEntryId, setSelectedPaymentEntryId] = useState('');
+
+  useEffect(() => {
+    setCreatedPaymentEntryId(null);
+  }, [selectedInvoice?.id]);
 
   // Dynamic Sales Invoice Form States
   const getTodayStr = () => new Date().toISOString().split('T')[0];
@@ -465,6 +488,170 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     };
   }, [selectedInvoice?.id, activeReceipt?.id, erpnextConfig]);
 
+  // Fetch linked payment entries for selected invoice via custom backend api.py
+  const fetchLinkedPaymentEntries = async (invoiceId) => {
+    if (!invoiceId) {
+      setLinkedPaymentEntries([]);
+      setSelectedPaymentEntryId('');
+      return;
+    }
+    setLoadingLinkedPayments(true);
+    try {
+      let entries = [];
+      let backendSuccess = false;
+
+      // 1. Call custom backend api in pms.api.get_sales_invoice_payment_entries
+      if (erpnextConfig?.url) {
+        try {
+          const res = await fetch(
+            `${erpnextConfig.url}/api/method/pms.api.get_sales_invoice_payment_entries?sales_invoice_id=${encodeURIComponent(invoiceId)}`,
+            {
+              credentials: 'include',
+              headers: getAuthHeaders()
+            }
+          );
+          if (res.ok) {
+            const json = await res.json();
+            const resData = json.message || json;
+            if (resData && Array.isArray(resData.payment_entries)) {
+              entries = resData.payment_entries;
+              backendSuccess = true;
+            }
+          }
+        } catch (e1) {
+          console.warn('pms.api get_sales_invoice_payment_entries call failed, checking fallback:', e1);
+        }
+
+        // 2. Call pms.utils.get_sales_invoice_payment_entries fallback
+        if (!backendSuccess) {
+          try {
+            const res2 = await fetch(
+              `${erpnextConfig.url}/api/method/pms.utils.get_sales_invoice_payment_entries?sales_invoice_id=${encodeURIComponent(invoiceId)}`,
+              {
+                credentials: 'include',
+                headers: getAuthHeaders()
+              }
+            );
+            if (res2.ok) {
+              const json2 = await res2.json();
+              const resData2 = json2.message || json2;
+              if (resData2 && Array.isArray(resData2.payment_entries)) {
+                entries = resData2.payment_entries;
+                backendSuccess = true;
+              }
+            }
+          } catch (e2) {
+            console.warn('pms.utils get_sales_invoice_payment_entries fallback failed:', e2);
+          }
+        }
+
+        // 3. Fallback: Query Payment Entry Reference doc via REST API
+        if (!backendSuccess && entries.length === 0) {
+          try {
+            const refUrl = `${erpnextConfig.url}/api/resource/Payment%20Entry%20Reference?filters=${encodeURIComponent(
+              JSON.stringify([
+                ['reference_doctype', '=', 'Sales Invoice'],
+                ['reference_name', '=', invoiceId]
+              ])
+            )}&fields=${encodeURIComponent(JSON.stringify(['parent', 'allocated_amount', 'total_amount']))}&limit_page_length=50`;
+            const refRes = await fetch(refUrl, {
+              credentials: 'include',
+              headers: getAuthHeaders()
+            });
+            if (refRes.ok) {
+              const refJson = await refRes.json();
+              const refs = refJson.data || [];
+              if (refs.length > 0) {
+                const uniqueParents = Array.from(new Set(refs.map(r => r.parent)));
+                const details = await Promise.all(
+                  uniqueParents.map(async (parentId) => {
+                    try {
+                      const peRes = await fetch(
+                        `${erpnextConfig.url}/api/resource/Payment%20Entry/${encodeURIComponent(parentId)}`,
+                        { credentials: 'include', headers: getAuthHeaders() }
+                      );
+                      if (peRes.ok) {
+                        const peJson = await peRes.json();
+                        const pDoc = peJson.data || peJson;
+                        return {
+                          name: pDoc.name,
+                          posting_date: pDoc.posting_date,
+                          paid_amount: pDoc.paid_amount,
+                          received_amount: pDoc.received_amount,
+                          status: pDoc.status || (pDoc.docstatus === 1 ? 'Submitted' : 'Draft'),
+                          docstatus: pDoc.docstatus,
+                          mode_of_payment: pDoc.mode_of_payment || 'Cash'
+                        };
+                      }
+                    } catch (e) {
+                      // fallback
+                    }
+                    return {
+                      name: parentId,
+                      status: 'Draft',
+                      docstatus: 0,
+                      paid_amount: 0
+                    };
+                  })
+                );
+                entries = details.filter(Boolean);
+              }
+            }
+          } catch (e3) {
+            console.warn('REST fallback failed:', e3);
+          }
+        }
+      }
+
+      // If createdPaymentEntryId is known and not in entries, include it at top
+      if (createdPaymentEntryId && !entries.some(e => e.name === createdPaymentEntryId)) {
+        entries.unshift({
+          name: createdPaymentEntryId,
+          status: 'Draft',
+          docstatus: 0,
+          paid_amount: selectedInvoice?.amount || 0,
+          posting_date: new Date().toISOString().split('T')[0]
+        });
+      }
+
+      setLinkedPaymentEntries(entries);
+      if (entries.length > 0) {
+        setSelectedPaymentEntryId(entries[0].name);
+      } else {
+        setSelectedPaymentEntryId('');
+      }
+    } catch (err) {
+      console.warn('fetchLinkedPaymentEntries error:', err);
+    } finally {
+      setLoadingLinkedPayments(false);
+    }
+  };
+
+  useEffect(() => {
+    const invId = selectedInvoice?.id || activeReceipt?.id;
+    if (invId) {
+      fetchLinkedPaymentEntries(invId);
+    } else {
+      setLinkedPaymentEntries([]);
+      setSelectedPaymentEntryId('');
+    }
+  }, [selectedInvoice?.id, activeReceipt?.id, erpnextConfig?.url]);
+
+  useEffect(() => {
+    const handleEntryEvent = () => {
+      const invId = selectedInvoice?.id || activeReceipt?.id;
+      if (invId) {
+        fetchLinkedPaymentEntries(invId);
+      }
+    };
+    window.addEventListener('pms:payment-entry-created', handleEntryEvent);
+    window.addEventListener('pms:payment-entry-updated', handleEntryEvent);
+    return () => {
+      window.removeEventListener('pms:payment-entry-created', handleEntryEvent);
+      window.removeEventListener('pms:payment-entry-updated', handleEntryEvent);
+    };
+  }, [selectedInvoice?.id, activeReceipt?.id]);
+
   // Sort invoices so that latest created invoice is ALWAYS on top (descending by creation / id)
   const sortedInvoices = useMemo(() => {
     if (!invoices || !Array.isArray(invoices)) return [];
@@ -492,14 +679,52 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     });
   }, [invoices]);
 
-  // Keep first/latest invoice selected when list loads or changes
+  // Handle preSelectedInvoiceId from navigation
   useEffect(() => {
-    if (sortedInvoices.length > 0) {
-      if (!selectedInvoice || !sortedInvoices.some(inv => inv.id === selectedInvoice.id)) {
-        setSelectedInvoice(sortedInvoices[0]);
+    if (preSelectedInvoiceId) {
+      const match = sortedInvoices.find(inv => inv.id === preSelectedInvoiceId || inv.name === preSelectedInvoiceId);
+      if (match) {
+        setSelectedInvoice(match);
+        const idx = sortedInvoices.findIndex(inv => inv.id === preSelectedInvoiceId || inv.name === preSelectedInvoiceId);
+        if (idx >= 0) {
+          setCurrentPage(Math.floor(idx / 6) + 1);
+        }
+      } else {
+        setSelectedInvoice({ id: preSelectedInvoiceId, name: preSelectedInvoiceId });
       }
+      if (clearPreSelectedInvoiceId) clearPreSelectedInvoiceId();
     }
+  }, [preSelectedInvoiceId, sortedInvoices]);
+
+  // Window event listener for direct invoice navigation (e.g. from Payment Entry table)
+  useEffect(() => {
+    const handleNavInvoice = (e) => {
+      const targetInvId = e.detail?.invoiceId || e.detail?.id;
+      if (targetInvId) {
+        const match = sortedInvoices.find(inv => inv.id === targetInvId || inv.name === targetInvId);
+        if (match) {
+          setSelectedInvoice(match);
+          const idx = sortedInvoices.findIndex(inv => inv.id === targetInvId || inv.name === targetInvId);
+          if (idx >= 0) {
+            setCurrentPage(Math.floor(idx / 6) + 1);
+          }
+        } else {
+          setSelectedInvoice({ id: targetInvId, name: targetInvId });
+        }
+      }
+    };
+    window.addEventListener('pms:navigate-invoice', handleNavInvoice);
+    return () => {
+      window.removeEventListener('pms:navigate-invoice', handleNavInvoice);
+    };
   }, [sortedInvoices]);
+
+  // Keep first/latest invoice selected on initial load if none selected
+  useEffect(() => {
+    if (sortedInvoices.length > 0 && !selectedInvoice && !preSelectedInvoiceId) {
+      setSelectedInvoice(sortedInvoices[0]);
+    }
+  }, [sortedInvoices, preSelectedInvoiceId]);
 
   // Pagination states & calculations
   const [currentPage, setCurrentPage] = useState(1);
@@ -1691,6 +1916,240 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
     }
   };
 
+  const handleCreatePaymentReceive = async (invoice) => {
+    if (!invoice) return;
+    const invId = invoice.id || invoice.name;
+    const invDoc = invoiceDetailsExtra?.doc || invoice.rawDoc || invoice;
+    const invAmount = Number(
+      invDoc?.outstanding_amount !== undefined
+        ? invDoc.outstanding_amount
+        : (invDoc?.rounded_total ?? invDoc?.grand_total ?? invoice.amount ?? 0)
+    );
+    const partyId = invDoc?.customer || invoice.customer || invoice.tenantId || 'Customer';
+    const partyName = invDoc?.customer_name || invoice.tenantName || partyId;
+    const invCurrency = invDoc?.currency || companyDetails?.currency || 'FJD';
+    const today = toErpNextDate(new Date());
+
+    setCreatingPaymentReceive(true);
+    try {
+      let peName = null;
+
+      if (erpnextConfig?.url && !String(invId).startsWith('INV-')) {
+        const currentStatus = String(invDoc?.status || invoice?.status || '').toUpperCase();
+        const isDraftInvoice = invDoc?.docstatus === 0 || invoice?.docstatus === 0 || currentStatus === 'DRAFT' || currentStatus === 'PENDING';
+        if (isDraftInvoice) {
+          try {
+            await fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice/${encodeURIComponent(invId)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: getAuthHeaders({
+                'Content-Type': 'application/json',
+                'X-Frappe-CSRF-Token': getCsrfToken() || ''
+              }),
+              body: JSON.stringify({ docstatus: 1 })
+            });
+          } catch (subErr) {
+            console.warn('Frontend Sales Invoice submit check error:', subErr);
+          }
+        }
+
+        // 1. Try backend whitelisted method create_payment_receive_entry
+        try {
+          const res = await fetch(`${erpnextConfig.url}/api/method/pms.utils.create_payment_receive_entry`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getAuthHeaders({
+              'Content-Type': 'application/json',
+              'X-Frappe-CSRF-Token': getCsrfToken() || ''
+            }),
+            body: JSON.stringify({ sales_invoice_name: invId })
+          });
+
+          if (res.ok) {
+            const jsonRes = await res.json();
+            const result = jsonRes.message || jsonRes.data || jsonRes;
+            if (result && (result.name || result.payment_entry)) {
+              peName = result.name || result.payment_entry;
+            }
+          }
+        } catch (e1) {
+          console.warn('Backend create_payment_receive_entry call error, falling back:', e1);
+        }
+
+        // 2. Fallback: try ERPNext standard get_payment_entry, set Draft and insert
+        if (!peName) {
+          try {
+            const resGet = await fetch(
+              `${erpnextConfig.url}/api/method/erpnext.accounts.doctype.payment_entry.payment_entry.get_payment_entry`,
+              {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders({
+                  'Content-Type': 'application/json',
+                  'X-Frappe-CSRF-Token': getCsrfToken() || ''
+                }),
+                body: JSON.stringify({ dt: 'Sales Invoice', dn: invId })
+              }
+            );
+
+            if (resGet.ok) {
+              const resJson = await resGet.json();
+              const peDraft = resJson.message || resJson.data;
+              if (peDraft && typeof peDraft === 'object') {
+                peDraft.docstatus = 0;
+                peDraft.status = 'Draft';
+                if (!peDraft.mode_of_payment) peDraft.mode_of_payment = 'Cash';
+                if (!peDraft.paid_to) peDraft.paid_to = 'Cash - CFPL';
+                if (!peDraft.paid_from) peDraft.paid_from = invDoc?.debit_to || 'Debtors - CFPL';
+                if (!peDraft.cost_center) peDraft.cost_center = invDoc?.cost_center || 'Main - CFPL';
+                if (!peDraft.payment_order_status) peDraft.payment_order_status = 'Initiated';
+
+                const resPost = await fetch(`${erpnextConfig.url}/api/resource/Payment Entry`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getAuthHeaders({
+                    'Content-Type': 'application/json',
+                    'X-Frappe-CSRF-Token': getCsrfToken() || ''
+                  }),
+                  body: JSON.stringify(peDraft)
+                });
+
+                if (resPost.ok) {
+                  const postJson = await resPost.json();
+                  const savedDoc = postJson.data || postJson;
+                  peName = savedDoc?.name;
+                }
+              }
+            }
+          } catch (e2) {
+            console.warn('Standard get_payment_entry fallback error:', e2);
+          }
+        }
+
+        // 3. Fallback: direct REST API POST matching exact sample json structure
+        if (!peName) {
+          const directPayload = {
+            doctype: 'Payment Entry',
+            docstatus: 0,
+            status: 'Draft',
+            payment_type: 'Receive',
+            party_type: 'Customer',
+            party: partyId,
+            party_name: partyName,
+            company: invDoc?.company || companyDetails.name || 'CARPENTERS PROPERTIES PTE LIMITED',
+            cost_center: invDoc?.cost_center || 'Main - CFPL',
+            posting_date: today,
+            reference_date: today,
+            mode_of_payment: 'Cash',
+            paid_from: invDoc?.debit_to || 'Debtors - CFPL',
+            paid_to: 'Cash - CFPL',
+            paid_from_account_currency: invCurrency,
+            paid_to_account_currency: invCurrency,
+            paid_amount: invAmount,
+            received_amount: invAmount,
+            base_paid_amount: invAmount,
+            base_received_amount: invAmount,
+            base_total_allocated_amount: invAmount,
+            total_allocated_amount: invAmount,
+            difference_amount: 0,
+            unallocated_amount: 0,
+            payment_order_status: 'Initiated',
+            naming_series: 'ACC-PAY-.YYYY.-',
+            remarks: `Amount ${invCurrency} ${invAmount} received from ${partyId}\nAmount ${invCurrency} ${invAmount} against Sales Invoice ${invId}`,
+            references: [
+              {
+                reference_doctype: 'Sales Invoice',
+                reference_name: invId,
+                total_amount: invAmount,
+                outstanding_amount: invAmount,
+                allocated_amount: invAmount
+              }
+            ]
+          };
+
+          const resDirect = await fetch(`${erpnextConfig.url}/api/resource/Payment Entry`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getAuthHeaders({
+              'Content-Type': 'application/json',
+              'X-Frappe-CSRF-Token': getCsrfToken() || ''
+            }),
+            body: JSON.stringify(directPayload)
+          });
+
+          if (resDirect.ok) {
+            const directJson = await resDirect.json();
+            const savedDirectDoc = directJson.data || directJson;
+            peName = savedDirectDoc?.name;
+          } else {
+            const errJson = await resDirect.json().catch(() => null);
+            let errMsg = 'Failed to create Payment Entry in ERPNext';
+            if (errJson?._server_messages) {
+              try {
+                const parsedMsgs = JSON.parse(errJson._server_messages);
+                if (Array.isArray(parsedMsgs) && parsedMsgs.length > 0) {
+                  const first = typeof parsedMsgs[0] === 'string' ? JSON.parse(parsedMsgs[0]) : parsedMsgs[0];
+                  errMsg = first?.message || parsedMsgs[0];
+                }
+              } catch {
+                errMsg = String(errJson._server_messages);
+              }
+            } else if (errJson?.exception) {
+              errMsg = errJson.exception;
+            } else if (errJson?.message) {
+              errMsg = errJson.message;
+            }
+            throw new Error(errMsg);
+          }
+        }
+      } else {
+        // Mock fallback if offline or local simulated invoice
+        peName = `ACC-PAY-2026-${Math.floor(10000 + Math.random() * 90000)}`;
+      }
+
+      setCreatedPaymentEntryId(peName);
+      setSelectedPaymentEntryId(peName);
+      fetchLinkedPaymentEntries(invId);
+      showToast(`Payment Entry ${peName} created with Draft status.`, 'success');
+
+      // Update invoice locally if it was Draft so status pill reflects submitted invoice
+      setSelectedInvoice(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          status: 'unpaid',
+          rawDoc: prev.rawDoc ? { ...prev.rawDoc, docstatus: 1, status: 'Unpaid' } : prev.rawDoc
+        };
+      });
+      if (invoiceDetailsExtra?.doc) {
+        setInvoiceDetailsExtra(prev => prev ? {
+          ...prev,
+          doc: { ...prev.doc, docstatus: 1, status: 'Unpaid' }
+        } : prev);
+      }
+
+      // Dispatch event to refresh Payment Entry view
+      window.dispatchEvent(new CustomEvent('pms:payment-entry-created', {
+        detail: { name: peName, invoice: invId }
+      }));
+    } catch (err) {
+      console.error('Error creating Payment Receive entry:', err);
+      let errorMsg = err.message || 'Check connection or permissions';
+      try {
+        if (typeof errorMsg === 'string' && errorMsg.startsWith('[')) {
+          const parsed = JSON.parse(errorMsg);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const inner = typeof parsed[0] === 'string' ? JSON.parse(parsed[0]) : parsed[0];
+            errorMsg = inner?.message || errorMsg;
+          }
+        }
+      } catch { }
+      showToast(`Error creating Payment Entry: ${errorMsg}`, 'error');
+    } finally {
+      setCreatingPaymentReceive(false);
+    }
+  };
+
   // GL and Trial Balance Calculation from existing invoices
   const totalInvoicesValue = invoices.reduce((acc, i) => acc + i.amount, 0);
   const totalPaid = invoices.filter(i => i.status === 'paid').reduce((acc, i) => acc + i.amount, 0);
@@ -1728,7 +2187,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
             <span>Outstanding Receivables</span>
             <ArrowDownRight size={18} className="indicator-down" />
           </div>
-          <div className="stat-value">${totalPending.toLocaleString()}</div>
+          <div className="stat-value">F${totalPending.toLocaleString()}</div>
           <div className="stat-indicator indicator-down">{invoices.filter(i => i.status === 'pending').length} Unpaid Invoices</div>
         </div>
         <div className="stat-card">
@@ -1736,7 +2195,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
             <span>Total Collected (MDT)</span>
             <ArrowUpRight size={18} className="indicator-up" />
           </div>
-          <div className="stat-value">${totalPaid.toLocaleString()}</div>
+          <div className="stat-value">F${totalPaid.toLocaleString()}</div>
           <div className="stat-indicator indicator-up">+12% vs last month</div>
         </div>
       </div>
@@ -1787,7 +2246,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           ? invoiceDetailsExtra.unitName
                           : (inv.propertyId || 'Unit-N/A')}
                       </td>
-                      <td style={{ fontWeight: 600 }}>${Number(inv.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ fontWeight: 600 }}>F${Number(inv.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td>
                         <span style={{
                           padding: '2px 8px',
@@ -1962,6 +2421,173 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                 </div>
               </div>
 
+              {/* TOP OF ITEM & DESCRIPTION TABLE: TITLE & LINKED PAYMENT ENTRY DROPDOWN */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: 8,
+                marginTop: 2,
+                marginBottom: 2
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color: '#374151',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em'
+                  }}>
+                    Item & Description Table
+                  </span>
+                  {linkedPaymentEntries.length > 0 && (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      padding: '1px 6px',
+                      borderRadius: 10,
+                      backgroundColor: '#eff6ff',
+                      color: '#1d4ed8',
+                      border: '1px solid #bfdbfe'
+                    }}>
+                      {linkedPaymentEntries.length} {linkedPaymentEntries.length === 1 ? 'Payment' : 'Payments'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Top Right: Payment Entry ID Dropdown / Link */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+                  {loadingLinkedPayments ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#6b7280' }}>
+                      <Loader2 size={11} className="animate-spin" />
+                      <span>Checking Payment Entries...</span>
+                    </div>
+                  ) : linkedPaymentEntries.length > 0 ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <label style={{ fontSize: 10, fontWeight: 600, color: '#4b5563', whiteSpace: 'nowrap' }}>
+                        Payment Entry ID:
+                      </label>
+                      {linkedPaymentEntries.length > 1 ? (
+                        <select
+                          value={selectedPaymentEntryId || linkedPaymentEntries[0]?.name}
+                          onChange={(e) => setSelectedPaymentEntryId(e.target.value)}
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 600,
+                            padding: '3px 6px',
+                            borderRadius: 4,
+                            border: '1px solid #d1d5db',
+                            background: '#ffffff',
+                            color: '#111827',
+                            cursor: 'pointer',
+                            outline: 'none',
+                            maxWidth: 220
+                          }}
+                        >
+                          {linkedPaymentEntries.map((pe, pIdx) => (
+                            <option key={pe.name || pIdx} value={pe.name}>
+                              {pe.name} ({pe.status || (pe.docstatus === 1 ? 'Submitted' : 'Draft')}{pe.paid_amount != null ? ` - F$${Number(pe.paid_amount).toFixed(2)}` : ''})
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          background: '#f3f4f6',
+                          color: '#111827',
+                          border: '1px solid #e5e7eb'
+                        }}>
+                          {linkedPaymentEntries[0].name} ({linkedPaymentEntries[0].status || (linkedPaymentEntries[0].docstatus === 1 ? 'Submitted' : 'Draft')})
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const targetId = selectedPaymentEntryId || linkedPaymentEntries[0]?.name;
+                          if (targetId) {
+                            window.dispatchEvent(new CustomEvent('pms:navigate-payment-entry', {
+                              detail: { id: targetId, paymentEntryId: targetId }
+                            }));
+                          }
+                        }}
+                        title={`Link to Payment Entry Table (${selectedPaymentEntryId || linkedPaymentEntries[0]?.name})`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '3px 8px',
+                          fontSize: 10,
+                          fontWeight: 600,
+                          color: '#1d4ed8',
+                          backgroundColor: '#eff6ff',
+                          border: '1px solid #bfdbfe',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                          transition: 'all 0.15s ease'
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#dbeafe'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#eff6ff'; }}
+                      >
+                        <ExternalLink size={11} />
+                        <span>Link with Payment Entry Table</span>
+                      </button>
+                    </div>
+                  ) : createdPaymentEntryId ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <label style={{ fontSize: 10, fontWeight: 600, color: '#4b5563', whiteSpace: 'nowrap' }}>
+                        Payment Entry ID:
+                      </label>
+                      <span style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        background: '#f0fdf4',
+                        color: '#166534',
+                        border: '1px solid #86efac'
+                      }}>
+                        {createdPaymentEntryId} (Draft)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          window.dispatchEvent(new CustomEvent('pms:navigate-payment-entry', {
+                            detail: { id: createdPaymentEntryId, paymentEntryId: createdPaymentEntryId }
+                          }));
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '3px 8px',
+                          fontSize: 10,
+                          fontWeight: 600,
+                          color: '#16a34a',
+                          backgroundColor: '#f0fdf4',
+                          border: '1px solid #86efac',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        <ExternalLink size={11} />
+                        <span>Link with Payment Entry Table</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: 10, color: '#9ca3af', fontStyle: 'italic' }}>
+                      No Payment Entry created
+                    </span>
+                  )}
+                </div>
+              </div>
+
               {/* MIDDLE: LINE ITEMS TABLE */}
               <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, textAlign: 'left' }}>
@@ -1986,10 +2612,10 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           {getItemArea(item)}
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'right', color: '#4b5563' }}>
-                          $ {(Number(item.rate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          F$ {(Number(item.rate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#111827' }}>
-                          $ {(Number(item.amount != null ? item.amount : ((item.qty || 1) * (item.rate || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          F$ {(Number(item.amount != null ? item.amount : ((item.qty || 1) * (item.rate || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     ))}
@@ -2000,7 +2626,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                         Net Total / Subtotal
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#374151' }}>
-                        $ {Number(netTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        F$ {Number(netTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                     </tr>
 
@@ -2012,7 +2638,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                             {tax.description || tax.account_head || 'VAT / Tax'} {tax.rate ? `(${tax.rate}%)` : ''}
                           </td>
                           <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#4b5563' }}>
-                            $ {(Number(tax.tax_amount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            F$ {(Number(tax.tax_amount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
                         </tr>
                       ))
@@ -2022,7 +2648,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           Taxes & Charges (12.5%)
                         </td>
                         <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#4b5563' }}>
-                          $ {Number(totalTaxes).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          F$ {Number(totalTaxes).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     ) : null}
@@ -2034,7 +2660,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           Rounding Adjustment
                         </td>
                         <td style={{ padding: '4px 10px', textAlign: 'right', fontSize: 9, color: '#6b7280' }}>
-                          $ {roundingAdjustment.toFixed(2)}
+                          F$ {roundingAdjustment.toFixed(2)}
                         </td>
                       </tr>
                     )}
@@ -2045,7 +2671,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                         Total Amount Due ({activeCurrency})
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: '#111827', fontSize: 11 }}>
-                        $ {Number(grandTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        F$ {Number(grandTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                     </tr>
 
@@ -2056,7 +2682,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           Balance Outstanding (Paid)
                         </td>
                         <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#065f46', fontSize: 10 }}>
-                          $ 0.00
+                          F$ 0.00
                         </td>
                       </tr>
                     ) : outstandingAmount > 0 && outstandingAmount !== grandTotal ? (
@@ -2065,7 +2691,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           Outstanding Balance Due
                         </td>
                         <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#92400e', fontSize: 10 }}>
-                          $ {Number(outstandingAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          F$ {Number(outstandingAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     ) : null}
@@ -2192,35 +2818,85 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
               </div>
 
               {/* Action buttons */}
-              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                {(selectedInvoice.status === 'pending' || displayStatus === 'DRAFT' || displayStatus === 'UNPAID') && (
+              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {createdPaymentEntryId && (
+                  <div style={{
+                    width: '100%',
+                    padding: '9px 12px',
+                    borderRadius: 6,
+                    background: '#f0fdf4',
+                    border: '1px solid #86efac',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    fontSize: 11,
+                    color: '#166534'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <CheckCircle2 size={15} color="#16a34a" />
+                      <span>
+                        Draft Payment Entry <strong>{createdPaymentEntryId}</strong> created successfully.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        window.dispatchEvent(new CustomEvent('pms:navigate-payment-entry', { detail: { id: createdPaymentEntryId } }));
+                      }}
+                      style={{
+                        background: '#16a34a',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: 4,
+                        padding: '4px 10px',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      View in Payment Entry →
+                    </button>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {(selectedInvoice.status === 'pending' || displayStatus === 'DRAFT' || displayStatus === 'UNPAID' || !createdPaymentEntryId) && (
+                    <button
+                      className="btn btn-primary"
+                      style={{ flex: 1, minWidth: 160, fontSize: 11, gap: 6, background: '#ffdd00', color: '#000' }}
+                      disabled={creatingPaymentReceive}
+                      onClick={() => handleCreatePaymentReceive(selectedInvoice)}
+                    >
+                      {creatingPaymentReceive ? (
+                        <>
+                          <Loader2 size={13} className="animate-spin" /> Creating Payment Receive...
+                        </>
+                      ) : (
+                        <>
+                          <CreditCard size={13} /> Create a Payment Receive
+                        </>
+                      )}
+                    </button>
+                  )}
                   <button
-                    className="btn btn-primary"
-                    style={{ flex: 1, minWidth: 140, fontSize: 11, gap: 6, background: '#ffdd00', color: '#000' }}
+                    className="btn btn-secondary"
+                    style={{ flex: 1, minWidth: 100, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
+                    onClick={() => handlePrint(selectedInvoice)}
+                  >
+                    <Printer size={13} /> Print Invoice
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ flex: 1, minWidth: 120, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
                     onClick={() => {
-                      onRecordPayment(selectedInvoice.id);
-                      setSelectedInvoice({ ...selectedInvoice, status: 'paid' });
+                      alert(`Emailing Tax Invoice ${selectedInvoice.id} to tenant address: ${invoiceDetailsExtra?.customerAddress || 'Customer registered address'}`);
                     }}
                   >
-                    <CheckCircle2 size={13} /> Record Payment Received
+                    <Mail size={13} /> Send Email
                   </button>
-                )}
-                <button
-                  className="btn btn-secondary"
-                  style={{ flex: 1, minWidth: 100, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
-                  onClick={() => handlePrint(selectedInvoice)}
-                >
-                  <Printer size={13} /> Print Invoice
-                </button>
-                <button
-                  className="btn btn-secondary"
-                  style={{ flex: 1, minWidth: 120, fontSize: 11, gap: 6, borderColor: '#d1d5db', color: '#374151', background: '#f9fafb' }}
-                  onClick={() => {
-                    alert(`Emailing Tax Invoice ${selectedInvoice.id} to tenant address: ${invoiceDetailsExtra?.customerAddress || 'Customer registered address'}`);
-                  }}
-                >
-                  <Mail size={13} /> Send Email
-                </button>
+                </div>
               </div>
             </div>
           );
@@ -2279,8 +2955,8 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           <th>Account Name</th>
                           <th>Parent Account</th>
                           <th>Type</th>
-                          <th style={{ textAlign: 'right' }}>Debit ($)</th>
-                          <th style={{ textAlign: 'right' }}>Credit ($)</th>
+                          <th style={{ textAlign: 'right' }}>Debit (F$)</th>
+                          <th style={{ textAlign: 'right' }}>Credit (F$)</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2291,10 +2967,10 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                             <td>{acc.parent_account}</td>
                             <td><span className="badge" style={{ fontSize: 9, padding: '2px 6px', textTransform: 'capitalize' }}>{acc.root_type}</span></td>
                             <td style={{ textAlign: 'right', color: acc.debit > 0 ? 'var(--color-success)' : 'var(--text-muted)', fontWeight: acc.debit > 0 ? 600 : 400 }}>
-                              {acc.debit > 0 ? `$${acc.debit.toLocaleString()}` : '-'}
+                              {acc.debit > 0 ? `F$${acc.debit.toLocaleString()}` : '-'}
                             </td>
                             <td style={{ textAlign: 'right', color: acc.credit > 0 ? 'var(--color-warning)' : 'var(--text-muted)', fontWeight: acc.credit > 0 ? 600 : 400 }}>
-                              {acc.credit > 0 ? `$${acc.credit.toLocaleString()}` : '-'}
+                              {acc.credit > 0 ? `F$${acc.credit.toLocaleString()}` : '-'}
                             </td>
                           </tr>
                         ))}
@@ -2320,13 +2996,13 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                     <div style={{ background: 'var(--bg-tertiary)', padding: 12, borderRadius: 6 }}>
                       <span style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>Sum of Debits</span>
                       <strong style={{ display: 'block', fontSize: '1.2rem', color: 'var(--color-success)', marginTop: 4 }}>
-                        ${totalDebitSum.toLocaleString()}.00
+                        F${totalDebitSum.toLocaleString()}.00
                       </strong>
                     </div>
                     <div style={{ background: 'var(--bg-tertiary)', padding: 12, borderRadius: 6 }}>
                       <span style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>Sum of Credits</span>
                       <strong style={{ display: 'block', fontSize: '1.2rem', color: 'var(--color-success)', marginTop: 4 }}>
-                        ${totalCreditSum.toLocaleString()}.00
+                        F${totalCreditSum.toLocaleString()}.00
                       </strong>
                     </div>
                     <div style={{ background: 'var(--bg-accent-alpha)', border: isBalanced ? '1px solid var(--brand-color)' : '1px solid var(--color-danger)', padding: 12, borderRadius: 6 }}>
@@ -2885,7 +3561,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                                       />
                                     </td>
                                     <td style={{ padding: '8px 10px', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
-                                      ${(Number(row.amount) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      F${(Number(row.amount) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </td>
                                     <td style={{ padding: '6px 10px' }}>
                                       <input
@@ -2929,7 +3605,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                       </div>
 
                       <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 12px', background: 'var(--bg-primary)', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '12.5px' }}>
-                        <span>Gross Total: <strong style={{ color: 'var(--brand-color, #0a6c66)' }}>{formValues.currency} ${subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+                        <span>Gross Total: <strong style={{ color: 'var(--brand-color, #0a6c66)' }}>F${subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
                       </div>
 
                       {/* =========================================================================
@@ -3219,25 +3895,25 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                       <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '9px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', fontSize: '12.5px' }}>
                           <span style={{ color: 'var(--text-secondary)' }}>Net Items Subtotal:</span>
-                          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>${subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>F${subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
 
                         {totalDiscount > 0 && (
                           <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', fontSize: '12.5px', color: '#16a34a' }}>
                             <span>Total Discount Applied:</span>
-                            <span style={{ fontWeight: 600 }}>-${totalDiscount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            <span style={{ fontWeight: 600 }}>-F${totalDiscount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                         )}
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', fontSize: '12.5px' }}>
                           <span style={{ color: 'var(--text-secondary)' }}>Total Taxes & Charges (VAT):</span>
-                          <span style={{ fontWeight: 600, color: 'var(--brand-color, #0a6c66)' }}>+${totalTaxesAndCharges.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          <span style={{ fontWeight: 600, color: 'var(--brand-color, #0a6c66)' }}>+F${totalTaxesAndCharges.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px', fontSize: '15px' }}>
                           <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>Grand Total:</span>
                           <span style={{ fontWeight: 800, color: 'var(--brand-color, #0a6c66)', fontSize: '18px' }}>
-                            {formValues.currency} ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            F${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
                         </div>
 
@@ -3254,8 +3930,8 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                 <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 24px', borderTop: '1px solid var(--border-color)', background: 'var(--bg-primary)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '12px' }}>
                     <span style={{ color: 'var(--text-muted)' }}>Items: <strong style={{ color: 'var(--text-primary)' }}>{items.length}</strong></span>
-                    <span style={{ color: 'var(--text-muted)' }}>Taxes: <strong style={{ color: 'var(--brand-color, #0a6c66)' }}>+${totalTaxesAndCharges.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
-                    <span style={{ color: 'var(--text-muted)' }}>Grand Total: <strong style={{ color: 'var(--brand-color, #0a6c66)', fontSize: '14px' }}>{formValues.currency} ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+                    <span style={{ color: 'var(--text-muted)' }}>Taxes: <strong style={{ color: 'var(--brand-color, #0a6c66)' }}>+F${totalTaxesAndCharges.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+                    <span style={{ color: 'var(--text-muted)' }}>Grand Total: <strong style={{ color: 'var(--brand-color, #0a6c66)', fontSize: '14px' }}>F${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
                   </div>
 
                   <div style={{ display: 'flex', gap: '10px' }}>
@@ -3617,10 +4293,10 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           {getItemArea(item)}
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'right', color: '#4b5563' }}>
-                          $ {(Number(item.rate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          F$ {(Number(item.rate || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#111827' }}>
-                          $ {(Number(item.amount != null ? item.amount : ((item.qty || 1) * (item.rate || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          F$ {(Number(item.amount != null ? item.amount : ((item.qty || 1) * (item.rate || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     ))}
@@ -3631,7 +4307,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                         Net Total / Subtotal
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: '#374151' }}>
-                        $ {Number(netTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        F$ {Number(netTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                     </tr>
 
@@ -3643,7 +4319,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                             {tax.description || tax.account_head || 'VAT / Tax'} {tax.rate ? `(${tax.rate}%)` : ''}
                           </td>
                           <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#4b5563' }}>
-                            $ {(Number(tax.tax_amount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            F$ {(Number(tax.tax_amount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
                         </tr>
                       ))
@@ -3653,7 +4329,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           Taxes & Charges (12.5%)
                         </td>
                         <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, color: '#4b5563' }}>
-                          $ {Number(totalTaxes).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          F$ {Number(totalTaxes).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     ) : null}
@@ -3665,7 +4341,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           Rounding Adjustment
                         </td>
                         <td style={{ padding: '4px 10px', textAlign: 'right', fontSize: 9, color: '#6b7280' }}>
-                          $ {roundingAdjustment.toFixed(2)}
+                          F$ {roundingAdjustment.toFixed(2)}
                         </td>
                       </tr>
                     )}
@@ -3676,7 +4352,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                         Total Amount Due ({activeCurrency})
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: '#111827', fontSize: 11 }}>
-                        $ {Number(grandTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        F$ {Number(grandTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                     </tr>
 
@@ -3687,7 +4363,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           Balance Outstanding (Paid)
                         </td>
                         <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#065f46', fontSize: 10 }}>
-                          $ 0.00
+                          F$ 0.00
                         </td>
                       </tr>
                     ) : outstandingAmount > 0 && outstandingAmount !== grandTotal ? (
@@ -3696,7 +4372,7 @@ export default function Invoices({ invoices, accounts = [], glEntries = [], onAd
                           Outstanding Balance Due
                         </td>
                         <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#92400e', fontSize: 10 }}>
-                          $ {Number(outstandingAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          F$ {Number(outstandingAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     ) : null}

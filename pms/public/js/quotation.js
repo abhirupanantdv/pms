@@ -51,6 +51,18 @@ frappe.ui.form.on("Quotation", {
                     }
                 });
             }
+        // Check role permission for Create Booking
+        const user = frappe.session.user;
+        const roles = typeof frappe.get_roles === "function" ? frappe.get_roles(user) : (frappe.user_roles || []);
+        const isAdmin = (Array.isArray(roles) && roles.some(r => /admin|system manager/i.test(r))) || user === "Administrator";
+        const isOperation = (Array.isArray(roles) && roles.some(r => /operation/i.test(r))) && !isAdmin;
+
+        // Operation Role user don't show Create Booking Button in Quotation
+        if (isOperation) {
+            frm.remove_custom_button(__("Create Booking"));
+            if (frm.page && frm.page.clear_inner_button) {
+                frm.page.clear_inner_button(__("Create Booking"));
+            }
         }
     }
 });

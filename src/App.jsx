@@ -2947,7 +2947,8 @@ import {
   ShieldCheck,
   ChevronDown,
   Building2,
-  LogOut
+  LogOut,
+  CreditCard
 } from 'lucide-react';
 
 // Import Components
@@ -2958,6 +2959,7 @@ import Listings from './components/Listings';
 import Booking from './components/Booking';
 import Maintenance from './components/Maintenance';
 import Invoices from './components/Invoices';
+import PaymentEntry from './components/PaymentEntry';
 import Support from './components/Support';
 import Mall3DView from './components/Mall3DView';
 import HRMS, { INITIAL_EMPLOYEES } from './components/HRMS';
@@ -3075,6 +3077,7 @@ export default function App() {
   const [bookingSearchFromQuotation, setBookingSearchFromQuotation] = useState('');
   const [selectedQuotationId, setSelectedQuotationId] = useState('');
   const [selectedTaskIdForMaintenance, setSelectedTaskIdForMaintenance] = useState('');
+  const [selectedInvoiceIdForDetails, setSelectedInvoiceIdForDetails] = useState('');
 
   useEffect(() => {
     const handleNavigateQuotation = (e) => {
@@ -3092,15 +3095,24 @@ export default function App() {
       setCurrentTab('maintenance');
     };
     const handleNavigateInvoice = (e) => {
+      const invId = e.detail?.invoiceId || e.detail?.id;
+      if (invId) {
+        setSelectedInvoiceIdForDetails(invId);
+      }
       setCurrentTab('invoices');
+    };
+    const handleNavigatePaymentEntry = (e) => {
+      setCurrentTab('payment-entry');
     };
     window.addEventListener('pms:navigate-quotation', handleNavigateQuotation);
     window.addEventListener('pms:navigate-task', handleNavigateTask);
     window.addEventListener('pms:navigate-invoice', handleNavigateInvoice);
+    window.addEventListener('pms:navigate-payment-entry', handleNavigatePaymentEntry);
     return () => {
       window.removeEventListener('pms:navigate-quotation', handleNavigateQuotation);
       window.removeEventListener('pms:navigate-task', handleNavigateTask);
       window.removeEventListener('pms:navigate-invoice', handleNavigateInvoice);
+      window.removeEventListener('pms:navigate-payment-entry', handleNavigatePaymentEntry);
     };
   }, []);
 
@@ -3419,7 +3431,7 @@ export default function App() {
 
         // 1b. Fetch Bookings for statistics
         try {
-          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Booking?fields=["name","property","booking_date","booking_amount","workflow_state","starting_date","ending_date","customer","customer_name"]&limit_page_length=500`, {
+          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Booking?fields=["name","property","booking_date","booking_amount","workflow_state","starting_date","ending_date","customer","customer_name","booking_type","payment_status","paid_amount","pending_amount","advance_amount","total_days","quotation"]&limit_page_length=500`, {
             credentials: 'include',
             headers: {
               'Content-Type': 'application/json'
@@ -3556,7 +3568,8 @@ export default function App() {
         try {
           const safeFields = encodeURIComponent(JSON.stringify([
             "name", "customer_name", "customer_type", "custom_type", "customer_group",
-            "territory", "email_id", "email", "mobile_no", "phone_no", "owner", "modified"
+            "territory", "email_id", "email", "mobile_no", "phone_no", "owner", "modified",
+            "company_name", "custom_company_vat_id", "default_currency", "creation", "modified_by"
           ]));
           let res = await fetch(
             `${ERPNEXT_CONFIG.url}/api/resource/Customer?fields=${safeFields}&limit_page_length=200&order_by=modified desc`,
@@ -4185,6 +4198,26 @@ export default function App() {
         // Determine whether admin or operator login
         const isAdmin = selectedPortal === 'admin' || (loginUser && ['admin', 'administrator'].includes(loginUser.trim().toLowerCase()) && selectedPortal !== 'operation');
 
+        // Fetch roles using: user = frappe.session.user, roles = frappe.get_roles(user)
+        // Store roles so components like Quotation can read them without refetching
+        try {
+          const rolesRes = await fetch(`${ERPNEXT_CONFIG.url}/api/method/pms.api.get_user_roles?user=${encodeURIComponent(loginUser)}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (rolesRes.ok) {
+            const rolesJson = await rolesRes.json();
+            const rolesData = rolesJson.message || rolesJson;
+            const rolesList = Array.isArray(rolesData.roles) ? rolesData.roles : [];
+            localStorage.setItem('pms_roles', JSON.stringify(rolesList));
+            if (typeof window !== 'undefined') {
+              window.frappe = window.frappe || {};
+              window.frappe.user_roles = rolesList;
+              window.frappe.get_roles = function () { return rolesList; };
+            }
+          }
+        } catch { }
+
         if (isAdmin) {
           localStorage.setItem('pms_auth', 'true');
           localStorage.setItem('pms_user', loginUser);
@@ -4208,6 +4241,7 @@ export default function App() {
           window.location.href = targetUrl;
         }
         return;
+
       } else {
         const errData = await res.json().catch(() => ({}));
         setLoginError(errData.message || 'Invalid username or password credentials.');
@@ -4256,7 +4290,12 @@ export default function App() {
       if (window.frappe?.session) {
         window.frappe.session.user = 'Guest';
       }
+      if (window.frappe) {
+        window.frappe.user_roles = [];
+        window.frappe.get_roles = function () { return []; };
+      }
     }
+    localStorage.removeItem('pms_roles');
 
     try {
       await fetch(`${ERPNEXT_CONFIG.url}/api/method/logout`, {
@@ -6047,7 +6086,7 @@ export default function App() {
           />
         );
       case 'tenants':
-        return <Tenants tenants={tenants} properties={properties} onAddTenant={handleAddTenant} erpnextConfig={ERPNEXT_CONFIG} />;
+        return <Tenants tenants={tenants} properties={properties} bookings={bookings} onAddTenant={handleAddTenant} erpnextConfig={ERPNEXT_CONFIG} />;
       case 'tenant-onboarding':
         return (
           <TenantOnboarding
@@ -6097,7 +6136,34 @@ export default function App() {
           />
         );
       case 'invoices':
-        return <Invoices invoices={invoices} accounts={accounts} glEntries={glEntries} onAddInvoice={handleAddInvoice} onRecordPayment={handleRecordPayment} erpnextConfig={ERPNEXT_CONFIG} tenants={tenants} properties={properties} bookings={bookings} />;
+        return (
+          <Invoices
+            invoices={invoices}
+            accounts={accounts}
+            glEntries={glEntries}
+            onAddInvoice={handleAddInvoice}
+            onRecordPayment={handleRecordPayment}
+            erpnextConfig={ERPNEXT_CONFIG}
+            tenants={tenants}
+            properties={properties}
+            bookings={bookings}
+            preSelectedInvoiceId={selectedInvoiceIdForDetails}
+            clearPreSelectedInvoiceId={() => setSelectedInvoiceIdForDetails('')}
+          />
+        );
+      case 'payment-entry':
+        return (
+          <PaymentEntry
+            erpnextConfig={ERPNEXT_CONFIG}
+            tenants={tenants}
+            onNavigateToInvoice={(invId) => {
+              if (invId) {
+                setSelectedInvoiceIdForDetails(invId);
+              }
+              setCurrentTab('invoices');
+            }}
+          />
+        );
       case 'support':
         return (
           <Support
@@ -6697,7 +6763,7 @@ export default function App() {
   const getCategoryForTab = (tab) => {
     if (['properties', 'bookings', 'listings', 'mall-3d'].includes(tab)) return 'operations';
     if (['owners', 'tenants', 'tenant-onboarding'].includes(tab)) return 'people';
-    if (['quotation', 'invoices'].includes(tab)) return 'sales';
+    if (['quotation', 'invoices', 'payment-entry'].includes(tab)) return 'sales';
     if (['maintenance', 'support'].includes(tab)) return 'service';
     if (['reports'].includes(tab)) return 'analytics';
     if (['hrms'].includes(tab)) return 'admin';
@@ -6774,6 +6840,10 @@ export default function App() {
           <li className={`menu-item ${currentTab === 'invoices' ? 'active' : ''}`} onClick={() => setCurrentTab('invoices')}>
             <Receipt size={18} />
             <span>Billing Ledger</span>
+          </li>
+          <li className={`menu-item ${currentTab === 'payment-entry' ? 'active' : ''}`} onClick={() => setCurrentTab('payment-entry')}>
+            <CreditCard size={18} />
+            <span>Payment Entry</span>
           </li>
 
           <div className={`sidebar-category-header ${getCategoryForTab(currentTab) === 'service' ? 'active' : ''}`}>

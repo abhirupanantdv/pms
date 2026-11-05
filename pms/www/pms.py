@@ -44,4 +44,7 @@ def get_context(context):
     context.js_file = f"{base_prefix}/{js_file}" if js_file else ""
     context.css_file = f"{base_prefix}/{css_file}" if css_file else ""
     context.csrf_token = frappe.session.csrf_token
-    context.session_user = frappe.session.user
+    user = frappe.session.user
+    roles = frappe.get_roles(user)
+    context.session_user = user
+    context.user_roles = json.dumps(roles)

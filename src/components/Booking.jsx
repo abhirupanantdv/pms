@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Calendar, User, Building, DollarSign, Plus, X, Search, Filter, Loader, Eye, RefreshCw, CheckCircle2, FileText, PenLine, ChevronDown, AlertCircle, CheckCircle, XCircle, Printer, Mail, Phone, Tag, Settings, AlertTriangle, Info } from 'lucide-react';
 import homeImg from '../assets/home.png';
 import houseImg from '../assets/new-house.png';
@@ -30,8 +30,8 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
   // Search & filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
-  const [typeFilter, setTypeFilter] = useState('All');
-  const [customerFilter, setCustomerFilter] = useState('');
+  const [startDateFilter, setStartDateFilter] = useState('');
+  const [endDateFilter, setEndDateFilter] = useState('');
 
   // New booking form modal state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1563,27 +1563,94 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
     fetchBookings(customerFilter);
   };
 
-  // Filtering on local state
+  // Filtering on local state - comprehensively matches all table columns
   const filteredBookings = bookings.filter(b => {
-    const term = searchTerm.toLowerCase();
-    const hasMatchingItem = Array.isArray(b.booking_item) && b.booking_item.some(item =>
-      (item.item_code && item.item_code.toLowerCase().includes(term)) ||
-      (item.item_name && item.item_name.toLowerCase().includes(term))
-    );
-    const matchSearch =
-      (b.name && b.name.toLowerCase().includes(term)) ||
-      (b.customer && b.customer.toLowerCase().includes(term)) ||
-      (b.customer_name && b.customer_name.toLowerCase().includes(term)) ||
-      (b.customer_email && b.customer_email.toLowerCase().includes(term)) ||
-      (b.customer_phone_no && b.customer_phone_no.toLowerCase().includes(term)) ||
-      (b.property && b.property.toLowerCase().includes(term)) ||
-      (b.country && b.country.toLowerCase().includes(term)) ||
-      (b.quotation && String(b.quotation).toLowerCase().includes(term)) ||
-      (b.custom_quotation && String(b.custom_quotation).toLowerCase().includes(term)) ||
-      (b.custom_contract && String(b.custom_contract).toLowerCase().includes(term)) ||
-      (b.quotation_id && String(b.quotation_id).toLowerCase().includes(term)) ||
-      (b.workflow_state && b.workflow_state.toLowerCase().includes(term)) ||
-      hasMatchingItem;
+    const term = searchTerm.toLowerCase().trim();
+
+    let matchSearch = true;
+    if (term) {
+      // 1. Booking ID
+      const matchId =
+        (b.name && b.name.toLowerCase().includes(term)) ||
+        (b.id && String(b.id).toLowerCase().includes(term));
+
+      // 2. Booking Date & other date fields
+      const matchDate =
+        (b.booking_date && String(b.booking_date).toLowerCase().includes(term)) ||
+        (b.creation && String(b.creation).toLowerCase().includes(term)) ||
+        (b.starting_date && String(b.starting_date).toLowerCase().includes(term)) ||
+        (b.ending_date && String(b.ending_date).toLowerCase().includes(term));
+
+      // 3. Tenant info (Customer Name, Tenant/Customer ID, Email, Phone)
+      const matchTenant =
+        (b.customer && b.customer.toLowerCase().includes(term)) ||
+        (b.customer_name && b.customer_name.toLowerCase().includes(term)) ||
+        (b.customer_email && b.customer_email.toLowerCase().includes(term)) ||
+        (b.customer_phone_no && b.customer_phone_no.toLowerCase().includes(term));
+
+      // 4. Property Unit (booking_item details, property group, quotation)
+      const hasMatchingItem = Array.isArray(b.booking_item) && b.booking_item.some(item =>
+        (item.item_code && item.item_code.toLowerCase().includes(term)) ||
+        (item.item_name && item.item_name.toLowerCase().includes(term)) ||
+        (item.description && item.description.toLowerCase().includes(term)) ||
+        (item.space_unit && String(item.space_unit).toLowerCase().includes(term)) ||
+        (item.custom_property_group && String(item.custom_property_group).toLowerCase().includes(term)) ||
+        (item.property && String(item.property).toLowerCase().includes(term))
+      );
+      const matchUnit =
+        hasMatchingItem ||
+        (b.property && b.property.toLowerCase().includes(term)) ||
+        (b.country && b.country.toLowerCase().includes(term)) ||
+        (b.quotation && String(b.quotation).toLowerCase().includes(term)) ||
+        (b.custom_quotation && String(b.custom_quotation).toLowerCase().includes(term)) ||
+        (b.quotation_id && String(b.quotation_id).toLowerCase().includes(term));
+
+      // 5. Contract ID
+      const matchContract =
+        (b.custom_contract && String(b.custom_contract).toLowerCase().includes(term)) ||
+        (b.contract && String(b.contract).toLowerCase().includes(term));
+
+      // 6. Status & Workflow State (including computed badges)
+      const bStatus = b.workflow_state || b.status || (b.docstatus === 1 ? 'Approved' : 'Draft');
+      const matchStatusText =
+        (b.workflow_state && b.workflow_state.toLowerCase().includes(term)) ||
+        (b.status && b.status.toLowerCase().includes(term)) ||
+        (bStatus && bStatus.toLowerCase().includes(term)) ||
+        (b.docstatus === 1 && 'approved'.includes(term)) ||
+        (b.docstatus === 0 && 'draft'.includes(term));
+
+      // 7. Amount (Raw numbers, formatted with commas, F$, etc.)
+      const rawAmount = parseFloat(b.booking_amount || b.amount_to_pay || 0);
+      const formattedAmount = rawAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const currencyAmount = `f$${formattedAmount}`.toLowerCase();
+      const plainAmount = `${rawAmount}`;
+      const matchAmount =
+        formattedAmount.includes(term) ||
+        currencyAmount.includes(term) ||
+        plainAmount.includes(term) ||
+        (b.booking_amount && String(b.booking_amount).toLowerCase().includes(term)) ||
+        (b.amount_to_pay && String(b.amount_to_pay).toLowerCase().includes(term));
+
+      // 8. Payment Status
+      const paymentStatusStr = (b.payment_status || 'Unpaid').toLowerCase();
+      const matchPayment =
+        paymentStatusStr.includes(term) ||
+        (b.payment_method && b.payment_method.toLowerCase().includes(term));
+
+      // 9. Booking Type
+      const matchBookingType = b.booking_type && b.booking_type.toLowerCase().includes(term);
+
+      matchSearch =
+        matchId ||
+        matchDate ||
+        matchTenant ||
+        matchUnit ||
+        matchContract ||
+        matchStatusText ||
+        matchAmount ||
+        matchPayment ||
+        matchBookingType;
+    }
 
     const bStatus = b.workflow_state || b.status || (b.docstatus === 1 ? 'Approved' : 'Draft');
     const matchStatus =
@@ -1595,10 +1662,32 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
       (statusFilter === 'Confirmed' && (bStatus === 'Approved' || bStatus === 'Confirmed' || b.docstatus === 1)) ||
       (statusFilter === 'Pending' && (bStatus === 'Request For Approval' || bStatus === 'Draft' || b.docstatus === 0));
 
-    const matchType = typeFilter === 'All' || b.booking_type === typeFilter;
+    // Date Range Filter on booking_date (or creation date)
+    const bDate = (b.booking_date || b.creation || '').slice(0, 10);
+    const matchStartDate = !startDateFilter || (bDate && bDate >= startDateFilter);
+    const matchEndDate = !endDateFilter || (bDate && bDate <= endDateFilter);
+    const matchDateFilter = matchStartDate && matchEndDate;
 
-    return matchSearch && matchStatus && matchType;
+    return matchSearch && matchStatus && matchDateFilter;
   });
+
+  // Dynamic metrics for the cards based on filtered table data
+  const metrics = useMemo(() => {
+    let totalAmount = 0;
+    filteredBookings.forEach((b) => {
+      const amt = parseFloat(b.booking_amount || b.amount_to_pay || 0) || 0;
+      totalAmount += amt;
+    });
+    return {
+      count: filteredBookings.length,
+      totalAmount
+    };
+  }, [filteredBookings]);
+
+  const formatBookingCurrency = (val) => {
+    const num = parseFloat(val) || 0;
+    return `F$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
 
   useEffect(() => {
     setCurrentPage(1);
@@ -1796,6 +1885,9 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
             className="btn btn-secondary"
             onClick={() => {
               setSearchTerm('');
+              setStatusFilter('All');
+              setStartDateFilter('');
+              setEndDateFilter('');
               if (typeof onClearInitialSearch === 'function') onClearInitialSearch();
               fetchBookings();
             }}
@@ -1832,17 +1924,98 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
         </div>
       )}
 
+      {/* Metrics Row: 2 Dynamic Cards (Total Entry & Total Amount) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 20 }}>
+        {/* Total Entry Card */}
+        <div className="card-panel" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14, marginBottom: 0, backgroundColor: '#ffffff', borderRadius: 12, border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+          <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(100, 116, 139, 0.12)', color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <FileText size={22} />
+          </div>
+          <div>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary, #64748b)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Total Entry
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-primary, #0f172a)', marginTop: 2 }}>
+              {metrics.count} <span style={{ fontSize: 12.5, fontWeight: 500, color: '#64748b' }}>records</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Total Amount Card */}
+        <div className="card-panel" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14, marginBottom: 0, backgroundColor: '#ffffff', borderRadius: 12, border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+          <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(6, 95, 70, 0.1)', color: 'var(--brand-color, #065f46)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <DollarSign size={22} />
+          </div>
+          <div>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary, #64748b)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Total Amount
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--brand-color, #065f46)', marginTop: 2 }}>
+              {formatBookingCurrency(metrics.totalAmount)}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Control panel filters */}
-      <div className="card-panel" style={{ padding: 16, marginBottom: 20, display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
-          <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+      <div
+        className="card-panel"
+        style={{
+          padding: '12px 18px',
+          marginBottom: 20,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          alignItems: 'center',
+          backgroundColor: '#ffffff',
+          border: '1px solid var(--border-color)',
+          borderRadius: 12,
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+        }}
+      >
+        {/* Modern Search Bar */}
+        <div style={{ position: 'relative', flex: '1 1 300px', minWidth: 260 }}>
+          <Search
+            size={16}
+            style={{
+              position: 'absolute',
+              left: 13,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: '#64748b',
+              pointerEvents: 'none'
+            }}
+          />
           <input
             type="text"
-            placeholder="Search by ID, tenant name, unit or quotation..."
+            placeholder="Search all columns (ID, Tenant, Unit, Contract, Date, Status, Amount...)"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="form-control"
-            style={{ paddingLeft: 34, paddingRight: searchTerm ? 32 : 12, fontSize: 13 }}
+            style={{
+              width: '100%',
+              height: 40,
+              paddingLeft: 38,
+              paddingRight: searchTerm ? 36 : 14,
+              fontSize: 13,
+              color: 'var(--text-primary)',
+              backgroundColor: '#f8fafc',
+              border: '1.5px solid #cbd5e1',
+              borderRadius: 8,
+              outline: 'none',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
+              transition: 'all 0.2s ease',
+              boxSizing: 'border-box'
+            }}
+            onFocus={(e) => {
+              e.target.style.backgroundColor = '#ffffff';
+              e.target.style.borderColor = 'var(--brand-color, #065f46)';
+              e.target.style.boxShadow = '0 0 0 3px rgba(6, 95, 70, 0.12)';
+            }}
+            onBlur={(e) => {
+              e.target.style.backgroundColor = '#f8fafc';
+              e.target.style.borderColor = '#cbd5e1';
+              e.target.style.boxShadow = '0 1px 2px rgba(0,0,0,0.02)';
+            }}
           />
           {searchTerm && (
             <button
@@ -1856,45 +2029,62 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                 right: 10,
                 top: '50%',
                 transform: 'translateY(-50%)',
-                background: 'none',
+                background: '#e2e8f0',
                 border: 'none',
-                color: 'var(--text-muted)',
+                color: '#475569',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                padding: 2,
-                borderRadius: '50%'
+                width: 20,
+                height: 20,
+                borderRadius: '50%',
+                transition: 'all 0.15s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#cbd5e1';
+                e.currentTarget.style.color = '#0f172a';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = '#e2e8f0';
+                e.currentTarget.style.color = '#475569';
               }}
               title="Clear search"
             >
-              <X size={14} />
+              <X size={12} />
             </button>
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <Filter size={14} style={{ color: 'var(--text-muted)' }} />
-
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            className="form-control"
-            style={{ width: 120, fontSize: 13, padding: '4px 8px' }}
-          >
-            <option value="All">All Types</option>
-            <option value="Rent">Rent</option>
-            <option value="Sale">Sale</option>
-            <option value="Lease">Lease</option>
-          </select>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {/* Status Filter */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="form-select"
-            style={{ minWidth: 140, fontSize: 12 }}
+            style={{
+              height: 40,
+              minWidth: 155,
+              fontSize: 13,
+              padding: '0 12px',
+              backgroundColor: '#f8fafc',
+              border: '1.5px solid #cbd5e1',
+              borderRadius: 8,
+              color: 'var(--text-primary)',
+              outline: 'none',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              boxSizing: 'border-box'
+            }}
+            onFocus={(e) => {
+              e.target.style.backgroundColor = '#ffffff';
+              e.target.style.borderColor = 'var(--brand-color, #065f46)';
+              e.target.style.boxShadow = '0 0 0 3px rgba(6, 95, 70, 0.12)';
+            }}
+            onBlur={(e) => {
+              e.target.style.backgroundColor = '#f8fafc';
+              e.target.style.borderColor = '#cbd5e1';
+              e.target.style.boxShadow = 'none';
+            }}
           >
             <option value="All">All Statuses</option>
             <option value="Confirmed">Approved / Confirmed</option>
@@ -1909,23 +2099,156 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
           </select>
         </div>
 
-        {/* Customer Sync API Filter Form */}
-        <form onSubmit={handleCustomerFilterSubmit} style={{ display: 'flex', gap: 6, alignItems: 'center', borderLeft: '1px solid var(--border-color)', paddingLeft: 14 }}>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Filter Tenant ID:</span>
+        {/* Date Label Filters: From Date & To Date */}
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            alignItems: 'center',
+            borderLeft: '1px solid var(--border-color)',
+            paddingLeft: 12
+          }}
+        >
+          <Calendar size={15} style={{ color: '#64748b' }} />
+          <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+            From Date:
+          </span>
           <input
-            type="text"
-            placeholder="e.g. TEN-0001"
-            value={customerFilter}
-            onChange={(e) => {
-              setCustomerFilter(e.target.value);
-              // Fetch from ERPNext on change/clear
-              fetchBookings(e.target.value);
+            type="date"
+            value={startDateFilter}
+            onChange={(e) => setStartDateFilter(e.target.value)}
+            style={{
+              height: 40,
+              padding: '0 8px',
+              fontSize: 12.5,
+              backgroundColor: '#f8fafc',
+              border: '1.5px solid #cbd5e1',
+              borderRadius: 8,
+              outline: 'none',
+              color: 'var(--text-primary)',
+              transition: 'all 0.2s ease',
+              boxSizing: 'border-box',
+              cursor: 'pointer'
             }}
-            className="form-control"
-            style={{ width: 120, padding: '4px 8px', fontSize: 12 }}
+            onFocus={(e) => {
+              e.target.style.backgroundColor = '#ffffff';
+              e.target.style.borderColor = 'var(--brand-color, #065f46)';
+              e.target.style.boxShadow = '0 0 0 3px rgba(6, 95, 70, 0.12)';
+            }}
+            onBlur={(e) => {
+              e.target.style.backgroundColor = '#f8fafc';
+              e.target.style.borderColor = '#cbd5e1';
+              e.target.style.boxShadow = 'none';
+            }}
+            title="From Date"
           />
-          <button type="submit" className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: 12 }}>Search</button>
-        </form>
+
+          <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+            To Date:
+          </span>
+          <input
+            type="date"
+            value={endDateFilter}
+            onChange={(e) => setEndDateFilter(e.target.value)}
+            style={{
+              height: 40,
+              padding: '0 8px',
+              fontSize: 12.5,
+              backgroundColor: '#f8fafc',
+              border: '1.5px solid #cbd5e1',
+              borderRadius: 8,
+              outline: 'none',
+              color: 'var(--text-primary)',
+              transition: 'all 0.2s ease',
+              boxSizing: 'border-box',
+              cursor: 'pointer'
+            }}
+            onFocus={(e) => {
+              e.target.style.backgroundColor = '#ffffff';
+              e.target.style.borderColor = 'var(--brand-color, #065f46)';
+              e.target.style.boxShadow = '0 0 0 3px rgba(6, 95, 70, 0.12)';
+            }}
+            onBlur={(e) => {
+              e.target.style.backgroundColor = '#f8fafc';
+              e.target.style.borderColor = '#cbd5e1';
+              e.target.style.boxShadow = 'none';
+            }}
+            title="To Date"
+          />
+
+          {(startDateFilter || endDateFilter) && (
+            <button
+              type="button"
+              onClick={() => {
+                setStartDateFilter('');
+                setEndDateFilter('');
+              }}
+              style={{
+                background: '#e2e8f0',
+                border: 'none',
+                color: '#475569',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 20,
+                height: 20,
+                borderRadius: '50%',
+                transition: 'all 0.15s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#cbd5e1';
+                e.currentTarget.style.color = '#0f172a';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = '#e2e8f0';
+                e.currentTarget.style.color = '#475569';
+              }}
+              title="Clear date filter"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+
+        {/* Reset Filters Button */}
+        {(searchTerm || statusFilter !== 'All' || startDateFilter || endDateFilter) && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchTerm('');
+              setStatusFilter('All');
+              setStartDateFilter('');
+              setEndDateFilter('');
+              if (typeof onClearInitialSearch === 'function') onClearInitialSearch();
+            }}
+            style={{
+              height: 40,
+              padding: '0 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#ef4444',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: 8,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              transition: 'all 0.15s ease',
+              boxSizing: 'border-box'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#fee2e2';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = '#fef2f2';
+            }}
+            title="Reset all filters"
+          >
+            <X size={13} /> Reset
+          </button>
+        )}
       </div>
 
       {/* Grid view containing list & inspector */}

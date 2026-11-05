@@ -2549,7 +2549,7 @@
 
 
 import React, { useState, useEffect } from 'react';
-import { User, Phone, Mail, Plus, X } from 'lucide-react';
+import { User, Phone, Mail, Plus, X, Calendar, Building, DollarSign } from 'lucide-react';
 
 // FIELD SCOPE NOTE:
 // This form only collects fields confirmed to exist on the ERPNext "Customer"
@@ -2566,19 +2566,27 @@ import { User, Phone, Mail, Plus, X } from 'lucide-react';
 // via this form. The toggle instead drives which fields are shown/collected
 // client-side (salutation, gender, date_of_birth only apply to Individual),
 // mirroring the doctype's own depends_on behavior for those fields.
-export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
+export default function Tenants({ tenants, properties, bookings = [], erpnextConfig, onAddTenant }) {
   const [showModal, setShowModal] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [tenantAddress, setTenantAddress] = useState('');
   const [loadingAddress, setLoadingAddress] = useState(false);
+  const [fullTenantDoc, setFullTenantDoc] = useState(null);
+  const [loadingTenantDoc, setLoadingTenantDoc] = useState(false);
+  const [tenantBookings, setTenantBookings] = useState([]);
+  const [loadingBookings, setLoadingBookings] = useState(false);
 
   useEffect(() => {
     if (!selectedTenant) {
       setTenantAddress('');
+      setFullTenantDoc(null);
+      setTenantBookings([]);
       return;
     }
 
     setTenantAddress('No address registered in system');
+    setFullTenantDoc(null);
+    setTenantBookings([]);
 
     if (erpnextConfig && erpnextConfig.url) {
       setLoadingAddress(true);
@@ -2609,8 +2617,107 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
           setTenantAddress('Unable to load address');
         })
         .finally(() => setLoadingAddress(false));
+
+      // 2. Fetch full Customer doc from ERPNext to populate company_name, custom_company_vat_id, etc.
+      setLoadingTenantDoc(true);
+      fetch(`${erpnextConfig.url}/api/resource/Customer/${encodeURIComponent(selectedTenant.name)}`, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      })
+        .then(res => res.ok ? res.json() : null)
+        .then(json => {
+          if (json?.data) {
+            setFullTenantDoc(json.data);
+          }
+        })
+        .catch(err => {
+          console.warn('Failed fetching full Customer record:', err);
+        })
+        .finally(() => setLoadingTenantDoc(false));
+
+      // 3. Fetch Bookings for this customer
+      setLoadingBookings(true);
+      const custFilters = JSON.stringify([['customer', '=', selectedTenant.name]]);
+      const bookingUrl = `${erpnextConfig.url}/api/resource/Booking?filters=${encodeURIComponent(custFilters)}&fields=["*"]&limit_page_length=50&order_by=creation desc`;
+
+      fetch(bookingUrl, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+      })
+        .then(res => res.ok ? res.json() : null)
+        .then(async json => {
+          let list = json?.data || [];
+
+          // If no bookings by customer ID, try searching by customer_name if different
+          if (list.length === 0 && selectedTenant.customer_name && selectedTenant.customer_name !== selectedTenant.name) {
+            try {
+              const nameFilters = JSON.stringify([['customer_name', '=', selectedTenant.customer_name]]);
+              const r2 = await fetch(`${erpnextConfig.url}/api/resource/Booking?filters=${encodeURIComponent(nameFilters)}&fields=["*"]&limit_page_length=50&order_by=creation desc`, {
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' }
+              });
+              if (r2.ok) {
+                const j2 = await r2.json();
+                list = j2.data || [];
+              }
+            } catch (e2) {}
+          }
+
+          // Fallback to local bookings prop if API returned nothing
+          if (list.length === 0 && Array.isArray(bookings) && bookings.length > 0) {
+            list = bookings.filter(b =>
+              b.customer === selectedTenant.name ||
+              b.customer === selectedTenant.customer_name ||
+              b.customer_name === selectedTenant.customer_name ||
+              b.customer_name === selectedTenant.name
+            );
+          }
+
+          // Enrich bookings with child table items if needed
+          const enrichedBookings = await Promise.all(
+            list.map(async b => {
+              if (Array.isArray(b.booking_item) && b.booking_item.length > 0) {
+                return b;
+              }
+              try {
+                const docRes = await fetch(`${erpnextConfig.url}/api/resource/Booking/${encodeURIComponent(b.name)}`, {
+                  credentials: 'include',
+                  headers: { 'Content-Type': 'application/json' }
+                });
+                if (docRes.ok) {
+                  const docJson = await docRes.json();
+                  return docJson.data || b;
+                }
+              } catch (e) {}
+              return b;
+            })
+          );
+
+          setTenantBookings(enrichedBookings);
+        })
+        .catch(err => {
+          console.warn('Failed fetching bookings for tenant:', err);
+          if (Array.isArray(bookings)) {
+            const matched = bookings.filter(b =>
+              b.customer === selectedTenant.name ||
+              b.customer === selectedTenant.customer_name ||
+              b.customer_name === selectedTenant.customer_name
+            );
+            setTenantBookings(matched);
+          }
+        })
+        .finally(() => setLoadingBookings(false));
+    } else {
+      if (Array.isArray(bookings)) {
+        const matched = bookings.filter(b =>
+          b.customer === selectedTenant.name ||
+          b.customer === selectedTenant.customer_name ||
+          b.customer_name === selectedTenant.customer_name
+        );
+        setTenantBookings(matched);
+      }
     }
-  }, [selectedTenant, erpnextConfig]);
+  }, [selectedTenant, erpnextConfig, bookings]);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -2667,6 +2774,8 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
   const [entityType, setEntityType] = useState('Individual');
   const [salutation, setSalutation] = useState('');
   const [customerName, setCustomerName] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [companyVatId, setCompanyVatId] = useState('');
   const [gender, setGender] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [email, setEmail] = useState('');
@@ -2674,10 +2783,14 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
   const [customerGroup, setCustomerGroup] = useState('');
   const [territory, setTerritory] = useState('');
 
+  const tenantData = selectedTenant ? { ...selectedTenant, ...(fullTenantDoc || {}) } : null;
+
   const resetForm = () => {
     setEntityType('Individual');
     setSalutation('');
     setCustomerName('');
+    setCompanyName('');
+    setCompanyVatId('');
     setGender('');
     setDateOfBirth('');
     setEmail('');
@@ -2707,6 +2820,9 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
       email,
       phone_no: phoneNo
     };
+    if (companyName) payload.company_name = companyName;
+    else if (entityType === 'Company' && customerName) payload.company_name = customerName;
+    if (companyVatId) payload.custom_company_vat_id = companyVatId;
     if (customerGroup) payload.customer_group = customerGroup;
     if (territory) payload.territory = territory;
 
@@ -2811,13 +2927,13 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
           {renderPaginationControls()}
         </div>
 
-        {/* Preview panel - only real Customer doctype fields */}
-        {selectedTenant && (
+        {/* Preview panel - Tenant details with Company fields & Booking Section */}
+        {selectedTenant && tenantData && (
           <div className="card-panel" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20, animation: 'fadeIn 0.2s ease-out', overflowY: 'auto', maxHeight: '85vh' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <User size={18} style={{ color: 'var(--brand-color)' }} />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--brand-color)' }}>{selectedTenant.name}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--brand-color)' }}>{tenantData.name}</span>
               </div>
               <button onClick={() => setSelectedTenant(null)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex' }}>
                 <X size={18} />
@@ -2826,40 +2942,45 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
 
             <div style={{ textAlign: 'center', padding: '10px 0' }}>
               <div className="user-avatar" style={{ margin: '0 auto 12px', width: 64, height: 64, fontSize: 22, borderRadius: '50%' }}>
-                {(selectedTenant.customer_name || '').split(' ').filter(Boolean).map(n => n[0]).join('') || '?'}
+                {(tenantData.customer_name || '').split(' ').filter(Boolean).map(n => n[0]).join('') || '?'}
               </div>
-              <h2 style={{ fontSize: '1.3rem', marginBottom: 6, fontWeight: 700, color: 'var(--text-primary)' }}>{selectedTenant.customer_name}</h2>
+              <h2 style={{ fontSize: '1.3rem', marginBottom: 6, fontWeight: 700, color: 'var(--text-primary)' }}>{tenantData.customer_name}</h2>
               <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
-                <span className={`badge ${selectedTenant.disabled ? 'badge-danger' : 'badge-success'}`}>
-                  {selectedTenant.disabled ? 'Inactive' : 'Active'}
+                <span className={`badge ${tenantData.disabled ? 'badge-danger' : 'badge-success'}`}>
+                  {tenantData.disabled ? 'Inactive' : 'Active'}
                 </span>
-                {selectedTenant.custom_type && (
-                  <span className="badge badge-secondary">{selectedTenant.custom_type}</span>
+                {tenantData.custom_type && (
+                  <span className="badge badge-secondary">{tenantData.custom_type}</span>
                 )}
               </div>
             </div>
 
-            {/* Profile Info Section */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Profile Info Section with Currency, Company VAT ID, and Company Name */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <h3 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 2px 0', fontWeight: 700 }}>Profile Details</h3>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Currency</span>
                   <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    {selectedTenant.default_currency || 'FJD'}
+                    {tenantData.default_currency || 'FJD'}
+                  </span>
+                </div>
+
+                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Company VAT ID</span>
+                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {tenantData.custom_company_vat_id || '—'}
+                  </span>
+                </div>
+
+                <div style={{ gridColumn: 'span 2', background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Company Name</span>
+                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {tenantData.company_name || '—'}
                   </span>
                 </div>
               </div>
-
-              {selectedTenant.company_name && (
-                <div style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: '2px' }}>Company Name</span>
-                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    {selectedTenant.company_name}
-                  </span>
-                </div>
-              )}
             </div>
 
             {/* Contact Details Section */}
@@ -2869,10 +2990,10 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
                   <Mail size={16} style={{ color: 'var(--text-secondary)' }} />
-                  <span style={{ color: 'var(--text-primary)' }}>{selectedTenant.email || '—'}</span>
+                  <span style={{ color: 'var(--text-primary)' }}>{tenantData.email || '—'}</span>
                 </div>
-                {selectedTenant.email && (
-                  <a href={`mailto:${selectedTenant.email}`} className="btn btn-secondary" style={{ padding: 6, display: 'flex', borderRadius: 6, borderColor: 'rgba(255,255,255,0.1)' }} title="Send Email">
+                {tenantData.email && (
+                  <a href={`mailto:${tenantData.email}`} className="btn btn-secondary" style={{ padding: 6, display: 'flex', borderRadius: 6, borderColor: 'rgba(255,255,255,0.1)' }} title="Send Email">
                     <Mail size={13} style={{ color: 'var(--brand-color)' }} />
                   </a>
                 )}
@@ -2881,10 +3002,10 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
                   <Phone size={16} style={{ color: 'var(--text-secondary)' }} />
-                  <span style={{ color: 'var(--text-primary)' }}>{selectedTenant.phone_no || '—'}</span>
+                  <span style={{ color: 'var(--text-primary)' }}>{tenantData.phone_no || '—'}</span>
                 </div>
-                {selectedTenant.phone_no && (
-                  <a href={`tel:${selectedTenant.phone_no}`} className="btn btn-secondary" style={{ padding: 6, display: 'flex', borderRadius: 6, borderColor: 'rgba(255,255,255,0.1)' }} title="Call Tenant">
+                {tenantData.phone_no && (
+                  <a href={`tel:${tenantData.phone_no}`} className="btn btn-secondary" style={{ padding: 6, display: 'flex', borderRadius: 6, borderColor: 'rgba(255,255,255,0.1)' }} title="Call Tenant">
                     <Phone size={13} style={{ color: 'var(--brand-color)' }} />
                   </a>
                 )}
@@ -2898,24 +3019,155 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
               </div>
             </div>
 
+            {/* Territory & Date of Birth / Incorporation */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               <div style={{ background: 'rgba(255,255,255,0.01)', padding: 12, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', fontSize: 12 }}>
                 <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 }}>Territory</span>
-                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{selectedTenant.territory || '—'}</span>
+                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{tenantData.territory || '—'}</span>
               </div>
               <div style={{ background: 'rgba(255,255,255,0.01)', padding: 12, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', fontSize: 12 }}>
-                {String(selectedTenant.custom_type || '').toLowerCase() === 'company' ? (
+                {String(tenantData.custom_type || '').toLowerCase() === 'company' ? (
                   <>
                     <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 }}>Date of Incorporation</span>
-                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{selectedTenant.date_of_incorporation || '—'}</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{tenantData.date_of_incorporation || '—'}</span>
                   </>
                 ) : (
                   <>
                     <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: 10, textTransform: 'uppercase', marginBottom: 2 }}>Date of Birth</span>
-                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{selectedTenant.date_of_birth || '—'}</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{tenantData.date_of_birth || '—'}</span>
                   </>
                 )}
               </div>
+            </div>
+
+            {/* Booking Details Section */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: '1px solid var(--border-color)', paddingTop: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: 0, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Calendar size={14} style={{ color: 'var(--brand-color)' }} />
+                  Booking
+                </h3>
+                {tenantBookings.length > 0 && (
+                  <span className="badge badge-secondary" style={{ fontSize: '10px' }}>
+                    {tenantBookings.length} {tenantBookings.length === 1 ? 'Booking' : 'Bookings'}
+                  </span>
+                )}
+              </div>
+
+              {loadingBookings ? (
+                <div style={{ padding: '18px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                  <div className="spin" style={{ display: 'inline-block', marginBottom: 6 }}>
+                    <Calendar size={18} style={{ color: 'var(--brand-color)' }} />
+                  </div>
+                  <div>Loading booking details...</div>
+                </div>
+              ) : tenantBookings.length === 0 ? (
+                <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px', border: '1px dashed var(--border-color)' }}>
+                  <Calendar size={22} style={{ margin: '0 auto 6px', color: 'var(--text-muted)', opacity: 0.6 }} />
+                  <div style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>No Booking Found</div>
+                  <div style={{ fontSize: '11px', marginTop: 2 }}>This tenant has no active booking records.</div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {tenantBookings.map((b, idx) => {
+                    const statusStr = String(b.workflow_state || b.status || (b.docstatus === 1 ? 'Approved' : 'Draft')).trim();
+                    const isSuccess = ['approved', 'active', 'confirmed', 'paid'].includes(statusStr.toLowerCase()) || b.docstatus === 1;
+                    const isDanger = ['cancelled', 'rejected'].includes(statusStr.toLowerCase()) || b.docstatus === 2;
+                    const badgeClass = isSuccess ? 'badge-success' : isDanger ? 'badge-danger' : 'badge-warning';
+
+                    // Extract items/units
+                    const items = Array.isArray(b.booking_item) && b.booking_item.length > 0 
+                      ? b.booking_item 
+                      : (Array.isArray(b.items) ? b.items : []);
+
+                    const propertyDisplay = b.property || (items.length > 0 ? (items[0].item_name || items[0].item_code) : '—');
+
+                    return (
+                      <div key={b.name || idx} style={{ background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {/* Booking Header: ID, Type, Status */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--brand-color)' }}>{b.name}</span>
+                            {b.booking_type && (
+                              <span className="badge badge-secondary" style={{ fontSize: 10 }}>{b.booking_type}</span>
+                            )}
+                          </div>
+                          <span className={`badge ${badgeClass}`} style={{ fontSize: 10 }}>
+                            {statusStr}
+                          </span>
+                        </div>
+
+                        {/* Property & Units */}
+                        <div style={{ background: 'rgba(255,255,255,0.02)', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                          <span style={{ fontSize: 9.5, color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block', marginBottom: 2 }}>Property / Unit</span>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                            {propertyDisplay}
+                          </span>
+                          {items.length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
+                              {items.map((it, i) => (
+                                <span key={i} style={{ fontSize: 10.5, background: 'var(--bg-accent-alpha)', padding: '2px 7px', borderRadius: 4, color: 'var(--text-secondary)' }}>
+                                  {it.item_code || it.item_name} {it.total_areasqm ? `(${it.total_areasqm} sqm)` : ''}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Period & Amount 2-col */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                          <div style={{ background: 'rgba(255,255,255,0.01)', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                            <span style={{ fontSize: 9.5, color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: 2 }}>Booking Period</span>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>
+                              {b.starting_date || b.start_date || '—'}
+                            </span>
+                            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                              to {b.ending_date || b.end_date || '—'}
+                              {b.total_days ? ` (${b.total_days} days)` : ''}
+                            </span>
+                          </div>
+
+                          <div style={{ background: 'rgba(255,255,255,0.01)', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                            <span style={{ fontSize: 9.5, color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', marginBottom: 2 }}>Amount</span>
+                            <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', display: 'block' }}>
+                              {tenantData.default_currency || 'FJD'} {parseFloat(b.booking_amount || b.amount_to_pay || b.net_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                            {b.payment_status && (
+                              <span style={{ fontSize: 10, fontWeight: 600, color: b.payment_status === 'Paid' ? 'var(--color-success)' : b.payment_status === 'Partially Paid' ? 'var(--color-warning)' : 'var(--text-muted)' }}>
+                                {b.payment_status}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Additional row: Advance, Pending, Quotation */}
+                        {(b.advance_amount || b.pending_amount || b.quotation) && (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(80px, 1fr))', gap: 6, fontSize: 11, borderTop: '1px solid var(--border-color)', paddingTop: 8 }}>
+                            {b.advance_amount !== undefined && b.advance_amount !== null && (
+                              <div>
+                                <span style={{ fontSize: 9, color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase' }}>Advance</span>
+                                <span style={{ fontWeight: 600 }}>{parseFloat(b.advance_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            )}
+                            {b.pending_amount !== undefined && b.pending_amount !== null && (
+                              <div>
+                                <span style={{ fontSize: 9, color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase' }}>Pending</span>
+                                <span style={{ fontWeight: 600, color: Number(b.pending_amount) > 0 ? 'var(--color-warning)' : 'inherit' }}>{parseFloat(b.pending_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            )}
+                            {b.quotation && (
+                              <div>
+                                <span style={{ fontSize: 9, color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase' }}>Quotation</span>
+                                <span style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{b.quotation}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* System Info Section */}
@@ -2925,19 +3177,19 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '11px', color: 'var(--text-secondary)' }}>
                 <div>
                   <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Created On</span>
-                  <span>{selectedTenant.creation ? selectedTenant.creation.split('.')[0] : '—'}</span>
+                  <span>{tenantData.creation ? tenantData.creation.split('.')[0] : '—'}</span>
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Owner</span>
-                  <span style={{ wordBreak: 'break-all' }}>{selectedTenant.owner || '—'}</span>
+                  <span style={{ wordBreak: 'break-all' }}>{tenantData.owner || '—'}</span>
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Last Modified</span>
-                  <span>{selectedTenant.modified ? selectedTenant.modified.split('.')[0] : '—'}</span>
+                  <span>{tenantData.modified ? tenantData.modified.split('.')[0] : '—'}</span>
                 </div>
                 <div>
                   <span style={{ color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontSize: '9px', marginBottom: '2px' }}>Modified By</span>
-                  <span style={{ wordBreak: 'break-all' }}>{selectedTenant.modified_by || '—'}</span>
+                  <span style={{ wordBreak: 'break-all' }}>{tenantData.modified_by || '—'}</span>
                 </div>
               </div>
             </div>
@@ -3000,10 +3252,16 @@ export default function Tenants({ tenants, erpnextConfig, onAddTenant }) {
                 )}
 
                 {entityType === 'Company' && (
-                  <div className="form-group">
-                    <label className="form-label">Company Name</label>
-                    <input type="text" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="e.g. Acme Holdings Ltd" className="form-input" required />
-                  </div>
+                  <>
+                    <div className="form-group">
+                      <label className="form-label">Company Name</label>
+                      <input type="text" value={customerName} onChange={(e) => { setCustomerName(e.target.value); setCompanyName(e.target.value); }} placeholder="e.g. Acme Holdings Ltd" className="form-input" required />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Company VAT ID</label>
+                      <input type="text" value={companyVatId} onChange={(e) => setCompanyVatId(e.target.value)} placeholder="e.g. VAT-987654" className="form-input" />
+                    </div>
+                  </>
                 )}
 
                 {entityType === 'Individual' && (

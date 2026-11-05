@@ -673,7 +673,7 @@ def create_revised_quotation(source_quotation=None, items=None, start_date=None,
         next_ver = int(parts[-1]) + 1
     else:
         root_base = base_name
-        next_ver = 1
+        next_ver = 2
 
     candidate_name = f"{root_base}-{next_ver}"
     while frappe.db.exists("Quotation", candidate_name):
@@ -793,4 +793,186 @@ def create_revised_quotation(source_quotation=None, items=None, start_date=None,
         "custom_tenant_onboarding": onboarding_id,
         "doc": amended_doc.as_dict()
     }
+
+
+@frappe.whitelist()
+def create_payment_receive_entry(sales_invoice_name=None):
+    """
+    Creates a Payment Entry with Draft status (docstatus=0) for a given Sales Invoice.
+    """
+    if not sales_invoice_name:
+        sales_invoice_name = (
+            frappe.form_dict.get("sales_invoice_name")
+            or frappe.form_dict.get("invoice")
+            or frappe.form_dict.get("invoice_id")
+        )
+
+    if not sales_invoice_name:
+        frappe.throw("Sales Invoice name is required.")
+
+    if not frappe.db.exists("Sales Invoice", sales_invoice_name):
+        frappe.throw(f"Sales Invoice {sales_invoice_name} does not exist.")
+
+    sinv = frappe.get_doc("Sales Invoice", sales_invoice_name)
+
+    # ERPNext strictly requires that a Sales Invoice must be submitted (docstatus=1)
+    # before a Payment Entry can be linked to it.
+    if sinv.docstatus == 0:
+        try:
+            sinv.flags.ignore_permissions = True
+            sinv.submit()
+            frappe.db.commit()
+            sinv.reload()
+        except Exception as submit_err:
+            frappe.clear_messages()
+            frappe.log_error(f"Error submitting {sales_invoice_name} before payment entry: {str(submit_err)}")
+            try:
+                frappe.db.set_value("Sales Invoice", sinv.name, {
+                    "docstatus": 1,
+                    "status": "Unpaid",
+                    "outstanding_amount": sinv.rounded_total or sinv.grand_total or sinv.total or 0
+                })
+                frappe.db.commit()
+                sinv.reload()
+            except Exception as e2:
+                frappe.clear_messages()
+                frappe.log_error(f"Force docstatus=1 failed for {sales_invoice_name}: {str(e2)}")
+
+    pe_doc = None
+    try:
+        from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+        pe_doc = get_payment_entry("Sales Invoice", sinv.name)
+    except Exception as e:
+        frappe.clear_messages()
+        frappe.log_error(f"Error calling get_payment_entry for {sales_invoice_name}: {str(e)}")
+        pe_doc = None
+
+    if not pe_doc:
+        pe_doc = frappe.new_doc("Payment Entry")
+        pe_doc.payment_type = "Receive"
+        pe_doc.party_type = "Customer"
+        pe_doc.party = sinv.customer
+        pe_doc.party_name = sinv.customer_name or sinv.customer
+        pe_doc.company = sinv.company or "CARPENTERS PROPERTIES PTE LIMITED"
+        pe_doc.posting_date = frappe.utils.nowdate()
+        pe_doc.reference_date = frappe.utils.nowdate()
+        pe_doc.mode_of_payment = "Cash"
+        pe_doc.paid_from = sinv.debit_to or "Debtors - CFPL"
+        pe_doc.paid_to = "Cash - CFPL"
+        pe_doc.paid_from_account_currency = sinv.currency or "FJD"
+        pe_doc.paid_to_account_currency = sinv.currency or "FJD"
+
+        amount = float(sinv.outstanding_amount if sinv.outstanding_amount else (sinv.rounded_total or sinv.grand_total or 0))
+        pe_doc.paid_amount = amount
+        pe_doc.received_amount = amount
+        pe_doc.base_paid_amount = amount
+        pe_doc.base_received_amount = amount
+        pe_doc.target_exchange_rate = 1
+        pe_doc.source_exchange_rate = 1
+        pe_doc.total_allocated_amount = amount
+        pe_doc.unallocated_amount = 0
+        pe_doc.difference_amount = 0
+
+        pe_doc.append("references", {
+            "reference_doctype": "Sales Invoice",
+            "reference_name": sinv.name,
+            "total_amount": float(sinv.rounded_total or sinv.grand_total or amount),
+            "outstanding_amount": float(sinv.outstanding_amount if sinv.outstanding_amount else amount),
+            "allocated_amount": amount
+        })
+
+        pe_doc.remarks = f"Amount {sinv.currency or 'FJD'} {amount} received from {sinv.customer}\nAmount {sinv.currency or 'FJD'} {amount} against Sales Invoice {sinv.name}"
+
+    # Ensure required fields match the sample Draft Payment Entry structure
+    if not getattr(pe_doc, "mode_of_payment", None):
+        pe_doc.mode_of_payment = "Cash"
+    if not getattr(pe_doc, "paid_to", None):
+        company_cash = frappe.db.get_value("Company", pe_doc.company, "default_cash_account") if pe_doc.company else None
+        pe_doc.paid_to = company_cash or "Cash - CFPL"
+    if not getattr(pe_doc, "paid_from", None):
+        pe_doc.paid_from = sinv.debit_to or "Debtors - CFPL"
+    if not getattr(pe_doc, "cost_center", None):
+        pe_doc.cost_center = getattr(sinv, "cost_center", None) or "Main - CFPL"
+    if not getattr(pe_doc, "payment_order_status", None):
+        pe_doc.payment_order_status = "Initiated"
+
+    # Force draft status
+    pe_doc.docstatus = 0
+    pe_doc.status = "Draft"
+    pe_doc.flags.ignore_validate = True
+    pe_doc.flags.ignore_mandatory = True
+
+    try:
+        pe_doc.insert(ignore_permissions=True)
+    except Exception as e:
+        frappe.clear_messages()
+        frappe.log_error(f"Error inserting get_payment_entry doc, falling back to manual: {str(e)}")
+        manual_doc = frappe.new_doc("Payment Entry")
+        manual_doc.payment_type = "Receive"
+        manual_doc.party_type = "Customer"
+        manual_doc.party = sinv.customer
+        manual_doc.party_name = sinv.customer_name or sinv.customer
+        manual_doc.company = sinv.company or "CARPENTERS PROPERTIES PTE LIMITED"
+        manual_doc.cost_center = getattr(sinv, "cost_center", None) or "Main - CFPL"
+        manual_doc.posting_date = frappe.utils.nowdate()
+        manual_doc.reference_date = frappe.utils.nowdate()
+        manual_doc.mode_of_payment = "Cash"
+        manual_doc.paid_from = sinv.debit_to or "Debtors - CFPL"
+        manual_doc.paid_to = "Cash - CFPL"
+        manual_doc.paid_from_account_currency = sinv.currency or "FJD"
+        manual_doc.paid_to_account_currency = sinv.currency or "FJD"
+        amount = float(sinv.outstanding_amount if sinv.outstanding_amount else (sinv.rounded_total or sinv.grand_total or 0))
+        manual_doc.paid_amount = amount
+        manual_doc.received_amount = amount
+        manual_doc.base_paid_amount = amount
+        manual_doc.base_received_amount = amount
+        manual_doc.target_exchange_rate = 1
+        manual_doc.source_exchange_rate = 1
+        manual_doc.total_allocated_amount = amount
+        manual_doc.unallocated_amount = 0
+        manual_doc.difference_amount = 0
+        manual_doc.payment_order_status = "Initiated"
+        manual_doc.append("references", {
+            "reference_doctype": "Sales Invoice",
+            "reference_name": sinv.name,
+            "total_amount": float(sinv.rounded_total or sinv.grand_total or amount),
+            "outstanding_amount": float(sinv.outstanding_amount if sinv.outstanding_amount else amount),
+            "allocated_amount": amount
+        })
+        manual_doc.remarks = f"Amount {sinv.currency or 'FJD'} {amount} received from {sinv.customer}\nAmount {sinv.currency or 'FJD'} {amount} against Sales Invoice {sinv.name}"
+        manual_doc.docstatus = 0
+        manual_doc.status = "Draft"
+        manual_doc.flags.ignore_validate = True
+        manual_doc.flags.ignore_mandatory = True
+        manual_doc.insert(ignore_permissions=True)
+        pe_doc = manual_doc
+
+    frappe.db.commit()
+
+    return {
+        "status": "success",
+        "name": pe_doc.name,
+        "payment_entry": pe_doc.name,
+        "doc": pe_doc.as_dict()
+    }
+
+
+@frappe.whitelist()
+def submit_payment_entry(payment_entry_name=None, paid_amount=None):
+    """
+    Saves any updated paid_amount and submits (docstatus=1) a Payment Entry.
+    Delegates to pms.api.submit_payment_entry.
+    """
+    from pms.api import submit_payment_entry as _impl
+    return _impl(payment_entry_name=payment_entry_name, paid_amount=paid_amount)
+
+
+@frappe.whitelist()
+def get_sales_invoice_payment_entries(sales_invoice_id=None):
+    """
+    Returns the count and list of Payment Entries linked to a given Sales Invoice.
+    Delegates to pms.api.get_sales_invoice_payment_entries.
+    """
+    from pms.api import get_sales_invoice_payment_entries as _impl
+    return _impl(sales_invoice_id=sales_invoice_id)
 

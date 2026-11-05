@@ -4798,7 +4798,7 @@
 
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, Check, RotateCcw, Zap, Home, Send, XCircle, Layers, Bookmark, GitBranch, Upload, Eye, ExternalLink, Loader2, Receipt, Save } from 'lucide-react';
+import { FileText, Plus, X, Search, CheckCircle2, AlertCircle, Edit, Trash2, Calendar, User, Building, Trash, Printer, ArrowUpRight, ArrowLeft, Check, RotateCcw, Zap, Home, Send, XCircle, Layers, Bookmark, GitBranch, Upload, Eye, ExternalLink, Loader2, Receipt, Save } from 'lucide-react';
 import houseImg from '../assets/new-house.png';
 import { ensureCsrfToken } from '../config';
 
@@ -4907,6 +4907,125 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   const [serviceQuotationTaskId, setServiceQuotationTaskId] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const workflowActionsCache = useRef({});
+
+  // Role-based permission: Admin role can create booking, Operation Role cannot.
+  // user = frappe.session.user
+  // roles = frappe.get_roles(user)
+  const [canCreateBooking, setCanCreateBooking] = useState(true); // Default true until roles are resolved
+  const [roleLoading, setRoleLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const resolveRoles = async () => {
+      try {
+        // Step 1: user = frappe.session.user
+        const user =
+          (typeof window !== 'undefined' && window.frappe?.session?.user) ||
+          (typeof window !== 'undefined' && window.frappe_user) ||
+          localStorage.getItem('pms_user') ||
+          '';
+
+        let roles = [];
+
+        // Step 2: roles = frappe.get_roles(user)
+        if (typeof window !== 'undefined' && typeof window.frappe?.get_roles === 'function') {
+          try {
+            const r = window.frappe.get_roles(user);
+            if (Array.isArray(r) && r.length > 0) roles = r;
+          } catch { }
+        }
+
+        // Fallback: window.frappe.user_roles
+        if (roles.length === 0 && typeof window !== 'undefined' && Array.isArray(window.frappe?.user_roles) && window.frappe.user_roles.length > 0) {
+          roles = window.frappe.user_roles;
+        }
+
+        // Fallback: backend API pms.api.get_user_roles
+        if (roles.length === 0 && erpnextConfig?.url && user && user !== 'Guest') {
+          try {
+            const res = await fetch(`${erpnextConfig.url}/api/method/pms.api.get_user_roles?user=${encodeURIComponent(user)}`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (res.ok) {
+              const json = await res.json();
+              const data = json.message || json;
+              if (Array.isArray(data.roles)) roles = data.roles;
+            }
+          } catch { }
+        }
+
+        // Fallback: /api/resource/User/{user}
+        if (roles.length === 0 && erpnextConfig?.url && user && user !== 'Guest') {
+          try {
+            const res = await fetch(`${erpnextConfig.url}/api/resource/User/${encodeURIComponent(user)}`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (res.ok) {
+              const json = await res.json();
+              const uDoc = json.data || json;
+              if (Array.isArray(uDoc.roles)) roles = uDoc.roles.map(r => r.role || r);
+            }
+          } catch { }
+        }
+
+        // Fallback: localStorage pms_roles
+        if (roles.length === 0) {
+          try {
+            const stored = localStorage.getItem('pms_roles');
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              if (Array.isArray(parsed) && parsed.length > 0) roles = parsed;
+            }
+          } catch { }
+        }
+
+        // Final fallback: use portal type
+        if (roles.length === 0) {
+          const savedPortal = localStorage.getItem('pms_selected_portal');
+          const uLower = String(user || '').trim().toLowerCase();
+          if (['admin', 'administrator', 'system manager'].includes(uLower) || savedPortal === 'admin') {
+            roles = ['Administrator', 'System Manager'];
+          } else if (savedPortal === 'operation') {
+            roles = ['Operation Role'];
+          }
+        }
+
+        // Evaluate roles
+        const roleList = roles.map(r => String(r || '').trim().toLowerCase());
+        const uLower = String(user || '').trim().toLowerCase();
+        const savedPortal = localStorage.getItem('pms_selected_portal') || '';
+
+        const isAdminRole =
+          roleList.some(r => r === 'system manager' || r === 'administrator' || r === 'admin' || r.includes('system manager')) ||
+          uLower === 'administrator' ||
+          uLower === 'admin' ||
+          savedPortal === 'admin';
+
+        const isOperationOnly =
+          !isAdminRole &&
+          (roleList.some(r => r.includes('operation') || r.includes('operator')) || savedPortal === 'operation');
+
+        // Admin role user definitely can create booking.
+        // Operation Role user does NOT have role permission to create booking.
+        const allowed = isAdminRole || !isOperationOnly;
+
+        if (!cancelled) {
+          setCanCreateBooking(allowed);
+          setRoleLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setCanCreateBooking(true); // Safe default: allow
+          setRoleLoading(false);
+        }
+      }
+    };
+    resolveRoles();
+    return () => { cancelled = true; };
+  }, [erpnextConfig]);
+
 
   const isServiceQuotation = (q) => {
     if (!q) return false;
@@ -5192,6 +5311,21 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
   // Selected Customer Address and Contact for current print view
   const [customerAddress, setCustomerAddress] = useState('');
   const [customerContact, setCustomerContact] = useState('');
+
+  // Close details drawer on Escape key press
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && selectedQuotation && selectedQuotationDetail && !showAddModal && !showNewVersionModal) {
+        setSelectedQuotation(null);
+        setSelectedQuotationDetail(null);
+        setNegotiations([]);
+        setComments([]);
+        setWorkflowActions(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedQuotation, selectedQuotationDetail, showAddModal, showNewVersionModal]);
 
   // Fetch company details from ERPNext
   useEffect(() => {
@@ -5592,13 +5726,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     if (parts.length > 3) {
       const lastNum = parseInt(parts[parts.length - 1], 10);
       if (!isNaN(lastNum)) {
-        // In Frappe ERPNext:
-        // Base document has no suffix: Version 1
-        // 1st amendment has suffix -1: Version 2 (1 + 1)
-        // 2nd amendment has suffix -2: Version 3 (2 + 1)
-        // 3rd amendment has suffix -3: Version 4 (3 + 1)
-        // 4th amendment has suffix -4: Version 5 (4 + 1)
-        const vNum = lastNum + 1;
+        // -1 (standard Frappe 1st amendment) is Version 2
+        // -2 (e.g. QTN-10-00531-2) is Version 2
+        // -3 is Version 3, etc.
+        const vNum = lastNum === 1 ? 2 : lastNum;
         return { version_no: vNum, isAmendment: true };
       }
     }
@@ -6019,18 +6150,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         setSelectedQuotationDetail(activeDoc);
 
         // 4. Build version history / negotiations array from actual quotation documents
-        const seenVerNos = new Set();
-        let maxVerAssigned = 0;
-
         const parsedNegotiations = detailedVersions.map((vDoc, index) => {
           const vInfo = getQuotationVersionInfo(vDoc.name, rootName);
-          let assignedVerNo = vInfo.version_no;
-          if (seenVerNos.has(assignedVerNo) || assignedVerNo <= maxVerAssigned) {
-            assignedVerNo = maxVerAssigned + 1;
-          }
-          seenVerNos.add(assignedVerNo);
-          maxVerAssigned = Math.max(maxVerAssigned, assignedVerNo);
-
           const commItem = (vDoc.items || []).find(isCommercialItem);
           const itemDisc = commItem && commItem.discount_amount !== undefined ? parseFloat(commItem.discount_amount) : 0;
           const docDisc = parseFloat(vDoc.discount_amount) || 0;
@@ -6056,7 +6177,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
           return {
             name: vDoc.name,
-            version_no: assignedVerNo,
+            version_no: vInfo.version_no,
             total_versions: detailedVersions.length,
             is_current: vDoc.name === activeName,
             negotiation_date: vDoc.custom_last_negotiation_date || vDoc.transaction_date || (vDoc.creation ? vDoc.creation.split(' ')[0] : '—'),
@@ -7323,16 +7444,12 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const versionTaxes = versionNetTotal * versionTaxRatePct;
         const versionGrandTotal = versionNetTotal + versionTaxes;
 
-        // Calculate version candidate name (e.g. QTN-10-00531 -> QTN-10-00531-1, QTN-10-00531-2)
+        // Calculate version candidate name (e.g. QTN-10-00531 -> QTN-10-00531-2)
         const parts = latestSource.name.split('-');
-        let nextNum = parts.length > 3 && !isNaN(parseInt(parts[parts.length - 1], 10))
+        const nextNum = parts.length > 3 && !isNaN(parseInt(parts[parts.length - 1], 10))
           ? parseInt(parts[parts.length - 1], 10) + 1
-          : 1;
-        let candidateName = `${rootName}-${nextNum}`;
-        while (quotations && quotations.some(q => q.name === candidateName)) {
-          nextNum++;
-          candidateName = `${rootName}-${nextNum}`;
-        }
+          : 2;
+        const candidateName = `${rootName}-${nextNum}`;
 
         const payload = {
           name: candidateName,
@@ -8529,7 +8646,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       <td style={{ fontWeight: 600 }}>{q.customer_name}</td>
                       <td>{q.transaction_date}</td>
                       <td>{q.valid_till}</td>
-                      <td style={{ fontWeight: 600 }}>${(q.grand_total || 0).toLocaleString()}</td>
+                      <td style={{ fontWeight: 600 }}>F${(q.grand_total || 0).toLocaleString()}</td>
                       <td>
                         {(() => {
                           const displayStatus = q.status || '';
@@ -8554,36 +8671,49 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       </td>
                       <td style={{ textAlign: 'right', paddingRight: 16 }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
-                          {!q.booking_id && (
-                            <button
-                              type="button"
-                              className="btn btn-sm"
-                              style={{
-                                fontSize: 10.5,
-                                fontWeight: 600,
-                                padding: '4px 10px',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4,
-                                borderRadius: 6,
-                                border: '1px solid #93c5fd',
-                                color: '#1d4ed8',
-                                backgroundColor: '#eff6ff',
-                                cursor: 'pointer',
-                                transition: 'all 0.15s ease'
-                              }}
-                              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#dbeafe'; }}
-                              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#eff6ff'; }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenNewVersion(q);
-                              }}
-                              title={`Create Revised Quotation from ${q.name}`}
-                            >
-                              <GitBranch size={11} />
-                              <span>Revised Quotation</span>
-                            </button>
-                          )}
+                          {(() => {
+                            const isCancelled = q.status === 'Cancelled' || q.docstatus === 2 || String(q.status || '').toLowerCase() === 'cancelled' || String(q.workflow_state || '').toLowerCase() === 'cancelled';
+                            if (isCancelled) {
+                              return (
+                                <span style={{ fontSize: 11, fontWeight: 600, color: '#ef4444', padding: '4px 6px' }}>
+                                  Cancelled
+                                </span>
+                              );
+                            }
+                            if (!q.booking_id) {
+                              return (
+                                <button
+                                  type="button"
+                                  className="btn btn-sm"
+                                  style={{
+                                    fontSize: 10.5,
+                                    fontWeight: 600,
+                                    padding: '4px 10px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 4,
+                                    borderRadius: 6,
+                                    border: '1px solid #93c5fd',
+                                    color: '#1d4ed8',
+                                    backgroundColor: '#eff6ff',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.15s ease'
+                                  }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#dbeafe'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#eff6ff'; }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenNewVersion(q);
+                                  }}
+                                  title={`Create Revised Quotation from ${q.name}`}
+                                >
+                                  <GitBranch size={11} />
+                                  <span>Revised Quotation</span>
+                                </button>
+                              );
+                            }
+                            return null;
+                          })()}
 
                           {q.booking_id && !isServiceQuotation(q) ? (
                             <button
@@ -8696,18 +8826,20 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: 5,
-                                backgroundColor: '#2563eb',
-                                borderColor: '#2563eb',
+                                backgroundColor: canCreateBooking ? '#2563eb' : '#94a3b8',
+                                borderColor: canCreateBooking ? '#2563eb' : '#94a3b8',
                                 color: '#ffffff',
-                                boxShadow: '0 1px 2px rgba(37,99,235,0.2)',
-                                cursor: creatingBookingId === q.name ? 'not-allowed' : 'pointer'
+                                boxShadow: canCreateBooking ? '0 1px 2px rgba(37,99,235,0.2)' : 'none',
+                                cursor: (!canCreateBooking || creatingBookingId === q.name) ? 'not-allowed' : 'pointer',
+                                opacity: canCreateBooking ? 1 : 0.6
                               }}
-                              disabled={creatingBookingId === q.name}
+                              disabled={!canCreateBooking || creatingBookingId === q.name}
                               onClick={(e) => {
                                 e.stopPropagation();
+                                if (!canCreateBooking) return;
                                 handleCreateBooking(q);
                               }}
-                              title={`Create Booking from ${q.name}`}
+                              title={canCreateBooking ? `Create Booking from ${q.name}` : 'You do not have permission to create a booking (Operation Role)'}
                             >
                               <Bookmark size={11} />
                               <span>{creatingBookingId === q.name ? 'Creating...' : 'Create Booking'}</span>
@@ -8802,29 +8934,93 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           {selectedQuotation && selectedQuotationDetail && (
             <div className="card-panel" style={{ padding: '24px 32px', background: '#ffffff', color: '#111827', display: 'flex', flexDirection: 'column', gap: 14, position: 'relative', height: '100%', overflowY: 'auto', minWidth: 0, border: 'none', borderRadius: 0 }}>
 
-              {/* Close details button */}
-              <div style={{ position: 'absolute', top: 14, right: 16, display: 'flex', alignItems: 'center', gap: 8, zIndex: 10 }}>
+              {/* TOP NAVIGATION / HEADER BAR */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                paddingBottom: 12,
+                borderBottom: '1px solid #e5e7eb',
+                flexShrink: 0
+              }}>
+                {/* Back to Quotations button */}
                 <button
+                  type="button"
+                  id="qtn-drawer-back-btn"
                   onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); setNegotiations([]); setComments([]); setWorkflowActions(null); }}
                   style={{
-                    background: '#f3f4f6',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '50%',
-                    color: '#374151',
-                    cursor: 'pointer',
-                    width: 30,
-                    height: 30,
-                    display: 'flex',
+                    display: 'inline-flex',
                     alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 16,
+                    gap: 7,
+                    padding: '7px 15px',
+                    fontSize: 12,
                     fontWeight: 700,
-                    transition: 'all 0.15s'
+                    borderRadius: 7,
+                    border: '1.5px solid #cbd5e1',
+                    background: '#f8fafc',
+                    color: '#1e293b',
+                    cursor: 'pointer',
+                    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
+                    transition: 'all 0.15s ease'
                   }}
-                  title="Close"
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#e2e8f0';
+                    e.currentTarget.style.borderColor = '#94a3b8';
+                    e.currentTarget.style.color = '#0f172a';
+                    e.currentTarget.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.08)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = '#f8fafc';
+                    e.currentTarget.style.borderColor = '#cbd5e1';
+                    e.currentTarget.style.color = '#1e293b';
+                    e.currentTarget.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.05)';
+                  }}
+                  title="Back to Quotations List"
                 >
-                  ×
+                  <ArrowLeft size={15} strokeWidth={2.5} />
+                  <span>Back to Quotations</span>
                 </button>
+
+                {/* Right controls: Prominently Highlighted Cross Button */}
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  {/* Highlighted Cross Sign Button (Black & White) */}
+                  <button
+                    type="button"
+                    id="qtn-drawer-close-btn"
+                    onClick={() => { setSelectedQuotation(null); setSelectedQuotationDetail(null); setNegotiations([]); setComments([]); setWorkflowActions(null); }}
+                    style={{
+                      background: '#0f172a',
+                      border: '1.5px solid #0f172a',
+                      borderRadius: '50%',
+                      color: '#ffffff',
+                      cursor: 'pointer',
+                      width: 34,
+                      height: 34,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 2px 6px rgba(15, 23, 42, 0.25)',
+                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = '#ffffff';
+                      e.currentTarget.style.borderColor = '#0f172a';
+                      e.currentTarget.style.color = '#0f172a';
+                      e.currentTarget.style.transform = 'scale(1.08)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(15, 23, 42, 0.25)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = '#0f172a';
+                      e.currentTarget.style.borderColor = '#0f172a';
+                      e.currentTarget.style.color = '#ffffff';
+                      e.currentTarget.style.transform = 'scale(1)';
+                      e.currentTarget.style.boxShadow = '0 2px 6px rgba(15, 23, 42, 0.25)';
+                    }}
+                    title="Close Details (Esc)"
+                  >
+                    <X size={18} strokeWidth={2.6} />
+                  </button>
+                </div>
               </div>
 
 
@@ -8838,11 +9034,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--brand-color)' }}>{selectedQuotationDetail.name}</span>
                       {(() => {
                         const root = getRootQuotationName(selectedQuotationDetail.name, selectedQuotationDetail);
-                        const matchInNeg = negotiations.find(n => n.name === selectedQuotationDetail.name);
-                        const vNum = matchInNeg?.version_no || getQuotationVersionInfo(selectedQuotationDetail.name, root).version_no;
+                        const vInfo = getQuotationVersionInfo(selectedQuotationDetail.name, root);
                         return (
                           <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
-                            V{vNum}
+                            V{vInfo.version_no}
                           </span>
                         );
                       })()}
@@ -8988,7 +9183,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               transition: 'all 0.15s ease'
                             }}
                           >
-                            V{v.version_no} {isCurrent ? '• Active' : `(${v.negotiation_status})`}
+                            V{v.version_no}
                           </button>
                         );
                       })}
@@ -9125,15 +9320,15 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gridTemplateRows: 'auto auto', gap: 12, padding: 14, background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb', textAlign: 'center', minHeight: 135, boxSizing: 'border-box' }}>
                               <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                                 <div style={{ fontSize: 10.5, color: '#6b7280', fontWeight: 600 }}>Price List Rate</div>
-                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3 }}>${totalPriceListRate.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
+                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3 }}>F${totalPriceListRate.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
                               </div>
                               <div style={{ borderLeft: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                                 <div style={{ fontSize: 10.5, color: '#6b7280', fontWeight: 600 }}>Offer Rate</div>
-                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: 'var(--brand-color)' }}>${offerRate.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
+                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: 'var(--brand-color)' }}>F${offerRate.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
                               </div>
                               <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 10, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                                 <div style={{ fontSize: 10.5, color: '#6b7280', fontWeight: 600 }}>Negotiated Discount ({companyDetails.currency || 'FJD'})</div>
-                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: '#eab308' }}>${discount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
+                                <div style={{ fontSize: 15, fontWeight: 700, marginTop: 3, color: '#eab308' }}>F${discount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
                               </div>
                               <div style={{ borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb', paddingTop: 10, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                                 <div style={{ fontSize: 10.5, color: '#6b7280', fontWeight: 600 }}>Difference</div>
@@ -9190,7 +9385,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                           {item.item_name || item.item_code}
                                           {item.isCommercial && discount > 0 && (
                                             <span style={{ fontSize: 10, color: '#ef4444', fontWeight: 600, marginLeft: 6 }}>
-                                              (Disc: -${discount.toLocaleString()})
+                                              (Disc: -F${discount.toLocaleString()})
                                             </span>
                                           )}
                                         </td>
@@ -9198,7 +9393,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                           {areaVal && areaVal !== '—' ? `${areaVal} sqft` : '—'}
                                         </td>
                                         <td style={{ padding: '8px 12px', textAlign: 'right', color: '#111827', fontWeight: 700 }}>
-                                          ${item.finalAmt.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                                          F${item.finalAmt.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                                         </td>
                                       </tr>
                                     );
@@ -9209,19 +9404,19 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             <div style={{ padding: '10px 14px', background: '#f9fafb', borderTop: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', gap: 5, fontSize: 11, flexShrink: 0 }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
                                 <span>Net Total</span>
-                                <span style={{ fontWeight: 600, color: '#111827' }}>${(calculatedNetTotal + discount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+                                <span style={{ fontWeight: 600, color: '#111827' }}>F${(calculatedNetTotal + discount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#ef4444', fontWeight: 600 }}>
                                 <span>Negotiated Discount</span>
-                                <span>-${discount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+                                <span>-F${discount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
                                 <span>Taxes (VAT @ {(taxRatePct * 100).toFixed(1)}%)</span>
-                                <span>${calculatedTaxes.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+                                <span>F${calculatedTaxes.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#059669', fontWeight: 800, fontSize: 13, borderTop: '1px solid #e5e7eb', paddingTop: 6 }}>
                                 <span>Grand Total ({companyDetails.currency || 'FJD'})</span>
-                                <span>${calculatedGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+                                <span>F${calculatedGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                               </div>
                             </div>
                           </div>
@@ -9286,8 +9481,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                           <td style={{ padding: '8px 10px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 100 }} title={n.negotiation_by}>
                                             {n.negotiation_by ? n.negotiation_by.split('@')[0] : '—'}
                                           </td>
-                                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#eab308' }}>${(n.current_discount || 0).toLocaleString()}</td>
-                                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>${(n.current_grand_total || 0).toLocaleString()}</td>
+                                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, color: '#eab308' }}>F${(n.current_discount || 0).toLocaleString()}</td>
+                                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>F${(n.current_grand_total || 0).toLocaleString()}</td>
                                           <td style={{ padding: '8px 10px' }}>
                                             <span style={{
                                               padding: '3px 8px',
@@ -9386,7 +9581,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                     <span style={{ fontSize: 10.5, color: '#6b7280' }}>{n.negotiation_date}</span>
                                   </div>
                                   <p style={{ margin: '8px 0 6px 0', fontSize: 11.5, color: '#4b5563', lineHeight: 1.5 }}>
-                                    Managed by <strong>{n.negotiation_by}</strong>. Grand Total: <strong>${(n.current_grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</strong> | Negotiated Discount: <strong>${(n.current_discount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</strong>.
+                                    Managed by <strong>{n.negotiation_by}</strong>. Grand Total: <strong>F${(n.current_grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</strong> | Negotiated Discount: <strong>F${(n.current_discount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</strong>.
                                   </p>
                                   {!isCurrent && (
                                     <button
@@ -9466,19 +9661,19 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                                   <td style={{ padding: '10px 14px', fontWeight: 600 }}>Price List Rate</td>
                                   {sortedComp.map((n) => (
-                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600 }}>${(n.price_list_rate || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600 }}>F${(n.price_list_rate || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
                                   ))}
                                 </tr>
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                                   <td style={{ padding: '10px 14px', fontWeight: 600 }}>Discount Amount</td>
                                   {sortedComp.map((n) => (
-                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: '#eab308', fontWeight: 600 }}>${(n.current_discount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: '#eab308', fontWeight: 600 }}>F${(n.current_discount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
                                   ))}
                                 </tr>
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                                   <td style={{ padding: '10px 14px', fontWeight: 600 }}>Net Total</td>
                                   {sortedComp.map((n) => (
-                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600 }}>${((parseFloat(n.current_net_total || 0) + parseFloat(n.current_discount || 0))).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 600 }}>F${((parseFloat(n.current_net_total || 0) + parseFloat(n.current_discount || 0))).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
                                   ))}
                                 </tr>
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
@@ -9487,7 +9682,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                     const taxAmt = parseFloat(n.current_taxes ?? n.doc?.total_taxes_and_charges ?? (Math.max(0, (parseFloat(n.current_grand_total || 0) - parseFloat(n.current_net_total || 0)))));
                                     return (
                                       <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: '#4b5563', fontWeight: 500 }}>
-                                        ${taxAmt.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                                        F${taxAmt.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                                       </td>
                                     );
                                   })}
@@ -9495,7 +9690,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                                   <td style={{ padding: '10px 14px', fontWeight: 600 }}>Grand Total</td>
                                   {sortedComp.map((n) => (
-                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: 'var(--brand-color)', fontWeight: 700 }}>${(n.current_grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                                    <td key={n.name} style={{ padding: '10px 14px', textAlign: 'right', color: 'var(--brand-color)', fontWeight: 700 }}>F${(n.current_grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
                                   ))}
                                 </tr>
                                 <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
@@ -9681,7 +9876,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
                           <span style={{ color: '#6b7280' }}>Total Discount</span>
-                          <strong style={{ color: '#111827' }}>${(parseFloat(discountAmount !== '' ? discountAmount : (originalDiscount || 0)) || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</strong>
+                          <strong style={{ color: '#111827' }}>F${(parseFloat(discountAmount !== '' ? discountAmount : (originalDiscount || 0)) || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</strong>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f3f4f6', paddingBottom: 2 }}>
                           <span style={{ color: '#6b7280' }}>Last Negotiation</span>
@@ -10138,13 +10333,21 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               </button>
                             ) : (
                               // Only enable and show Create Booking after signed document is uploaded/present
+                              // Admin role: enabled. Operation Role: disabled (no permission).
                               !isServiceQuotation(selectedQuotationDetail) && selectedQuotationDetail.signed_document && (selectedQuotationDetail.status !== 'Cancelled' && selectedQuotationDetail.docstatus !== 2) ? (
                                 <button
                                   type="button"
                                   className="qtn-btn-base"
-                                  style={{ background: '#2563eb', borderColor: '#2563eb', color: '#ffffff' }}
-                                  onClick={() => handleCreateBooking(selectedQuotationDetail)}
-                                  disabled={creatingBooking}
+                                  style={{
+                                    background: canCreateBooking ? '#2563eb' : '#94a3b8',
+                                    borderColor: canCreateBooking ? '#2563eb' : '#94a3b8',
+                                    color: '#ffffff',
+                                    opacity: canCreateBooking ? 1 : 0.6,
+                                    cursor: (!canCreateBooking || creatingBooking) ? 'not-allowed' : 'pointer'
+                                  }}
+                                  onClick={() => { if (canCreateBooking) handleCreateBooking(selectedQuotationDetail); }}
+                                  disabled={!canCreateBooking || creatingBooking}
+                                  title={canCreateBooking ? 'Create Booking' : 'You do not have permission to create a booking (Operation Role)'}
                                 >
                                   <Bookmark size={11} />
                                   <span>{creatingBooking ? 'Creating Booking...' : 'Create Booking'}</span>
@@ -10152,28 +10355,41 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                               ) : null
                             )}
 
-                            {/* New Version Button - Only show when Go to Booking is NOT shown and NOT a service quotation */}
-                            {!selectedQuotationDetail.booking_id && !isServiceQuotation(selectedQuotationDetail) && (
-                              <button
-                                id="qtn-new-version-action-btn"
-                                type="button"
-                                className="qtn-btn-base"
-                                style={{
-                                  background: '#eff6ff',
-                                  borderColor: '#93c5fd',
-                                  color: '#1d4ed8',
-                                  fontWeight: 700,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 6
-                                }}
-                                onClick={() => handleOpenNewVersion(selectedQuotationDetail)}
-                                title={`Create Revised Quotation from ${selectedQuotationDetail.name}`}
-                              >
-                                <GitBranch size={11} color="#1d4ed8" />
-                                <span>Revise Quotation</span>
-                              </button>
-                            )}
+                            {/* New Version Button - Only show when Go to Booking is NOT shown, NOT a service quotation, and NOT cancelled */}
+                            {(() => {
+                              const isDetailCancelled = selectedQuotationDetail.status === 'Cancelled' || selectedQuotationDetail.docstatus === 2 || String(selectedQuotationDetail.status || '').toLowerCase() === 'cancelled' || String(selectedQuotationDetail.workflow_state || '').toLowerCase() === 'cancelled';
+                              if (isDetailCancelled) {
+                                return (
+                                  <span style={{ fontSize: 11.5, fontWeight: 700, color: '#ef4444', padding: '4px 8px' }}>
+                                    Cancelled
+                                  </span>
+                                );
+                              }
+                              if (!selectedQuotationDetail.booking_id && !isServiceQuotation(selectedQuotationDetail)) {
+                                return (
+                                  <button
+                                    id="qtn-new-version-action-btn"
+                                    type="button"
+                                    className="qtn-btn-base"
+                                    style={{
+                                      background: '#eff6ff',
+                                      borderColor: '#93c5fd',
+                                      color: '#1d4ed8',
+                                      fontWeight: 700,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 6
+                                    }}
+                                    onClick={() => handleOpenNewVersion(selectedQuotationDetail)}
+                                    title={`Create Revised Quotation from ${selectedQuotationDetail.name}`}
+                                  >
+                                    <GitBranch size={11} color="#1d4ed8" />
+                                    <span>Revise Quotation</span>
+                                  </button>
+                                );
+                              }
+                              return null;
+                            })()}
 
                             {/* Service Quotation: Hide Print Offer Letter and replace with Approve button for submitting doctype.
                                Standard Quotation: Show Print Offer Letter */}
@@ -10756,7 +10972,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                         <span style={{ fontSize: 9, background: '#ede9fe', color: '#6d28d9', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>Default Service</span>
                                       </div>
                                       <span style={{ fontSize: 9.5, color: '#64748b' }}>
-                                        Rate: ${(parseFloat(item.charges) || 0).toLocaleString()}/sqft × {(parseFloat(item.totalArea) || 0).toLocaleString()} sqft
+                                        Rate: F${(parseFloat(item.charges) || 0).toLocaleString()}/sqft × {(parseFloat(item.totalArea) || 0).toLocaleString()} sqft
                                       </span>
                                     </div>
                                   ) : (
@@ -10782,13 +10998,13 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                                 {/* Val. Rate */}
                                 <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>
-                                  {item.loadingDetail ? '…' : (item.standardRate ? `$${(parseFloat(item.standardRate) || 0).toLocaleString()}` : '—')}
+                                  {item.loadingDetail ? '…' : (item.standardRate ? `F$${(parseFloat(item.standardRate) || 0).toLocaleString()}` : '—')}
                                 </td>
 
                                 {/* Offered Rate */}
                                 <td style={{ padding: '6px 8px' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>$</span>
+                                    <span style={{ color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>F$</span>
                                     {item.isDefaultService ? (
                                       <input
                                         type="text"
@@ -10840,7 +11056,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                                 {/* Amount */}
                                 <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
-                                  ${((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)).toLocaleString()}
+                                  F${((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)).toLocaleString()}
                                 </td>
 
                                 {/* Delete */}
@@ -10886,7 +11102,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                       }}>
                         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary, #475569)', uppercase: true, letterSpacing: '0.05em' }}>GRAND TOTAL</span>
                         <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--brand-color, #2563eb)' }}>
-                          ${quoteItems.reduce((sum, item) => sum + ((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)), 0).toLocaleString()}
+                          F${quoteItems.reduce((sum, item) => sum + ((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)), 0).toLocaleString()}
                         </span>
                       </div>
                     </div>
@@ -11101,7 +11317,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                   <span>Adjust the offered rate for each unit below to create a revised version. Service charges recalculate automatically.</span>
                 </div>
                 <div style={{ fontSize: 11, color: '#15803d', fontWeight: 600 }}>
-                  Current Total: ${(versionTargetQuotation.grand_total || versionTargetQuotation.base_grand_total || 0).toLocaleString()}
+                  Current Total: F${(versionTargetQuotation.grand_total || versionTargetQuotation.base_grand_total || 0).toLocaleString()}
                 </div>
               </div>
 
@@ -11256,7 +11472,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                                     </span>
                                   </div>
                                   <span style={{ fontSize: 9.5, color: '#64748b' }}>
-                                    Rate: ${(parseFloat(item.charges) || 0).toLocaleString()}/sqft × {(parseFloat(item.totalArea) || 0).toLocaleString()} sqft
+                                    Rate: F${(parseFloat(item.charges) || 0).toLocaleString()}/sqft × {(parseFloat(item.totalArea) || 0).toLocaleString()} sqft
                                   </span>
                                 </div>
                               ) : (
@@ -11290,13 +11506,13 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                             {/* Val. Rate */}
                             <td style={{ padding: '8px 12px', color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>
-                              {item.loadingDetail ? '…' : (item.standardRate ? `$${(parseFloat(item.standardRate) || 0).toLocaleString()}` : '—')}
+                              {item.loadingDetail ? '…' : (item.standardRate ? `F$${(parseFloat(item.standardRate) || 0).toLocaleString()}` : '—')}
                             </td>
 
                             {/* Offered Rate (Editable input) */}
                             <td style={{ padding: '6px 8px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <span style={{ color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>$</span>
+                                <span style={{ color: 'var(--text-secondary, #475569)', fontWeight: 500 }}>F$</span>
                                 {item.isDefaultService ? (
                                   <input
                                     type="text"
@@ -11358,7 +11574,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
                             {/* Amount */}
                             <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
-                              ${((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)).toLocaleString()}
+                              F${((parseFloat(item.qty) || 1) * (parseFloat(item.offeredRate) || 0)).toLocaleString()}
                             </td>
 
                             {/* Delete Button */}
@@ -11431,7 +11647,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         }}>
                           <span style={{ fontWeight: 600 }}>Net Total</span>
                           <span style={{ fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
-                            ${versionNetTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                            F${versionNetTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                           </span>
                         </div>
 
@@ -11448,7 +11664,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                         }}>
                           <span style={{ fontWeight: 600 }}>Taxes (VAT @ {(versionTaxRatePct * 100).toFixed(1)}%)</span>
                           <span style={{ fontWeight: 700, color: 'var(--text-primary, #0f172a)' }}>
-                            ${versionTaxes.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                            F${versionTaxes.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                           </span>
                         </div>
 
@@ -11465,7 +11681,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                             GRAND TOTAL
                           </span>
                           <span style={{ fontSize: 16, fontWeight: 800, color: '#059669' }}>
-                            ${versionGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                            F${versionGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                           </span>
                         </div>
                       </div>

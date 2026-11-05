@@ -2319,6 +2319,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
   const [expandedUnit, setExpandedUnit] = useState(null);
 
   const [expandedFloors, setExpandedFloors] = useState({});
+  const [floorReadOnly, setFloorReadOnly] = useState(false);
 
   // Pagination & Layout States
   const [viewLayout, setViewLayout] = useState('standard'); // 'standard' | 'three-column'
@@ -2542,16 +2543,17 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     fetchDocTypeFields();
   }, [erpnextConfig]);
 
-  // Map of legal_description and lease_start_date directly fetched from Property Group DocType
+  // Map of legal_description, lease_start_date, and no_of_floors directly fetched from Property Group DocType
   const [legalDescriptions, setLegalDescriptions] = useState({});
   const [leaseStartDates, setLeaseStartDates] = useState({});
+  const [propertyFloorsMap, setPropertyFloorsMap] = useState({});
 
-  // Fetch legal_description and lease_start_date for each Property Group directly from DocType
+  // Fetch legal_description, lease_start_date, and no_of_floors for each Property Group directly from DocType
   useEffect(() => {
     if (!erpnextConfig || !erpnextConfig.url) return;
     const fetchPropertyMeta = async () => {
       try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Property%20Group?fields=["name","legal_description","lease_start_date","lease_end_date"]&limit_page_length=0`, {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Property%20Group?fields=["name","legal_description","lease_start_date","lease_end_date","no_of_floors"]&limit_page_length=0`, {
           credentials: 'include',
           headers: getAuthHeaders({ 'Content-Type': 'application/json' })
         });
@@ -2560,6 +2562,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           const items = json.data || [];
           const descMap = {};
           const startMap = {};
+          const floorsMap = {};
           items.forEach(item => {
             if (item.name) {
               if (item.legal_description) {
@@ -2568,13 +2571,17 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
               if (item.lease_start_date) {
                 startMap[item.name] = item.lease_start_date;
               }
+              if (item.no_of_floors !== undefined && item.no_of_floors !== null) {
+                floorsMap[item.name] = item.no_of_floors;
+              }
             }
           });
           setLegalDescriptions(prev => ({ ...prev, ...descMap }));
           setLeaseStartDates(prev => ({ ...prev, ...startMap }));
+          setPropertyFloorsMap(prev => ({ ...prev, ...floorsMap }));
         }
       } catch (err) {
-        console.warn('Failed to fetch legal_description and lease_start_date from Property Group doctype:', err);
+        console.warn('Failed to fetch legal_description, lease_start_date and no_of_floors from Property Group doctype:', err);
       }
     };
     fetchPropertyMeta();
@@ -2862,7 +2869,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     { fieldname: 'item_code', label: 'Unit Code /Unit ID', fieldtype: 'Data', required: true, placeholder: 'e.g. 23unit' },
     { fieldname: 'item_name', label: 'Unit Name', fieldtype: 'Data', required: true, placeholder: 'e.g. 23unit' },
     { fieldname: 'item_group', label: 'Unit Group', fieldtype: 'Select', required: true, options: ['Commercial', 'Residential', 'Retail'] },
-    { fieldname: 'custom_floor', label: 'Floor', fieldtype: 'Select', required: true, options: ['Ground', '1st', '2nd', '3rd', '4th', 'Unspecified'] },
+    { fieldname: 'custom_floor', label: 'Floor', fieldtype: 'Select', required: true, options: ['Ground', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th', 'Unspecified'] },
     { fieldname: 'standard_rate', label: 'Standard Selling Rate(F$)', fieldtype: 'Float', required: true, placeholder: 'e.g. 700' },
     { fieldname: 'custom_7average_carpet_area_of_units', label: 'Average Carpet Area of Units (Sq Ft)', fieldtype: 'Int', required: true, placeholder: 'e.g. 90' },
     { fieldname: 'stock_uom', label: 'Stock UOM', fieldtype: 'Link', doctype: 'UOM', required: true }
@@ -2917,6 +2924,15 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     setUnitImages([]);
     setUploadingUnitImage(false);
     setIsEditingUnit(false);
+    setFloorReadOnly(false);
+  };
+
+  const handleAddUnitForFloor = (floor) => {
+    clearUnitForm();
+    const normalized = normalizeFloorForSelect(floor);
+    setUnitFloor(normalized);
+    setFloorReadOnly(true);
+    setShowAddUnitModal(true);
   };
 
   const handleUnitImageUpload = async (e) => {
@@ -3000,17 +3016,28 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     }
 
     if (field.fieldtype === 'Select') {
+      const isFloorField = field.fieldname === 'custom_floor';
+      const isLocked = isFloorField && floorReadOnly;
+      const opts = [...field.options];
+      if (value && !opts.includes(value)) {
+        opts.unshift(value);
+      }
+
       return (
         <div className="form-group" key={field.fieldname}>
-          <label className="form-label">{field.label} {field.required && <span style={{ color: 'red' }}>*</span>}</label>
+          <label className="form-label">
+            {field.label} {field.required && <span style={{ color: 'red' }}>*</span>}
+          </label>
           <select
             value={value}
             onChange={(e) => onChange(e.target.value)}
             className="form-select"
             required={field.required}
+            disabled={isLocked}
+            style={isLocked ? { backgroundColor: 'var(--bg-tertiary, #f1f5f9)', cursor: 'not-allowed', opacity: 0.9, fontWeight: 600 } : {}}
           >
             <option value="">-- Select --</option>
-            {field.options.map(opt => (
+            {opts.map(opt => (
               <option key={opt} value={opt}>{opt}</option>
             ))}
           </select>
@@ -3069,18 +3096,88 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         return null;
     }
   };
-  const groupUnitsByFloor = (units) => {
-    const groups = {};
-    units.forEach(unit => {
-      const floor = unit.custom_floor || unit.floor || 'Unspecified';
-      if (!groups[floor]) groups[floor] = [];
-      groups[floor].push(unit);
+  const normalizeFloorForSelect = (floorStr) => {
+    const f = String(floorStr || '').trim();
+    if (/^ground/i.test(f)) return 'Ground';
+    if (/^1st/i.test(f) || /^floor\s*1\b/i.test(f) || f === '1') return '1st';
+    if (/^2nd/i.test(f) || /^floor\s*2\b/i.test(f) || f === '2') return '2nd';
+    if (/^3rd/i.test(f) || /^floor\s*3\b/i.test(f) || f === '3') return '3rd';
+    const m = f.match(/^(\d+)(th|st|nd|rd)?/i);
+    if (m) {
+      const num = parseInt(m[1], 10);
+      if (num === 0) return 'Ground';
+      if (num === 1) return '1st';
+      if (num === 2) return '2nd';
+      if (num === 3) return '3rd';
+      return `${num}th`;
+    }
+    return f || 'Ground';
+  };
+
+  const formatFloorDisplay = (floorStr) => {
+    const f = String(floorStr || '').trim();
+    if (!f || f.toLowerCase() === 'unspecified') return 'UNSPECIFIED FLOOR';
+    if (/floor$/i.test(f)) return f.toUpperCase();
+    return `${f.toUpperCase()} FLOOR`;
+  };
+
+  const groupUnitsByFloor = (units, numFloors = 0) => {
+    const count = parseInt(numFloors, 10) || 0;
+    const floorList = [];
+
+    const getFloorKey = (idx) => {
+      if (idx === 0) return 'Ground';
+      if (idx === 1) return '1st';
+      if (idx === 2) return '2nd';
+      if (idx === 3) return '3rd';
+      return `${idx}th`;
+    };
+
+    if (count > 0) {
+      for (let i = 0; i < count; i++) {
+        floorList.push(getFloorKey(i));
+      }
+    } else {
+      floorList.push('Ground');
+    }
+
+    // Also include any floors from existing units
+    (units || []).forEach(u => {
+      const f = (u.custom_floor || u.floor || '').trim();
+      if (f) {
+        const norm = normalizeFloorForSelect(f);
+        if (!floorList.some(fl => fl.toLowerCase() === norm.toLowerCase())) {
+          floorList.push(norm);
+        }
+      }
     });
+
+    const groups = {};
+    floorList.forEach(fl => {
+      groups[fl] = [];
+    });
+
+    (units || []).forEach(unit => {
+      const f = (unit.custom_floor || unit.floor || '').trim();
+      const norm = normalizeFloorForSelect(f);
+      const matched = floorList.find(fl => fl.toLowerCase() === norm.toLowerCase());
+      if (matched) {
+        groups[matched].push(unit);
+      } else {
+        const fallback = f || 'Unspecified';
+        if (!groups[fallback]) groups[fallback] = [];
+        groups[fallback].push(unit);
+      }
+    });
+
     return groups;
   };
 
   const toggleFloor = (floor) => {
-    setExpandedFloors(prev => ({ ...prev, [floor]: !prev[floor] }));
+    setExpandedFloors(prev => {
+      const current = prev[floor] !== undefined ? prev[floor] : true; // default open
+      return { ...prev, [floor]: !current };
+    });
   };
 
   const clearPropertyGroupForm = () => {
@@ -3890,6 +3987,9 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           if ((doc.name || doc.id) && doc.legal_description) {
             setLegalDescriptions(prev => ({ ...prev, [doc.name || doc.id]: doc.legal_description }));
           }
+          if ((doc.name || doc.id) && (doc.no_of_floors !== undefined && doc.no_of_floors !== null)) {
+            setPropertyFloorsMap(prev => ({ ...prev, [doc.name || doc.id]: doc.no_of_floors }));
+          }
         } else {
           setDetailedProp(selectedProp);
         }
@@ -4669,135 +4769,144 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           </div>
 
           {/* Column 2: Space Units list */}
-          <div className="card-panel" style={{
-            padding: 16,
-            height: '100%',
-            overflowY: 'auto',
-            minHeight: 0
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 10, borderBottom: '1px solid var(--border-color)', marginBottom: 14 }}>
-              <h3 style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0 }}>Space Units Breakdown</h3>
-              <button
-                className="btn btn-primary"
-                style={{ fontSize: '11px', padding: '4px 10px', height: 'auto', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}
-                onClick={() => {
-                  clearUnitForm();
-                  setShowAddUnitModal(true);
-                }}
-              >
-                + Add Unit
-              </button>
-            </div>
-            {/* {loadingUnits ? (
-              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, padding: '16px 0' }}>Loading space units...</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {propertyUnits.map((unit, idx) => {
-                  const isActive = selectedUnitId === unit.name;
-                  return (
-                    <div
-                      key={unit.name || idx}
-                      onClick={() => {
-                        setSelectedUnitId(unit.name);
-                        handleUnitToggle(unit.name);
-                      }}
-                      style={{
-                        padding: '10px 12px',
-                        background: isActive ? 'var(--bg-accent-alpha)' : 'var(--bg-tertiary)',
-                        border: isActive ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
-                        borderRadius: 6,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        fontSize: 11
-                      }}
-                    >
-                      <span style={{ fontWeight: 600 }}>{unit.unit_name || unit.name}</span>
-                      {(unit.status || '').toLowerCase() === 'occupied' && (
-                        <span className="badge badge-danger" style={{ fontSize: 9 }}>
-                          Occupied
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-                {propertyUnits.length === 0 && (
-                  <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--text-muted)', fontSize: 11 }}>No units configured.</div>
-                )}
-              </div>
-            )} */}
+          {(() => {
+            const currentPropertyGroup = detailedProp || selectedProp || {};
+            const currentPropId = currentPropertyGroup.id || currentPropertyGroup.name;
+            const configuredNumFloors = parseInt(
+              currentPropertyGroup.no_of_floors ??
+              currentPropertyGroup.custom_no_of_floors ??
+              currentPropertyGroup.noOfFloors ??
+              currentPropertyGroup.total_floors ??
+              propertyFloorsMap[currentPropId] ??
+              propertyFloorsMap[currentPropertyGroup.name] ??
+              propertyFloorsMap[currentPropertyGroup.id] ??
+              0,
+              10
+            );
 
-            {loadingUnits ? (
-              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, padding: '16px 0' }}>Loading space units...</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {Object.entries(groupUnitsByFloor(propertyUnits)).map(([floor, units]) => {
-                  const isOpen = expandedFloors[floor] === true; // default open
-                  return (
-                    <div key={floor} style={{ border: '1px solid var(--border-color)', borderRadius: 6, overflow: 'hidden' }}>
-                      <div
-                        onClick={() => toggleFloor(floor)}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          padding: '8px 12px',
-                          background: 'var(--bg-tertiary)',
-                          cursor: 'pointer',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          textTransform: 'uppercase',
-                          color: 'var(--text-secondary)'
-                        }}
-                      >
-                        <span>{floor} Floor ({units.length})</span>
-                        <span style={{ color: 'var(--brand-color)', fontSize: 10 }}>{isOpen ? '▲ Collapse' : '▼ Expand'}</span>
-                      </div>
+            return (
+              <div className="card-panel" style={{
+                padding: 16,
+                height: '100%',
+                overflowY: 'auto',
+                minHeight: 0
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 10, borderBottom: '1px solid var(--border-color)', marginBottom: 14 }}>
+                  <h3 style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0 }}>Space Units Breakdown</h3>
+                </div>
 
-                      {isOpen && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8 }}>
-                          {units.map((unit, idx) => {
-                            const isActive = selectedUnitId === unit.name;
-                            return (
-                              <div
-                                key={unit.name || idx}
-                                onClick={() => {
-                                  setSelectedUnitId(unit.name);
-                                  handleUnitToggle(unit.name);
-                                }}
+                {loadingUnits ? (
+                  <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, padding: '16px 0' }}>Loading space units...</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {Object.entries(groupUnitsByFloor(propertyUnits, configuredNumFloors)).map(([floor, units]) => {
+                      const isOpen = expandedFloors[floor] !== undefined ? !!expandedFloors[floor] : true;
+                      const floorTitle = formatFloorDisplay(floor);
+                      return (
+                        <div key={floor} style={{ border: '1px solid var(--border-color)', borderRadius: 6, overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '8px 12px',
+                              background: 'var(--bg-tertiary)',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              textTransform: 'uppercase',
+                              color: 'var(--text-secondary)'
+                            }}
+                          >
+                            <div
+                              onClick={() => toggleFloor(floor)}
+                              style={{
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                flex: 1
+                              }}
+                            >
+                              <span>{floorTitle} ({units.length})</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <button
+                                type="button"
+                                className="btn btn-primary"
                                 style={{
-                                  padding: '10px 12px',
-                                  background: isActive ? 'var(--bg-accent-alpha)' : 'var(--bg-tertiary)',
-                                  border: isActive ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
-                                  borderRadius: 6,
-                                  cursor: 'pointer',
+                                  fontSize: '10.5px',
+                                  padding: '3px 8px',
+                                  height: '24px',
+                                  borderRadius: '4px',
                                   display: 'flex',
-                                  justifyContent: 'space-between',
                                   alignItems: 'center',
-                                  fontSize: 11
+                                  gap: '4px',
+                                  fontWeight: 600
                                 }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAddUnitForFloor(floor);
+                                }}
+                                title={`Add unit to ${floorTitle}`}
                               >
-                                <span style={{ fontWeight: 600 }}>{unit.unit_name || unit.name}</span>
-                                {(unit.status || '').toLowerCase() === 'occupied' && (
-                                  <span className="badge badge-danger" style={{ fontSize: 9 }}>
-                                    Occupied
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
+                                + Add Unit
+                              </button>
+                              <span
+                                onClick={() => toggleFloor(floor)}
+                                style={{ color: 'var(--brand-color)', fontSize: 10, cursor: 'pointer', userSelect: 'none' }}
+                              >
+                                {isOpen ? '▲ Collapse' : '▼ Expand'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {isOpen && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 8 }}>
+                              {units.map((unit, idx) => {
+                                const isActive = selectedUnitId === unit.name;
+                                return (
+                                  <div
+                                    key={unit.name || idx}
+                                    onClick={() => {
+                                      setSelectedUnitId(unit.name);
+                                      handleUnitToggle(unit.name);
+                                    }}
+                                    style={{
+                                      padding: '10px 12px',
+                                      background: isActive ? 'var(--bg-accent-alpha)' : 'var(--bg-tertiary)',
+                                      border: isActive ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
+                                      borderRadius: 6,
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      justifyContent: 'space-between',
+                                      alignItems: 'center',
+                                      fontSize: 11
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: 600 }}>{unit.unit_name || unit.name}</span>
+                                    {(unit.status || '').toLowerCase() === 'occupied' && (
+                                      <span className="badge badge-danger" style={{ fontSize: 9 }}>
+                                        Occupied
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                              {units.length === 0 && (
+                                <div style={{ textAlign: 'center', padding: '12px 0', color: 'var(--text-muted)', fontSize: 11 }}>
+                                  No units configured on this floor.
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {propertyUnits.length === 0 && (
-                  <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--text-muted)', fontSize: 11 }}>No units configured.</div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
+            );
+          })()}
 
           {/* Column 3: Active Unit detailed inspection sheet */}
           <div

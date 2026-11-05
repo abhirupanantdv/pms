@@ -16,6 +16,14 @@
             user: "{{ frappe.session.user }}",
             csrf_token: "{{ frappe.session.csrf_token }}"
         };
+        try {
+            window.frappe.user_roles = {{ user_roles or '[]' }};
+        } catch(e) {
+            window.frappe.user_roles = [];
+        }
+        window.frappe.get_roles = function(user) {
+            return window.frappe.user_roles || [];
+        };
     </script>
     {% if css_file %}
     <link rel="stylesheet" href="{{ css_file }}">
