@@ -497,7 +497,7 @@ export default function PaymentEntry({ erpnextConfig, tenants = [], onNavigateTo
               credentials: 'include',
               headers,
               body: JSON.stringify({ run_method: 'submit' })
-            }).catch(() => {});
+            }).catch(() => { });
           } catch { }
         }
 
@@ -1091,7 +1091,7 @@ export default function PaymentEntry({ erpnextConfig, tenants = [], onNavigateTo
           </div>
           <div>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary, #64748b)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-              Total Entry
+              Total Records
             </div>
             <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-primary, #0f172a)', marginTop: 2 }}>
               {metrics.count} <span style={{ fontSize: 12.5, fontWeight: 500, color: '#64748b' }}>records</span>
