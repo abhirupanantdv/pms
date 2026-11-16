@@ -2311,12 +2311,21 @@ function buildGeoLocation(lat, lng) {
   });
 }
 
-export default function Properties({ properties, onAddProperty, onToggleListOnline, erpnextConfig, onScheduleMaintenance, tenants = [], owners = [], bookings = [] }) {
+export default function Properties({ properties, onAddProperty, onToggleListOnline, erpnextConfig, onScheduleMaintenance, tenants = [], owners = [], bookings = [], preSelectedProperty = null, clearPreSelectedProperty = () => {} }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProp, setSelectedProp] = useState(null);
   const [expandedUnit, setExpandedUnit] = useState(null);
+
+  useEffect(() => {
+    if (preSelectedProperty) {
+      const match = (properties || []).find(p => p.id === preSelectedProperty.id || p.name === preSelectedProperty.name) || preSelectedProperty;
+      setSelectedProp(match);
+      setSearchQuery(match.name || match.id || '');
+      if (clearPreSelectedProperty) clearPreSelectedProperty();
+    }
+  }, [preSelectedProperty, properties, clearPreSelectedProperty]);
 
   const [expandedFloors, setExpandedFloors] = useState({});
   const [floorReadOnly, setFloorReadOnly] = useState(false);
@@ -4713,9 +4722,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       {viewLayout === 'three-column' && selectedProp ? (
         <div style={{
           display: 'grid',
-          // gridTemplateColumns: '26% 34% 40%',
-          gridTemplateColumns: 'minmax(280px,1fr) minmax(380px,1.3fr) minmax(450px,1.5fr)',
-          gap: 20, height: 'calc(100vh - 170px)', // adjust according to your header height
+          gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.35fr) minmax(0, 1.55fr)',
+          gap: 20,
+          width: '100%',
+          boxSizing: 'border-box',
+          height: 'calc(100vh - 170px)',
           overflow: 'hidden'
         }}>
           {/* Column 1: Shrunk property list */}
@@ -4723,7 +4734,10 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
             padding: 12,
             height: '100%',
             overflowY: 'auto',
-            minHeight: 0
+            minHeight: 0,
+            margin: 0,
+            width: '100%',
+            boxSizing: 'border-box'
           }}>
             <h3 style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', padding: '0 8px 10px', borderBottom: '1px solid var(--border-color)', marginBottom: 8 }}>Assets</h3>
             <div className="table-container" style={{ border: 'none', marginTop: 0 }}>
@@ -4789,7 +4803,10 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                 padding: 16,
                 height: '100%',
                 overflowY: 'auto',
-                minHeight: 0
+                minHeight: 0,
+                margin: 0,
+                width: '100%',
+                boxSizing: 'border-box'
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 10, borderBottom: '1px solid var(--border-color)', marginBottom: 14 }}>
                   <h3 style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0 }}>Space Units Breakdown</h3>
@@ -4912,7 +4929,8 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           <div
             className="card-panel"
             style={{
-              width: "85%",
+              width: "100%",
+              margin: 0,
               boxSizing: "border-box",
               padding: "18px",
               height: "100%",

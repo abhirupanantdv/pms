@@ -653,10 +653,10 @@ def create_revised_quotation(source_quotation=None, items=None, start_date=None,
         frappe.throw(f"Could not cancel source Quotation {source_quotation}. Current docstatus: {source_doc.docstatus}")
 
     # 3. Step 3: Create Amended Quotation
-    from frappe.model.mapper import make_amended_doc
     try:
+        from frappe.client import make_amended_doc
         amended_doc = make_amended_doc("Quotation", source_doc.name)
-    except Exception:
+    except (ImportError, Exception):
         amended_doc = frappe.copy_doc(source_doc, ignore_no_copy=False)
         amended_doc.amended_from = source_doc.name
         amended_doc.docstatus = 0
@@ -665,20 +665,36 @@ def create_revised_quotation(source_quotation=None, items=None, start_date=None,
     amended_doc.docstatus = 0
     amended_doc.status = "Draft"
 
-    # Compute next amended version name (e.g. QTN-10-00531 -> QTN-10-00531-2 or QTN-10-00531-1)
+    # Compute next amended version name (e.g. QTN-10-00531 -> QTN-10-00531-1, QTN-10-00531-2, etc.)
     base_name = source_doc.name
     parts = base_name.split("-")
     if len(parts) > 3 and parts[-1].isdigit():
         root_base = "-".join(parts[:-1])
-        next_ver = int(parts[-1]) + 1
     else:
         root_base = base_name
-        next_ver = 2
 
-    candidate_name = f"{root_base}-{next_ver}"
+    # Determine highest existing numeric suffix across this entire quotation family
+    existing_names = frappe.get_all(
+        "Quotation",
+        filters={"name": ["like", f"{root_base}%"]},
+        pluck="name"
+    )
+    max_suffix = 0
+    for name in (existing_names or []):
+        sub_parts = name.split("-")
+        if len(sub_parts) > len(root_base.split("-")) and sub_parts[-1].isdigit():
+            try:
+                suffix_val = int(sub_parts[-1])
+                if suffix_val > max_suffix:
+                    max_suffix = suffix_val
+            except Exception:
+                pass
+
+    next_suffix = max_suffix + 1
+    candidate_name = f"{root_base}-{next_suffix}"
     while frappe.db.exists("Quotation", candidate_name):
-        next_ver += 1
-        candidate_name = f"{root_base}-{next_ver}"
+        next_suffix += 1
+        candidate_name = f"{root_base}-{next_suffix}"
 
     amended_doc.name = candidate_name
 

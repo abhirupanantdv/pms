@@ -2948,7 +2948,13 @@ import {
   ChevronDown,
   Building2,
   LogOut,
-  CreditCard
+  CreditCard,
+  BarChart2,
+  Sparkles,
+  ArrowUpRight,
+  Activity,
+  Plus,
+  ExternalLink
 } from 'lucide-react';
 
 // Import Components
@@ -2968,13 +2974,16 @@ import Quotation from './components/Quotation';
 import TenantOnboarding from './components/TenantOnboarding';
 import { ERPNEXT_CONFIG, getCsrfToken, ensureCsrfToken, getAuthHeaders, getUploadHeaders } from './config';
 import MapComponent from './components/MapComponent';
+import FijiDistrictMap, { resolvePropertyDistrict, FIJI_DISTRICTS } from './components/FijiDistrictMap';
 
 // Sample INITIAL MOCK DATA
 const INITIAL_PROPERTIES = [
-  { id: 'PROP-2041', name: 'Stratford Court Apartments', type: 'residential', land_and_building_type: 'residential', address: '12 Carpenters Road, London E15', unitsCount: 24, rent: 1850, area: 18000, listedOnline: true, occupancy: 85, land_description: 'Residential building with 24 premium apartments', lease_start_date: '2024-01-01', lease_end_date: '2026-12-31' },
-  { id: 'PROP-8032', name: 'Carpenters Row Commercial', type: 'commercial', land_and_building_type: 'commercial', address: '44 Stratford High St, London E15', unitsCount: 8, rent: 4800, area: 12000, listedOnline: true, occupancy: 75, land_description: 'Carpenters office complex, double-front showroom', lease_start_date: '2024-06-15', lease_end_date: '2027-06-30' },
-  { id: 'PROP-9910', name: 'Estate Galleria Mall', type: 'mall', land_and_building_type: 'mall', address: 'Golden Loop Blvd, London E15', unitsCount: 17, rent: 5500, area: 32000, listedOnline: false, occupancy: 65, land_description: 'Three-story retail plaza, central courtyard', lease_start_date: '2024-03-01', lease_end_date: '2029-03-01' },
-  { id: 'PROP-3091', name: 'E15 Plaza complex', type: 'commercial', land_and_building_type: 'commercial', address: '78 Jebb Ln, London E15', unitsCount: 15, rent: 3900, area: 14500, listedOnline: false, occupancy: 90, land_description: 'Mixed industrial depot, rear loading bay access', lease_start_date: '2023-11-15', lease_end_date: '2028-11-15' }
+  { id: 'PROP-2041', name: 'Stratford Court Apartments', type: 'residential', land_and_building_type: 'residential', address: '12 Carpenters Road, Suva, Fiji', district: 'Suva', locality: 'Suva City', unitsCount: 24, rent: 1850, area: 18000, listedOnline: true, occupancy: 85, land_description: 'Residential building with 24 premium apartments', lease_start_date: '2024-01-01', lease_end_date: '2026-12-31' },
+  { id: 'PROP-8032', name: 'Carpenters Row Commercial', type: 'commercial', land_and_building_type: 'commercial', address: '44 Queens Highway, Nadi, Fiji', district: 'Nadi', locality: 'Namaka', unitsCount: 8, rent: 4800, area: 12000, listedOnline: true, occupancy: 75, land_description: 'Carpenters office complex, double-front showroom', lease_start_date: '2024-06-15', lease_end_date: '2027-06-30' },
+  { id: 'PROP-9910', name: 'Estate Galleria Mall', type: 'mall', land_and_building_type: 'mall', address: 'Naviti St, Lautoka, Fiji', district: 'Lautoka', locality: 'Lautoka Central', unitsCount: 17, rent: 5500, area: 32000, listedOnline: false, occupancy: 65, land_description: 'Three-story retail plaza, central courtyard', lease_start_date: '2024-03-01', lease_end_date: '2029-03-01' },
+  { id: 'PROP-3091', name: 'E15 Plaza complex', type: 'commercial', land_and_building_type: 'commercial', address: 'Kings Road, Nausori, Rewa, Fiji', district: 'Rewa', locality: 'Nausori', unitsCount: 15, rent: 3900, area: 14500, listedOnline: false, occupancy: 90, land_description: 'Mixed industrial depot, rear loading bay access', lease_start_date: '2023-11-15', lease_end_date: '2028-11-15' },
+  { id: 'PROP-F60', name: 'F60 Rodwell Centre', type: 'commercial', land_and_building_type: 'commercial', address: 'Cnr Rodwell/Robertson Roads, Suva, Fiji', district: 'Suva', locality: 'Suva Central', unitsCount: 12, rent: 6200, area: 16000, listedOnline: true, occupancy: 92, land_description: 'Commercial corporate tower in central Suva', lease_start_date: '2024-02-01', lease_end_date: '2028-02-01' },
+  { id: 'PROP-7720', name: 'Labasa Commercial Hub', type: 'commercial', land_and_building_type: 'commercial', address: 'Nasekula Road, Labasa, Fiji', district: 'Macuata', locality: 'Labasa', unitsCount: 10, rent: 3400, area: 11000, listedOnline: true, occupancy: 80, land_description: 'Northern division retail and warehousing depot', lease_start_date: '2024-01-15', lease_end_date: '2027-01-15' }
 ];
 
 const INITIAL_TENANTS = [
@@ -3029,11 +3038,13 @@ const INITIAL_VISITS = [
   { name: 'MAT-MVS-2026-00002', customer: 'TEN-802', customer_name: 'Sarah Jenkins', mntc_date: '2026-06-02', mntc_time: '10:00 AM', completion_status: 'Fully Completed', maintenance_type: 'Preventive', company: 'CARPENTERS PROPERTIES PTE LIMITED' }
 ];
 
+const _nowInit = new Date();
+const _curYMInit = `${_nowInit.getFullYear()}-${String(_nowInit.getMonth() + 1).padStart(2, '0')}`;
 const INITIAL_INVOICES = [
-  { id: 'INV-3011', tenantName: 'Aroma Brews Co.', propertyId: 'G-101', amount: 3200, issuedDate: '2026-05-01', dueDate: '2026-05-10', status: 'paid' },
-  { id: 'INV-3012', tenantName: 'John Doe', propertyId: 'PROP-2041', amount: 1850, issuedDate: '2026-05-01', dueDate: '2026-05-10', status: 'paid' },
-  { id: 'INV-3013', tenantName: 'Sarah Jenkins', propertyId: 'PROP-8032', amount: 4800, issuedDate: '2026-06-01', dueDate: '2026-06-10', status: 'pending' },
-  { id: 'INV-3014', tenantName: 'David Smith', propertyId: 'PROP-2041', amount: 1850, issuedDate: '2026-05-01', dueDate: '2026-05-10', status: 'pending' }
+  { id: 'INV-3011', name: 'INV-3011', tenantName: 'Aroma Brews Co.', propertyId: 'G-101', amount: 3200, grand_total: 3200, paid_amount: 3200, outstanding_amount: 0, issuedDate: `${_curYMInit}-01`, posting_date: `${_curYMInit}-01`, dueDate: `${_curYMInit}-10`, status: 'paid' },
+  { id: 'INV-3012', name: 'INV-3012', tenantName: 'John Doe', propertyId: 'PROP-2041', amount: 1850, grand_total: 1850, paid_amount: 1850, outstanding_amount: 0, issuedDate: `${_curYMInit}-01`, posting_date: `${_curYMInit}-01`, dueDate: `${_curYMInit}-10`, status: 'paid' },
+  { id: 'INV-3013', name: 'INV-3013', tenantName: 'Sarah Jenkins', propertyId: 'PROP-8032', amount: 4800, grand_total: 4800, paid_amount: 0, outstanding_amount: 4800, issuedDate: `${_curYMInit}-01`, posting_date: `${_curYMInit}-01`, dueDate: `${_curYMInit}-10`, status: 'pending' },
+  { id: 'INV-3014', name: 'INV-3014', tenantName: 'David Smith', propertyId: 'PROP-2041', amount: 1850, grand_total: 1850, paid_amount: 0, outstanding_amount: 1850, issuedDate: `${_curYMInit}-01`, posting_date: `${_curYMInit}-01`, dueDate: `${_curYMInit}-10`, status: 'pending' }
 ];
 
 const INITIAL_SUPPORT = [
@@ -3071,7 +3082,7 @@ const INITIAL_SUPPORT = [
 ];
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState('dashboard');
+  const [currentTab, setCurrentTab] = useState('overview');
   const [preSelectedProperty, setPreSelectedProperty] = useState(null);
   const [preSelectedIssue, setPreSelectedIssue] = useState(null);
   const [bookingSearchFromQuotation, setBookingSearchFromQuotation] = useState('');
@@ -3185,12 +3196,25 @@ export default function App() {
   const [bookings, setBookings] = useState([]);
   const [erpnextDepts, setErpnextDepts] = useState(['Executive', 'Technology', 'Human Resources', 'Operations', 'Finance']);
   const [erpnextDesgs, setErpnextDesgs] = useState(['Chief Executive Officer', 'Chief Technology Officer', 'HR Director', 'Operations Manager', 'Chief Financial Officer', 'Lead Systems Architect', 'HR Officer', 'Facility Supervisor', 'Senior Accountant', 'Support Engineer']);
+  const [commercialUnitsCount, setCommercialUnitsCount] = useState(0);
+  const [draftMaintenanceCount, setDraftMaintenanceCount] = useState(0);
+  const [dashboardDocType, setDashboardDocType] = useState('All');
+  const [dashboardDocTypeViewMode, setDashboardDocTypeViewMode] = useState('value');
+  const [topBookingStatusFilter, setTopBookingStatusFilter] = useState('All');
+  const [quotationsList, setQuotationsList] = useState([]);
+  const [tenantOnboardingsList, setTenantOnboardingsList] = useState([]);
+  const [tasksList, setTasksList] = useState([]);
+  const [trendViewMode, setTrendViewMode] = useState('bookings');
+  const [dashboardTimeframe, setDashboardTimeframe] = useState('This Month');
   const [dashboardStats, setDashboardStats] = useState({
     totalProperties: 0,
     occupancyRate: 0,
     monthlyRevenue: 0,
-    pendingMaintenance: 0
+    pendingMaintenance: 0,
+    commercialUnits: 0
   });
+  const hasLoggedDashboardJsonRef = useRef(false);
+  const [dashboardFabOpen, setDashboardFabOpen] = useState(false);
 
   const [showMapModal, setShowMapModal] = useState(false);
   const [mapView, setMapView] = useState(null); // null = "show all markers" until user zooms/pans
@@ -3268,6 +3292,7 @@ export default function App() {
       if (ERPNEXT_CONFIG && ERPNEXT_CONFIG.url) {
         let finalProps = [];
         let finalBookings = [];
+        let fetchedSchedulesList = [];
 
         // 1. Fetch Property Groups
         try {
@@ -3343,6 +3368,9 @@ export default function App() {
                   type,
                   land_and_building_type: p.land_and_building_type || 'Land and Structure',
                   address,
+                  district: p.district || '',
+                  locality: p.locality || '',
+                  country: p.country || 'Fiji',
                   unitsCount,
                   rent,
                   area,
@@ -3408,6 +3436,9 @@ export default function App() {
                     type,
                     land_and_building_type: p.land_and_building_type || 'Land and Structure',
                     address,
+                    district: p.district || '',
+                    locality: p.locality || '',
+                    country: p.country || 'Fiji',
                     unitsCount,
                     rent,
                     area,
@@ -3449,7 +3480,7 @@ export default function App() {
         // 8. Fetch Sales Invoice for Billing Ledger
         let finalInvoices = [];
         try {
-          const invFields = JSON.stringify(["name", "customer", "customer_name", "posting_date", "due_date", "grand_total", "rounded_total", "outstanding_amount", "status", "creation", "booking_id", "currency", "terms_and_conditions", "terms"]);
+          const invFields = JSON.stringify(["name", "customer", "customer_name", "posting_date", "due_date", "grand_total", "rounded_total", "outstanding_amount", "paid_amount", "status", "creation", "booking_id", "currency", "terms_and_conditions", "terms", "docstatus"]);
           const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Sales%20Invoice?fields=${encodeURIComponent(invFields)}&order_by=creation%20desc&limit_page_length=500`, {
             credentials: 'include',
             headers: {
@@ -3469,6 +3500,16 @@ export default function App() {
                   mappedStatus = 'overdue';
                 }
                 const activeTerms = inv.terms_and_conditions || inv.terms || '';
+                const totalAmt = parseFloat(inv.rounded_total || inv.grand_total || inv.amount || 0);
+                const outstandingAmt = parseFloat(inv.outstanding_amount !== undefined ? inv.outstanding_amount : (statusLower === 'paid' ? 0 : totalAmt));
+                let paidAmt = 0;
+                if (inv.paid_amount !== undefined && inv.paid_amount !== null && !isNaN(parseFloat(inv.paid_amount)) && parseFloat(inv.paid_amount) > 0) {
+                  paidAmt = parseFloat(inv.paid_amount);
+                } else if (statusLower === 'paid') {
+                  paidAmt = totalAmt;
+                } else if (totalAmt > outstandingAmt) {
+                  paidAmt = totalAmt - outstandingAmt;
+                }
                 return {
                   id: inv.name,
                   name: inv.name,
@@ -3476,15 +3517,20 @@ export default function App() {
                   customer: inv.customer,
                   propertyId: inv.booking_id || '',
                   booking_id: inv.booking_id,
-                  amount: inv.rounded_total || inv.grand_total || 2500,
-                  outstandingAmount: inv.outstanding_amount !== undefined ? inv.outstanding_amount : (statusLower === 'paid' ? 0 : inv.grand_total || 2500),
-                  issuedDate: inv.posting_date || '2026-06-01',
-                  dueDate: inv.due_date || '2026-06-10',
+                  amount: totalAmt,
+                  grand_total: totalAmt,
+                  outstandingAmount: outstandingAmt,
+                  outstanding_amount: outstandingAmt,
+                  paid_amount: Math.max(0, paidAmt),
+                  issuedDate: inv.posting_date || '',
+                  posting_date: inv.posting_date || '',
+                  dueDate: inv.due_date || '',
                   creation: inv.creation,
                   currency: inv.currency || 'FJD',
                   terms_and_conditions: activeTerms,
                   terms: activeTerms,
-                  status: inv.status || mappedStatus
+                  status: inv.status || mappedStatus,
+                  docstatus: inv.docstatus
                 };
               }));
             }
@@ -3873,23 +3919,33 @@ export default function App() {
 
         // 7. Fetch Maintenance Schedule
         try {
-          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule?fields=%5B%22name%22%2C%22mntc_date%22%2C%22mntc_time%22%2C%22completion_status%22%2C%22customer_name%22%2C%22maintenance_type%22%2C%22company%22%5D&limit_page_length=200&order_by=creation%20desc`, {
+          const schedQueryFields = JSON.stringify(["name", "customer", "customer_name", "transaction_date", "status", "docstatus", "company", "custom_property"]);
+          let res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule?fields=${encodeURIComponent(schedQueryFields)}&limit_page_length=500&order_by=creation%20desc`, {
             credentials: 'include',
-            headers: {
+            headers: getAuthHeaders({
               'Content-Type': 'application/json'
-            }
+            })
           });
+          if (!res.ok) {
+            res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance Schedule?fields=%5B%22name%22%2C%22customer%22%2C%22customer_name%22%2C%22transaction_date%22%2C%22status%22%2C%22docstatus%22%5D&limit_page_length=500&order_by=creation%20desc`, {
+              credentials: 'include',
+              headers: getAuthHeaders({
+                'Content-Type': 'application/json'
+              })
+            });
+          }
           if (res.ok) {
             const data = await res.json();
             const list = data.data || data;
             if (Array.isArray(list) && list.length > 0) {
+              fetchedSchedulesList = list;
               const detailedSchedules = await Promise.all(list.map(async (sch) => {
                 try {
-                  const detailRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule/${sch.name}`, {
+                  const detailRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(sch.name)}`, {
                     credentials: 'include',
-                    headers: {
+                    headers: getAuthHeaders({
                       'Content-Type': 'application/json'
-                    }
+                    })
                   });
                   if (detailRes.ok) {
                     const detailData = await detailRes.json();
@@ -3905,6 +3961,7 @@ export default function App() {
                 }
                 return sch;
               }));
+              fetchedSchedulesList = detailedSchedules;
               setSchedules(detailedSchedules);
             }
           }
@@ -4055,31 +4112,80 @@ export default function App() {
           ? parseFloat(((occupiedCount / totalPropsCount) * 100).toFixed(1))
           : 0;
 
-        // Monthly Revenue -> total invoice generated in current month (2026-06) and compare with last month (2026-05)
-        // Since current time is 2026-06-12, current month is '2026-06', last month is '2026-05'
+        // Monthly Revenue -> total of Paid Amount in Sales Invoice current month
+        const nowRevenue = new Date();
+        const currentYearMonth = `${nowRevenue.getFullYear()}-${String(nowRevenue.getMonth() + 1).padStart(2, '0')}`;
         let currentMonthRevenue = 0;
-        let lastMonthRevenue = 0;
-        invoices.forEach(inv => {
-          const amt = parseFloat(inv.amount) || 0;
-          const dateStr = inv.issuedDate || '';
-          if (dateStr.startsWith('2026-06')) {
-            currentMonthRevenue += amt;
-          } else if (dateStr.startsWith('2026-05')) {
-            lastMonthRevenue += amt;
+        const invListToCalculate = (Array.isArray(finalInvoices) && finalInvoices.length > 0) ? finalInvoices : invoices;
+
+        invListToCalculate.forEach(inv => {
+          const dateStr = inv.posting_date || inv.issuedDate || inv.creation || '';
+          if (dateStr.startsWith(currentYearMonth)) {
+            const grandTotal = parseFloat(inv.grand_total || inv.rounded_total || inv.amount || 0);
+            const outstanding = parseFloat(inv.outstanding_amount !== undefined ? inv.outstanding_amount : (inv.outstandingAmount !== undefined ? inv.outstandingAmount : 0));
+            let paid = 0;
+            if (inv.paid_amount !== undefined && inv.paid_amount !== null && !isNaN(parseFloat(inv.paid_amount)) && parseFloat(inv.paid_amount) > 0) {
+              paid = parseFloat(inv.paid_amount);
+            } else if ((inv.status || '').toLowerCase() === 'paid') {
+              paid = grandTotal;
+            } else if (grandTotal > outstanding) {
+              paid = grandTotal - outstanding;
+            }
+            currentMonthRevenue += Math.max(0, paid);
           }
         });
 
-        // Pending Maintenance -> all open/draft (non-completed and non-closed) Maintenance Schedule records
-        const pendingMaintCount = schedules.filter(sch => {
-          const s = (sch.status || '').toLowerCase();
-          return s !== 'completed' && s !== 'closed' && s !== 'submitted';
+        // Pending Maintenance -> records in Draft status in Maintenance Schedule doctype (status == 'Draft' or docstatus == 0)
+        const schedulesForCount = (fetchedSchedulesList && fetchedSchedulesList.length > 0)
+          ? fetchedSchedulesList
+          : (schedules && schedules.length > 0 ? schedules : INITIAL_SCHEDULES);
+
+        const pendingMaintCount = schedulesForCount.filter(sch => {
+          const s = String(sch.status || '').trim().toLowerCase();
+          const ws = String(sch.workflow_state || '').trim().toLowerCase();
+          const ds = sch.docstatus !== undefined && sch.docstatus !== null ? Number(sch.docstatus) : null;
+          return s === 'draft' || ws === 'draft' || ds === 0;
         }).length;
 
+        // 14. Fetch Commercial Units (Doctype: Item, item_group: Commercial)
+        let commUnitsCount = 0;
+        try {
+          const itemFilters = encodeURIComponent(JSON.stringify([["item_group", "=", "Commercial"]]));
+          const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Item?filters=${itemFilters}&fields=%5B%22name%22%2C%22item_group%22%5D&limit_page_length=2000`, {
+            credentials: 'include',
+            headers: getAuthHeaders({
+              'Content-Type': 'application/json'
+            })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const list = data.data || [];
+            commUnitsCount = list.length;
+          } else {
+            const resFallback = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Item?fields=%5B%22name%22%2C%22item_group%22%5D&limit_page_length=2000`, {
+              credentials: 'include',
+              headers: getAuthHeaders({
+                'Content-Type': 'application/json'
+              })
+            });
+            if (resFallback.ok) {
+              const dataFallback = await resFallback.json();
+              const listFallback = dataFallback.data || [];
+              commUnitsCount = listFallback.filter(it => (it.item_group || '').toLowerCase() === 'commercial').length;
+            }
+          }
+        } catch (err) {
+          console.warn('ERPNext Commercial Item count fetch failed:', err);
+        }
+
+        setCommercialUnitsCount(commUnitsCount);
+        setDraftMaintenanceCount(pendingMaintCount);
         setDashboardStats({
           totalProperties: totalPropsCount,
           occupancyRate: occupancyRatePct || 0,
-          monthlyRevenue: parseFloat((currentMonthRevenue / 1000).toFixed(1)) || 0,
-          pendingMaintenance: pendingMaintCount || 0
+          monthlyRevenue: currentMonthRevenue,
+          pendingMaintenance: pendingMaintCount,
+          commercialUnits: commUnitsCount
         });
         setDataLoading(false);
       }
@@ -4087,6 +4193,147 @@ export default function App() {
 
     fetchERPNextData();
   }, [properties.length, bookings.length, invoices.length, schedules.length, currentTab]);
+
+  // Fast direct fetch for Commercial Units count on tab change
+  useEffect(() => {
+    let isMounted = true;
+    const fetchCommercialUnitsDirect = async () => {
+      try {
+        const itemFilters = encodeURIComponent(JSON.stringify([["item_group", "=", "Commercial"]]));
+        const res = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Item?filters=${itemFilters}&fields=%5B%22name%22%2C%22item_group%22%5D&limit_page_length=2000`, {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          const list = data.data || [];
+          setCommercialUnitsCount(list.length);
+          return;
+        }
+        const resFallback = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Item?fields=%5B%22name%22%2C%22item_group%22%5D&limit_page_length=2000`, {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        if (resFallback.ok && isMounted) {
+          const dataFallback = await resFallback.json();
+          const listFallback = dataFallback.data || [];
+          const count = listFallback.filter(it => (it.item_group || '').toLowerCase() === 'commercial').length;
+          setCommercialUnitsCount(count);
+        }
+        // Fetch additional DocTypes with real monetary values for dynamic status & value chart
+        try {
+          const qFields = JSON.stringify(["name", "status", "workflow_state", "docstatus", "grand_total", "net_total", "total"]);
+          const qRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Quotation?fields=${encodeURIComponent(qFields)}&limit_page_length=500`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (qRes.ok && isMounted) {
+            const qData = await qRes.json();
+            setQuotationsList(qData.data || []);
+          } else {
+            const qFallback = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Quotation?fields=%5B%22name%22%2C%22status%22%2C%22workflow_state%22%2C%22docstatus%22%5D&limit_page_length=500`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (qFallback.ok && isMounted) {
+              const qDataFallback = await qFallback.json();
+              setQuotationsList(qDataFallback.data || []);
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to fetch quotations:', e);
+        }
+
+        try {
+          const tFields = JSON.stringify(["name", "workflow_state", "docstatus", "rental_charges", "security_deposit_booking_fee", "budget"]);
+          const tRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Tenant%20Onboarding?fields=${encodeURIComponent(tFields)}&limit_page_length=500`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (tRes.ok && isMounted) {
+            const tData = await tRes.json();
+            setTenantOnboardingsList(tData.data || []);
+          } else {
+            const tFallback = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Tenant%20Onboarding?fields=%5B%22name%22%2C%22workflow_state%22%2C%22docstatus%22%5D&limit_page_length=500`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (tFallback.ok && isMounted) {
+              const tDataFallback = await tFallback.json();
+              setTenantOnboardingsList(tDataFallback.data || []);
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to fetch tenant onboarding:', e);
+        }
+
+        try {
+          const taskFields = JSON.stringify(["name", "status", "expected_time", "actual_time", "total_cost"]);
+          const taskRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Task?fields=${encodeURIComponent(taskFields)}&limit_page_length=500`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (taskRes.ok && isMounted) {
+            const taskData = await taskRes.json();
+            setTasksList(taskData.data || []);
+          } else {
+            const taskFallback = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Task?fields=%5B%22name%22%2C%22status%22%5D&limit_page_length=500`, {
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            if (taskFallback.ok && isMounted) {
+              const taskDataFallback = await taskFallback.json();
+              setTasksList(taskDataFallback.data || []);
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to fetch tasks:', e);
+        }
+
+        // Fetch Maintenance Schedule records in Draft status (Status == Draft or docstatus == 0)
+        try {
+          const schedFields = JSON.stringify(["name", "customer", "customer_name", "transaction_date", "status", "docstatus"]);
+          let sRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance%20Schedule?fields=${encodeURIComponent(schedFields)}&limit_page_length=500&order_by=creation%20desc`, {
+            credentials: 'include',
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+          });
+          if (!sRes.ok) {
+            sRes = await fetch(`${ERPNEXT_CONFIG.url}/api/resource/Maintenance Schedule?fields=%5B%22name%22%2C%22customer%22%2C%22customer_name%22%2C%22transaction_date%22%2C%22status%22%2C%22docstatus%22%5D&limit_page_length=500&order_by=creation%20desc`, {
+              credentials: 'include',
+              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+            });
+          }
+          if (sRes.ok && isMounted) {
+            const sData = await sRes.json();
+            const sList = sData.data || [];
+            const draftCount = sList.filter(sch => {
+              const st = String(sch.status || '').trim().toLowerCase();
+              const ws = String(sch.workflow_state || '').trim().toLowerCase();
+              const ds = sch.docstatus !== undefined && sch.docstatus !== null ? Number(sch.docstatus) : null;
+              return st === 'draft' || ws === 'draft' || ds === 0;
+            }).length;
+
+            const finalCount = sList.length > 0
+              ? draftCount
+              : INITIAL_SCHEDULES.filter(s => String(s.status || '').toLowerCase() === 'draft' || s.docstatus === 0).length;
+
+            setDraftMaintenanceCount(finalCount);
+            setDashboardStats(prev => ({ ...prev, pendingMaintenance: finalCount }));
+          }
+        } catch (e) {
+          console.warn('Failed to fetch draft Maintenance Schedules:', e);
+        }
+      } catch (err) {
+        console.warn('Direct commercial units fetch failed:', err);
+      }
+    };
+    fetchCommercialUnitsDirect();
+    return () => { isMounted = false; };
+  }, [currentTab]);
 
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -5399,7 +5646,7 @@ export default function App() {
   };
 
   // Render Dashboard Home Statistics overview
-  const renderDashboardOverview = () => {
+  const renderDashboardOverview = (sectionType = currentTab) => {
     // Calculate Invoice Aging
     let current = 0;
     let overdue30 = 0;
@@ -5482,6 +5729,65 @@ export default function App() {
     const commOffset = -resPct;
     const mallOffset = -(resPct + commPct);
 
+    // Dynamic Status Distribution calculation for Dashboard
+    const STATUS_PALETTE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899', '#06b6d4', '#6366f1', '#ef4444'];
+    let currentDocItems = [];
+    if (dashboardDocType === 'All') {
+      currentDocItems = [
+        ...bookings.map(() => 'Booking'),
+        ...quotationsList.map(() => 'Quotation'),
+        ...tenantOnboardingsList.map(() => 'Onboarding'),
+        ...tasksList.map(() => 'Task')
+      ];
+      if (currentDocItems.length === 0) {
+        currentDocItems = ['Booking', 'Quotation', 'Onboarding', 'Task'];
+      }
+    } else if (dashboardDocType === 'Booking') {
+      currentDocItems = bookings.map(b => b.workflow_state || b.status || (b.docstatus === 1 ? 'Approved' : b.docstatus === 2 ? 'Cancelled' : 'Draft'));
+      if (currentDocItems.length === 0) {
+        currentDocItems = ['Approved', 'Approved', 'Approved', 'Pending', 'Pending', 'Draft', 'Cancelled'];
+      }
+    } else if (dashboardDocType === 'Quotation') {
+      currentDocItems = quotationsList.map(q => q.workflow_state || q.status || (q.docstatus === 1 ? 'Submitted' : 'Draft'));
+      if (currentDocItems.length === 0) {
+        currentDocItems = ['Draft', 'Draft', 'Draft', 'Submitted', 'Submitted', 'Approved', 'Cancelled'];
+      }
+    } else if (dashboardDocType === 'Tenant Onboarding') {
+      currentDocItems = tenantOnboardingsList.map(t => t.workflow_state || (t.docstatus === 1 ? 'Approved' : 'Under Review'));
+      if (currentDocItems.length === 0) {
+        currentDocItems = ['Under Review', 'Under Review', 'Under Review', 'Approved', 'Approved', 'Draft'];
+      }
+    } else if (dashboardDocType === 'Task') {
+      currentDocItems = tasksList.map(t => t.status || 'Open');
+      if (currentDocItems.length === 0) {
+        currentDocItems = ['Open', 'Open', 'Working', 'Working', 'Completed', 'Completed', 'Pending Review'];
+      }
+    }
+
+    const statusCounts = {};
+    currentDocItems.forEach(st => {
+      const s = String(st || 'Draft').trim();
+      const norm = s.charAt(0).toUpperCase() + s.slice(1);
+      statusCounts[norm] = (statusCounts[norm] || 0) + 1;
+    });
+
+    const docTypeTotal = currentDocItems.length || 1;
+    const statusKeys = Object.keys(statusCounts);
+    let cumOffset = 0;
+    const docTypeSegments = statusKeys.map((k, idx) => {
+      const count = statusCounts[k];
+      const pct = Math.round((count / docTypeTotal) * 100);
+      const seg = {
+        label: k,
+        count,
+        pct,
+        color: STATUS_PALETTE[idx % STATUS_PALETTE.length],
+        offset: -cumOffset
+      };
+      cumOffset += pct;
+      return seg;
+    });
+
     // 3. Property Listings -> show property group (10 records) and make scrollable
     const propertyListings = properties.slice(0, 10);
 
@@ -5536,8 +5842,14 @@ export default function App() {
         {/* Header */}
         <div className="view-header" style={{ marginBottom: 0, position: 'relative', overflow: 'visible' }}>
           <div>
-            <h1 className="view-title" style={{ fontSize: '1.65rem' }}>Dashboard</h1>
-            <p className="view-subtitle">Operations overview for Carpenters Properties & retail units.</p>
+            <h1 className="view-title" style={{ fontSize: '1.65rem' }}>
+              {sectionType === 'overview' ? 'Overview' : 'Dashboard'}
+            </h1>
+            <p className="view-subtitle">
+              {sectionType === 'overview'
+                ? 'Operations overview for Carpenters Properties & retail units.'
+                : 'Executive operations dashboard for Carpenters Properties & retail units.'}
+            </p>
           </div>
 
           {/* Calendar Widget Container */}
@@ -5696,17 +6008,37 @@ export default function App() {
             </div>
           </div>
 
-          <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer' }} onClick={() => { setBookingSearchFromQuotation(''); setCurrentTab('bookings'); }}>
-            <div style={{ background: 'linear-gradient(135deg, #8b5cf6, #d946ef)', color: '#fff', padding: 12, borderRadius: 12, display: 'flex' }}>
-              <TrendingUp size={24} />
-            </div>
-            <div>
-              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Occupancy Rate</div>
-              <div style={{ fontSize: '1.6rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                {dashboardStats.occupancyRate}% <span style={{ fontSize: 12, color: '#10b981', fontWeight: 600 }}>+0.8%</span>
+          {sectionType === 'dashboard' ? (
+            <div
+              className="stat-card"
+              style={{ display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer' }}
+              onClick={() => setCurrentTab('properties')}
+              title="DocType: Item | Filter: item_group = Commercial"
+            >
+              <div style={{ background: 'linear-gradient(135deg, #8b5cf6, #d946ef)', color: '#fff', padding: 12, borderRadius: 12, display: 'flex' }}>
+                <Building2 size={24} />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Commercial Units</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {commercialUnitsCount || dashboardStats.commercialUnits || 0}
+                  <span style={{ fontSize: 12, color: '#10b981', fontWeight: 600 }}>Units</span>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer' }} onClick={() => { setBookingSearchFromQuotation(''); setCurrentTab('bookings'); }}>
+              <div style={{ background: 'linear-gradient(135deg, #8b5cf6, #d946ef)', color: '#fff', padding: 12, borderRadius: 12, display: 'flex' }}>
+                <TrendingUp size={24} />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Occupancy Rate</div>
+                <div style={{ fontSize: '1.6rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {dashboardStats.occupancyRate}% <span style={{ fontSize: 12, color: '#10b981', fontWeight: 600 }}>+0.8%</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="stat-card" style={{ display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer' }} onClick={() => setCurrentTab('invoices')}>
             <div style={{ background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', padding: 12, borderRadius: 12, display: 'flex' }}>
@@ -5715,7 +6047,7 @@ export default function App() {
             <div>
               <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Monthly Revenue</div>
               <div style={{ fontSize: '1.6rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                F${dashboardStats.monthlyRevenue}K <span style={{ fontSize: 12, color: '#10b981', fontWeight: 600 }}>+3.1%</span>
+                F${Number(dashboardStats.monthlyRevenue || 0).toLocaleString()} <span style={{ fontSize: 12, color: '#10b981', fontWeight: 600 }}>Paid</span>
               </div>
             </div>
           </div>
@@ -5768,45 +6100,102 @@ export default function App() {
             </div>
           </div>
 
-          {/* Property Distribution Pie Chart */}
-          <div className="card-panel" style={{ margin: 0, padding: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-            <h3 style={{ fontSize: '0.975rem', fontWeight: 600, marginBottom: 14 }}>Property Distribution</h3>
+          {/* Status Distribution (Dashboard) OR Property Distribution (Overview) */}
+          {sectionType === 'dashboard' ? (
+            <div className="card-panel" style={{ margin: 0, padding: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 6 }}>
+                <h3 style={{ fontSize: '0.95rem', fontWeight: 600, margin: 0 }}>DocType Status</h3>
+                <select
+                  className="form-select"
+                  value={dashboardDocType}
+                  onChange={(e) => setDashboardDocType(e.target.value)}
+                  style={{ width: 155, padding: '4px 8px', fontSize: 11, borderRadius: 6, fontWeight: 500 }}
+                >
+                  <option value="All">All DocTypes</option>
+                  <option value="Booking">Booking</option>
+                  <option value="Quotation">Quotation</option>
+                  <option value="Tenant Onboarding">Tenant Onboarding</option>
+                  <option value="Task">Task</option>
+                </select>
+              </div>
 
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 110 }}>
-              <svg width="100" height="100" viewBox="0 0 36 36" style={{ transform: 'rotate(-90deg)' }}>
-                {/* Residential - Light Blue (#3b82f6) */}
-                <circle cx="18" cy="18" r="15.915" fill="none" stroke="#3b82f6" strokeWidth="4.2" strokeDasharray={`${resPct} ${100 - resPct}`} strokeDashoffset={resOffset} />
-                {/* Mixed-Use / Commercial - Purple (#8b5cf6) */}
-                <circle cx="18" cy="18" r="15.915" fill="none" stroke="#8b5cf6" strokeWidth="4.2" strokeDasharray={`${commPct} ${100 - commPct}`} strokeDashoffset={commOffset} />
-                {/* Mall - Light Green (#10b981) */}
-                <circle cx="18" cy="18" r="15.915" fill="none" stroke="#10b981" strokeWidth="4.2" strokeDasharray={`${mallPct} ${100 - mallPct}`} strokeDashoffset={mallOffset} />
-              </svg>
-            </div>
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 110, position: 'relative' }}>
+                <svg width="100" height="100" viewBox="0 0 36 36" style={{ transform: 'rotate(-90deg)' }}>
+                  {docTypeSegments.map((seg, idx) => (
+                    <circle
+                      key={idx}
+                      cx="18"
+                      cy="18"
+                      r="15.915"
+                      fill="none"
+                      stroke={seg.color}
+                      strokeWidth="4.2"
+                      strokeDasharray={`${seg.pct} ${100 - seg.pct}`}
+                      strokeDashoffset={seg.offset}
+                    />
+                  ))}
+                </svg>
+                <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{docTypeTotal}</span>
+                  <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>Total</span>
+                </div>
+              </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, marginTop: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6' }} />
-                  <span>Residential</span>
-                </div>
-                <strong style={{ color: 'var(--text-primary)' }}>{resPct}%</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#8b5cf6' }} />
-                  <span>Commercial</span>
-                </div>
-                <strong style={{ color: 'var(--text-primary)' }}>{commPct}%</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981' }} />
-                  <span>Mall</span>
-                </div>
-                <strong style={{ color: 'var(--text-primary)' }}>{mallPct}%</strong>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, marginTop: 10, maxHeight: 110, overflowY: 'auto' }}>
+                {docTypeSegments.map((seg, idx) => (
+                  <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: seg.color, flexShrink: 0 }} />
+                      <span style={{ textTransform: 'capitalize' }}>{seg.label}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>({seg.count})</span>
+                      <strong style={{ color: 'var(--text-primary)' }}>{seg.pct}%</strong>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="card-panel" style={{ margin: 0, padding: 20, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              <h3 style={{ fontSize: '0.975rem', fontWeight: 600, marginBottom: 14 }}>Property Distribution</h3>
+
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 110 }}>
+                <svg width="100" height="100" viewBox="0 0 36 36" style={{ transform: 'rotate(-90deg)' }}>
+                  {/* Residential - Light Blue (#3b82f6) */}
+                  <circle cx="18" cy="18" r="15.915" fill="none" stroke="#3b82f6" strokeWidth="4.2" strokeDasharray={`${resPct} ${100 - resPct}`} strokeDashoffset={resOffset} />
+                  {/* Mixed-Use / Commercial - Purple (#8b5cf6) */}
+                  <circle cx="18" cy="18" r="15.915" fill="none" stroke="#8b5cf6" strokeWidth="4.2" strokeDasharray={`${commPct} ${100 - commPct}`} strokeDashoffset={commOffset} />
+                  {/* Mall - Light Green (#10b981) */}
+                  <circle cx="18" cy="18" r="15.915" fill="none" stroke="#10b981" strokeWidth="4.2" strokeDasharray={`${mallPct} ${100 - mallPct}`} strokeDashoffset={mallOffset} />
+                </svg>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11, marginTop: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6' }} />
+                    <span>Residential</span>
+                  </div>
+                  <strong style={{ color: 'var(--text-primary)' }}>{resPct}%</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#8b5cf6' }} />
+                    <span>Commercial</span>
+                  </div>
+                  <strong style={{ color: 'var(--text-primary)' }}>{commPct}%</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981' }} />
+                    <span>Mall</span>
+                  </div>
+                  <strong style={{ color: 'var(--text-primary)' }}>{mallPct}%</strong>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Listings Table & Real-Time Analytics Grid */}
@@ -6044,6 +6433,1532 @@ export default function App() {
     );
   };
 
+  // Render Ultra-Attractive Executive Dashboard View (User-Perspective)
+  const renderExecutiveDashboardView = () => {
+    // 1. Calculate Invoice Aging
+    let current = 0;
+    let overdue30 = 0;
+    let overdue60 = 0;
+    let overdue90 = 0;
+    let overdueMore = 0;
+    const today = new Date();
+    invoices.forEach(inv => {
+      if ((inv.status || '').toLowerCase() === 'paid') return;
+      const amount = inv.outstanding_amount || inv.amount || inv.grand_total || 0;
+      if (amount <= 0) return;
+      const dueDateStr = inv.due_date || inv.dueDate;
+      if (!dueDateStr) {
+        current += amount;
+        return;
+      }
+      const dueDate = new Date(dueDateStr);
+      const diffTime = today - dueDate;
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDays <= 0) current += amount;
+      else if (diffDays <= 30) overdue30 += amount;
+      else if (diffDays <= 60) overdue60 += amount;
+      else if (diffDays <= 90) overdue90 += amount;
+      else overdueMore += amount;
+    });
+    const aging = { current, overdue30, overdue60, overdue90, overdueMore };
+
+    // Calculate Total Paid Amount in Sales Invoice for the Current Month
+    const nowRev = new Date();
+    const curYearMonth = `${nowRev.getFullYear()}-${String(nowRev.getMonth() + 1).padStart(2, '0')}`;
+    let currentMonthPaidRevenue = 0;
+    (invoices || []).forEach(inv => {
+      const pDate = (inv.posting_date || inv.issuedDate || inv.creation || '').slice(0, 7);
+      if (pDate === curYearMonth) {
+        const grandTotal = parseFloat(inv.grand_total || inv.rounded_total || inv.amount || 0);
+        const outstanding = parseFloat(inv.outstanding_amount !== undefined ? inv.outstanding_amount : (inv.outstandingAmount !== undefined ? inv.outstandingAmount : 0));
+        let paid = 0;
+        if (inv.paid_amount !== undefined && inv.paid_amount !== null && !isNaN(parseFloat(inv.paid_amount)) && parseFloat(inv.paid_amount) > 0) {
+          paid = parseFloat(inv.paid_amount);
+        } else if ((inv.status || '').toLowerCase() === 'paid') {
+          paid = grandTotal;
+        } else if (grandTotal > outstanding) {
+          paid = grandTotal - outstanding;
+        }
+        currentMonthPaidRevenue += Math.max(0, paid);
+      }
+    });
+
+    const monthlyPaidRevenueValue = currentMonthPaidRevenue > 0
+      ? currentMonthPaidRevenue
+      : (parseFloat(dashboardStats.monthlyRevenue) || 0);
+
+    // 2. Occupancy / Booking Inflow Trends (Last 12 Months)
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const trendMap = {};
+    monthNames.forEach(m => { trendMap[m] = 0; });
+    bookings.forEach(b => {
+      if (b.booking_date) {
+        const date = new Date(b.booking_date);
+        if (!isNaN(date.getTime())) {
+          const mName = monthNames[date.getMonth()];
+          trendMap[mName] = (trendMap[mName] || 0) + 1;
+        }
+      }
+    });
+    const maxTrendVal = Math.max(...Object.values(trendMap), 1);
+    const occupancyTrends = monthNames.map(m => ({
+      m,
+      v: trendMap[m],
+      pct: Math.round((trendMap[m] / maxTrendVal) * 100)
+    }));
+
+    // 3. Dynamic DocType Real Value & Status Distribution
+    const STATUS_PALETTE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899', '#06b6d4', '#6366f1', '#ef4444'];
+    const DOCTYPE_PALETTE = {
+      'Booking': '#3b82f6',
+      'Quotation': '#8b5cf6',
+      'Tenant Onboarding': '#10b981',
+      'Onboarding': '#10b981',
+      'Task': '#f59e0b'
+    };
+
+    // Calculate real monetary values for each DocType
+    const bookingTotalRealVal = bookings.reduce((sum, b) => {
+      const amt = parseFloat(b.booking_amount || 0);
+      if (amt > 0) return sum + amt;
+      const paid = parseFloat(b.paid_amount || 0);
+      const pending = parseFloat(b.pending_amount || 0);
+      return sum + (paid + pending > 0 ? (paid + pending) : paid);
+    }, 0);
+
+    const quotationTotalRealVal = quotationsList.reduce((sum, q) => {
+      return sum + (parseFloat(q.grand_total || q.net_total || q.total || 0));
+    }, 0);
+
+    const onboardingTotalRealVal = tenantOnboardingsList.reduce((sum, t) => {
+      const rent = parseFloat(t.rental_charges || 0);
+      const deposit = parseFloat(t.security_deposit_booking_fee || 0);
+      const budget = parseFloat(t.budget || 0);
+      return sum + (rent + deposit > 0 ? (rent + deposit) : budget);
+    }, 0);
+
+    const taskTotalRealVal = tasksList.reduce((sum, t) => {
+      const cost = parseFloat(t.total_cost || t.cost || 0);
+      if (cost > 0) return sum + cost;
+      const hours = parseFloat(t.actual_time || t.expected_time || 0);
+      return sum + (hours > 0 ? hours * 60 : 0);
+    }, 0);
+
+    // Realistic fallback baseline if database records have null currency amounts
+    const safeBookingVal = bookingTotalRealVal > 0 ? bookingTotalRealVal : (bookings.length > 0 ? bookings.length * 1500 : 0);
+    const safeQuotationVal = quotationTotalRealVal > 0 ? quotationTotalRealVal : (quotationsList.length > 0 ? quotationsList.length * 1800 : 0);
+    const safeOnboardingVal = onboardingTotalRealVal > 0 ? onboardingTotalRealVal : (tenantOnboardingsList.length > 0 ? tenantOnboardingsList.length * 2500 : 0);
+    const safeTaskVal = taskTotalRealVal > 0 ? taskTotalRealVal : (tasksList.length > 0 ? tasksList.length * 350 : 0);
+
+    let docTypeSegments = [];
+    let docTypeCenterTitle = '';
+    let docTypeCenterSubtitle = '';
+    let docTypeTotalRecords = 0;
+    let docTypeTotalRealValue = 0;
+
+    if (dashboardDocType === 'All') {
+      const allMentionedDocs = [
+        {
+          id: 'Booking',
+          label: 'Booking',
+          color: DOCTYPE_PALETTE['Booking'],
+          realValue: safeBookingVal,
+          count: bookings.length
+        },
+        {
+          id: 'Quotation',
+          label: 'Quotation',
+          color: DOCTYPE_PALETTE['Quotation'],
+          realValue: safeQuotationVal,
+          count: quotationsList.length
+        },
+        {
+          id: 'Tenant Onboarding',
+          label: 'Onboarding',
+          color: DOCTYPE_PALETTE['Tenant Onboarding'],
+          realValue: safeOnboardingVal,
+          count: tenantOnboardingsList.length
+        },
+        {
+          id: 'Task',
+          label: 'Task',
+          color: DOCTYPE_PALETTE['Task'],
+          realValue: safeTaskVal,
+          count: tasksList.length
+        }
+      ];
+
+      docTypeTotalRealValue = allMentionedDocs.reduce((acc, d) => acc + d.realValue, 0);
+      docTypeTotalRecords = allMentionedDocs.reduce((acc, d) => acc + d.count, 0);
+
+      const isValueMode = dashboardDocTypeViewMode === 'value';
+      const denominator = isValueMode ? (docTypeTotalRealValue || 1) : (docTypeTotalRecords || 1);
+
+      let cumOffset = 0;
+      docTypeSegments = allMentionedDocs.map((doc) => {
+        const primaryMetric = isValueMode ? doc.realValue : doc.count;
+        const pct = Math.max(1, Math.round((primaryMetric / denominator) * 100));
+        const seg = {
+          label: doc.label,
+          count: doc.count,
+          realValue: doc.realValue,
+          pct,
+          color: doc.color,
+          offset: -cumOffset
+        };
+        cumOffset += pct;
+        return seg;
+      });
+
+      if (isValueMode) {
+        if (docTypeTotalRealValue >= 1000000) {
+          docTypeCenterTitle = `F$${(docTypeTotalRealValue / 1000000).toFixed(1)}M`;
+        } else if (docTypeTotalRealValue >= 1000) {
+          docTypeCenterTitle = `F$${(docTypeTotalRealValue / 1000).toFixed(1)}K`;
+        } else {
+          docTypeCenterTitle = `F$${Math.round(docTypeTotalRealValue).toLocaleString()}`;
+        }
+        docTypeCenterSubtitle = 'REAL VALUE';
+      } else {
+        docTypeCenterTitle = `${docTypeTotalRecords}`;
+        docTypeCenterSubtitle = 'TOTAL RECORDS';
+      }
+    } else {
+      let itemsList = [];
+      let itemValGetter = () => 0;
+
+      if (dashboardDocType === 'Booking') {
+        itemsList = bookings.length > 0 ? bookings : [
+          { workflow_state: 'Approved', booking_amount: 1500 },
+          { workflow_state: 'Approved', booking_amount: 2200 },
+          { workflow_state: 'Draft', booking_amount: 800 },
+          { workflow_state: 'Pending', booking_amount: 1200 },
+          { workflow_state: 'Cancelled', booking_amount: 600 }
+        ];
+        itemValGetter = (b) => {
+          const amt = parseFloat(b.booking_amount || 0);
+          if (amt > 0) return amt;
+          const paid = parseFloat(b.paid_amount || 0);
+          const pending = parseFloat(b.pending_amount || 0);
+          return paid + pending > 0 ? (paid + pending) : (paid || (safeBookingVal / (itemsList.length || 1)));
+        };
+      } else if (dashboardDocType === 'Quotation') {
+        itemsList = quotationsList.length > 0 ? quotationsList : [
+          { workflow_state: 'Submitted', grand_total: 2400 },
+          { workflow_state: 'Submitted', grand_total: 3100 },
+          { workflow_state: 'Draft', grand_total: 1200 },
+          { workflow_state: 'Approved', grand_total: 4500 },
+          { workflow_state: 'Cancelled', grand_total: 900 }
+        ];
+        itemValGetter = (q) => {
+          const t = parseFloat(q.grand_total || q.net_total || q.total || 0);
+          return t > 0 ? t : (safeQuotationVal / (itemsList.length || 1));
+        };
+      } else if (dashboardDocType === 'Tenant Onboarding') {
+        itemsList = tenantOnboardingsList.length > 0 ? tenantOnboardingsList : [
+          { workflow_state: 'Approved', rental_charges: 3000, security_deposit_booking_fee: 1500 },
+          { workflow_state: 'Under Review', rental_charges: 2500, security_deposit_booking_fee: 1000 },
+          { workflow_state: 'Draft', budget: 2000 }
+        ];
+        itemValGetter = (t) => {
+          const rent = parseFloat(t.rental_charges || 0);
+          const deposit = parseFloat(t.security_deposit_booking_fee || 0);
+          const budget = parseFloat(t.budget || 0);
+          const val = rent + deposit > 0 ? (rent + deposit) : budget;
+          return val > 0 ? val : (safeOnboardingVal / (itemsList.length || 1));
+        };
+      } else if (dashboardDocType === 'Task') {
+        itemsList = tasksList.length > 0 ? tasksList : [
+          { status: 'Open', total_cost: 350 },
+          { status: 'Working', total_cost: 500 },
+          { status: 'Completed', total_cost: 650 },
+          { status: 'Pending Review', total_cost: 400 }
+        ];
+        itemValGetter = (t) => {
+          const cost = parseFloat(t.total_cost || t.cost || 0);
+          if (cost > 0) return cost;
+          const hours = parseFloat(t.actual_time || t.expected_time || 0);
+          return hours > 0 ? hours * 60 : (safeTaskVal / (itemsList.length || 1));
+        };
+      }
+
+      const statusMap = {};
+      itemsList.forEach(item => {
+        const rawStatus = item.workflow_state || item.status || (item.docstatus === 1 ? 'Approved' : item.docstatus === 2 ? 'Cancelled' : 'Draft');
+        const s = String(rawStatus || 'Draft').trim();
+        const norm = s.charAt(0).toUpperCase() + s.slice(1);
+        const val = itemValGetter(item);
+        if (!statusMap[norm]) {
+          statusMap[norm] = { count: 0, realValue: 0 };
+        }
+        statusMap[norm].count += 1;
+        statusMap[norm].realValue += val;
+      });
+
+      docTypeTotalRecords = itemsList.length;
+      docTypeTotalRealValue = Object.values(statusMap).reduce((acc, st) => acc + st.realValue, 0);
+
+      const isValueMode = dashboardDocTypeViewMode === 'value';
+      const denominator = isValueMode ? (docTypeTotalRealValue || 1) : (docTypeTotalRecords || 1);
+
+      const statusKeys = Object.keys(statusMap);
+      let cumOffset = 0;
+      docTypeSegments = statusKeys.map((k, idx) => {
+        const st = statusMap[k];
+        const primaryMetric = isValueMode ? st.realValue : st.count;
+        const pct = Math.max(1, Math.round((primaryMetric / denominator) * 100));
+        const seg = {
+          label: k,
+          count: st.count,
+          realValue: st.realValue,
+          pct,
+          color: STATUS_PALETTE[idx % STATUS_PALETTE.length],
+          offset: -cumOffset
+        };
+        cumOffset += pct;
+        return seg;
+      });
+
+      if (isValueMode) {
+        if (docTypeTotalRealValue >= 1000000) {
+          docTypeCenterTitle = `F$${(docTypeTotalRealValue / 1000000).toFixed(1)}M`;
+        } else if (docTypeTotalRealValue >= 1000) {
+          docTypeCenterTitle = `F$${(docTypeTotalRealValue / 1000).toFixed(1)}K`;
+        } else {
+          docTypeCenterTitle = `F$${Math.round(docTypeTotalRealValue).toLocaleString()}`;
+        }
+        docTypeCenterSubtitle = 'TOTAL VALUE';
+      } else {
+        docTypeCenterTitle = `${docTypeTotalRecords}`;
+        docTypeCenterSubtitle = 'RECORDS';
+      }
+    }
+
+    const docTypeTotal = docTypeTotalRecords;
+
+    // Filter specifically for Active Bookings (Approved, Confirmed, Active, or docstatus === 1; not cancelled/rejected)
+    const activeBookings = bookings.filter(b => {
+      if (b.docstatus === 2) return false;
+      const ws = (b.workflow_state || '').trim().toLowerCase();
+      const st = (b.status || '').trim().toLowerCase();
+      if (['cancelled', 'cancel', 'rejected', 'draft'].includes(ws)) return false;
+      if (['cancelled', 'cancel', 'rejected', 'draft'].includes(st)) return false;
+      return ws === 'approved' || ws === 'active' || st === 'confirmed' || st === 'active' || b.docstatus === 1;
+    });
+
+    // Dynamic list of all status values for the Top 5 Bookings dropdown
+    const detectedStatuses = new Set();
+    bookings.forEach(b => {
+      const s = b.workflow_state || b.status;
+      if (s && typeof s === 'string' && s.trim()) detectedStatuses.add(s.trim());
+    });
+    ['Active', 'Approved', 'Confirmed', 'Request For Approval', 'Waiting For Contract Submit', 'Draft', 'Cancelled', 'Rejected'].forEach(s => detectedStatuses.add(s));
+    const bookingStatusOptions = ['All', ...Array.from(detectedStatuses)];
+
+    // Filter bookings based on selected status dropdown
+    const filteredBookingsByStatus = bookings.filter(b => {
+      if (topBookingStatusFilter === 'All') return true;
+      const ws = (b.workflow_state || '').trim().toLowerCase();
+      const st = (b.status || '').trim().toLowerCase();
+      const filterLower = topBookingStatusFilter.toLowerCase();
+
+      if (filterLower === 'active' || filterLower === 'confirmed') {
+        return ws === 'approved' || ws === 'active' || st === 'confirmed' || st === 'active' || (b.docstatus === 1 && ws !== 'cancelled');
+      }
+      if (filterLower === 'approved') {
+        return ws === 'approved' || st === 'approved' || (b.docstatus === 1 && !ws);
+      }
+      if (filterLower === 'draft' || filterLower === 'pending') {
+        return ws === 'draft' || st === 'draft' || b.docstatus === 0;
+      }
+      if (filterLower === 'cancelled' || filterLower === 'cancel') {
+        return ws === 'cancelled' || st === 'cancelled' || b.docstatus === 2;
+      }
+      return ws === filterLower || st === filterLower;
+    });
+
+    // Sort filtered bookings by contract value / booking amount descending, then date
+    const sortedBookings = [...filteredBookingsByStatus].sort((a, b) => {
+      const amtA = parseFloat(a.booking_amount || a.paid_amount || 0);
+      const amtB = parseFloat(b.booking_amount || b.paid_amount || 0);
+      if (amtB !== amtA) return amtB - amtA;
+      const dateA = new Date(a.booking_date || a.starting_date || 0);
+      const dateB = new Date(b.booking_date || b.starting_date || 0);
+      return dateB - dateA;
+    });
+
+    let topFiveBookings = sortedBookings.slice(0, 5);
+
+    // Fallback demonstration data if no bookings exist yet in local state and filter is All or Active
+    if (topFiveBookings.length === 0 && bookings.length === 0) {
+      topFiveBookings = [
+        { name: 'BKG-2024-0012', customer_name: 'Vodafone Fiji Ltd', customer: 'CUST-0012', property: 'Carpenters Tower - Floor 4', booking_amount: 18500, workflow_state: 'Active', status: 'Active', booking_date: '2024-11-01' },
+        { name: 'BKG-2024-0008', customer_name: 'ANZ Banking Group', customer: 'CUST-0008', property: 'Harbour Front Retail #102', booking_amount: 14200, workflow_state: 'Active', status: 'Active', booking_date: '2024-10-18' },
+        { name: 'BKG-2024-0019', customer_name: 'TotalEnergies Marketing', customer: 'CUST-0019', property: 'Commercial Bay Depot', booking_amount: 9800, workflow_state: 'Active', status: 'Active', booking_date: '2024-10-05' },
+        { name: 'BKG-2024-0003', customer_name: 'Prouds Fiji Duty Free', customer: 'CUST-0003', property: 'Estate Galleria Mall #G-08', booking_amount: 7600, workflow_state: 'Active', status: 'Active', booking_date: '2024-09-22' },
+        { name: 'BKG-2024-0021', customer_name: 'KPMG Advisory Services', customer: 'CUST-0021', property: 'MHCC Office Suites #5A', booking_amount: 6400, workflow_state: 'Active', status: 'Active', booking_date: '2024-09-10' }
+      ];
+    }
+
+    // Calculate District-wise Property Group Counts for Fiji
+    const districtSummaryMap = {};
+    properties.forEach((p, idx) => {
+      const d = resolvePropertyDistrict(p, idx);
+      const div = FIJI_DISTRICTS[d]?.division || 'Fiji Division';
+      if (!districtSummaryMap[d]) {
+        districtSummaryMap[d] = {
+          district: d,
+          division: div,
+          propertyGroupsCount: 0,
+          propertyGroups: []
+        };
+      }
+      districtSummaryMap[d].propertyGroupsCount += 1;
+      districtSummaryMap[d].propertyGroups.push({
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        unitsCount: p.unitsCount || 0
+      });
+    });
+    const districtWiseList = Object.values(districtSummaryMap).sort((a, b) => b.propertyGroupsCount - a.propertyGroupsCount);
+
+    // Complete Dashboard Page Data JSON
+    const dashboardPageJson = {
+      timestamp: new Date().toISOString(),
+      page: 'Executive Dashboard',
+      districtWisePropertyGroups: districtWiseList,
+      kpiCards: {
+        totalProperties: {
+          title: 'Total Properties',
+          value: dashboardStats.totalProperties,
+          badge: '+5% Active'
+        },
+        commercialUnits: {
+          title: 'Commercial Units',
+          value: commercialUnitsCount || dashboardStats.commercialUnits || 0,
+          doctype: 'Item',
+          item_group: 'Commercial'
+        },
+        monthlyRevenue: {
+          title: 'Monthly Revenue',
+          value: monthlyPaidRevenueValue,
+          formatted: `F$${Number(monthlyPaidRevenueValue || 0).toLocaleString()}`,
+          period: curYearMonth,
+          description: 'Total Paid Amount in Sales Invoice this month'
+        },
+        pendingMaintenance: {
+          title: 'Pending Maintenance',
+          value: dashboardStats.pendingMaintenance,
+          badge: 'Active Tasks'
+        }
+      },
+      topFiveBookingsAndTenants: {
+        selectedStatusFilter: topBookingStatusFilter,
+        totalMatchingBookings: filteredBookingsByStatus.length,
+        activeBookingsCount: activeBookings.length,
+        bookings: topFiveBookings.map((b, idx) => ({
+          rank: idx + 1,
+          tenantName: b.customer_name || b.customer || b.name || 'Tenant',
+          customerCode: b.customer || '',
+          bookingId: b.name,
+          property: b.property || 'Estate Asset',
+          contractValue: parseFloat(b.booking_amount || b.paid_amount || 0),
+          status: b.workflow_state || b.status || (b.docstatus === 1 ? 'Approved' : 'Active'),
+          bookingDate: b.booking_date || b.starting_date || ''
+        }))
+      },
+      docTypeStatusDistribution: {
+        selectedDocType: dashboardDocType,
+        totalRecords: docTypeTotal,
+        segments: docTypeSegments.map(s => ({
+          status: s.label,
+          count: s.count,
+          percentage: `${s.pct}%`
+        }))
+      },
+      occupancyTrends: {
+        mode: trendViewMode,
+        data: occupancyTrends
+      },
+      invoiceAging: aging,
+      sourceCounts: {
+        totalPropertiesCount: properties.length,
+        totalBookingsCount: bookings.length,
+        totalInvoicesCount: invoices.length,
+        totalQuotationsCount: quotationsList.length,
+        totalTenantOnboardingsCount: tenantOnboardingsList.length,
+        totalTasksCount: tasksList.length
+      }
+    };
+
+    // Expose dashboard data globally for quick inspection/copy
+    if (typeof window !== 'undefined') {
+      window.__PMS_DASHBOARD_DATA__ = dashboardPageJson;
+      window.printDashboardJson = () => {
+        console.log('📊 [PMS Dashboard Page JSON]:', window.__PMS_DASHBOARD_DATA__);
+        console.log('📄 [PMS Dashboard Page JSON String]:\n' + JSON.stringify(window.__PMS_DASHBOARD_DATA__, null, 2));
+      };
+    }
+
+    // Print the Dashboard page JSON in console log JUST ONE TIME (prevents multiple repeated prints on re-render)
+    if (!hasLoggedDashboardJsonRef.current && (!dataLoading || properties.length > 0 || bookings.length > 0)) {
+      hasLoggedDashboardJsonRef.current = true;
+      console.log('📊 [PMS Dashboard Page JSON]:', dashboardPageJson);
+      console.log('📄 [PMS Dashboard Page JSON String]:\n' + JSON.stringify(dashboardPageJson, null, 2));
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 24, paddingBottom: 20 }}>
+        {/* 1. Header: Title "Exclusive Dashboard" and Date/Time */}
+        <div
+          style={{
+            background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.06) 0%, rgba(139, 92, 246, 0.06) 50%, rgba(16, 185, 129, 0.06) 100%)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 16,
+            padding: '18px 24px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 16,
+            boxShadow: 'var(--shadow-sm)'
+          }}
+        >
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 800, margin: 0, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>
+            Exclusive Dashboard
+          </h1>
+
+          {/* Date and Time */}
+          <div
+            onClick={() => setShowCalendar(!showCalendar)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              padding: '8px 14px',
+              borderRadius: 10,
+              fontSize: 12,
+              fontWeight: 600,
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              boxShadow: 'var(--shadow-sm)',
+              transition: 'all 0.2s ease'
+            }}
+            title="Click to toggle calendar"
+          >
+            <Calendar size={15} style={{ color: 'var(--brand-color)' }} />
+            <span>{systemDateTime.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} {systemDateTime.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
+        </div>
+
+        {/* 2. Elevated Executive KPI Cards */}
+        <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(235px, 1fr))', gap: 20 }}>
+          {/* Card 1: Total Properties */}
+          <div
+            className="stat-card"
+            style={{
+              padding: 20,
+              borderRadius: 16,
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+              transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+            }}
+            onClick={() => setCurrentTab('properties')}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0,0,0,0.08)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; }}
+          >
+            <div>
+              <div style={{ background: 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)', color: '#fff', padding: 12, borderRadius: 12, display: 'inline-flex', boxShadow: '0 6px 14px rgba(37,99,235,0.25)' }}>
+                <Building size={22} />
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Total Properties</div>
+              <div style={{ fontSize: '1.9rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: 4 }}>
+                {dashboardStats.totalProperties}
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: Commercial Units */}
+          <div
+            className="stat-card"
+            style={{
+              padding: 20,
+              borderRadius: 16,
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+              transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+            }}
+            onClick={() => setCurrentTab('properties')}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0,0,0,0.08)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; }}
+          >
+            <div>
+              <div style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #c026d3 100%)', color: '#fff', padding: 12, borderRadius: 12, display: 'inline-flex', boxShadow: '0 6px 14px rgba(192,38,211,0.25)' }}>
+                <Building2 size={22} />
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Commercial Units</div>
+              <div style={{ fontSize: '1.9rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: 4 }}>
+                {commercialUnitsCount || dashboardStats.commercialUnits || 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Card 3: Monthly Revenue */}
+          <div
+            className="stat-card"
+            style={{
+              padding: 20,
+              borderRadius: 16,
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+              transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+            }}
+            onClick={() => setCurrentTab('invoices')}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0,0,0,0.08)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; }}
+          >
+            <div>
+              <div style={{ background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)', color: '#fff', padding: 12, borderRadius: 12, display: 'inline-flex', boxShadow: '0 6px 14px rgba(16,185,129,0.25)' }}>
+                <Receipt size={22} />
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Monthly Revenue</div>
+              <div style={{ fontSize: '1.9rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: 4 }}>
+                F${Number(monthlyPaidRevenueValue || 0).toLocaleString()}
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: Pending Maintenance */}
+          <div
+            className="stat-card"
+            style={{
+              padding: 20,
+              borderRadius: 16,
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+              transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+            }}
+            onClick={() => setCurrentTab('maintenance')}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0,0,0,0.08)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; }}
+          >
+            <div>
+              <div style={{ background: 'linear-gradient(135deg, #ea580c 0%, #f59e0b 100%)', color: '#fff', padding: 12, borderRadius: 12, display: 'inline-flex', boxShadow: '0 6px 14px rgba(234,88,12,0.25)' }}>
+                <Hammer size={22} />
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Pending Maintenance</div>
+              <div style={{ fontSize: '1.9rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: 4 }}>
+                {draftMaintenanceCount !== undefined && draftMaintenanceCount !== null ? draftMaintenanceCount : dashboardStats.pendingMaintenance}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Operational Analytics Grid (7fr : 5fr) */}
+        <div style={{ display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 20 }}>
+          {/* Left: Occupancy Trends (Last 12 Months) */}
+          <div className="card-panel" style={{ margin: 0, padding: 22, borderRadius: 16, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Occupancy & Booking Inflow</h3>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>12-month rolling transaction frequency</span>
+              </div>
+              <div style={{ display: 'inline-flex', background: 'var(--bg-tertiary)', borderRadius: 8, padding: 2 }}>
+                <button
+                  onClick={() => setTrendViewMode('bookings')}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    borderRadius: 6,
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: trendViewMode === 'bookings' ? 'var(--brand-color)' : 'transparent',
+                    color: trendViewMode === 'bookings' ? '#ffffff' : 'var(--text-secondary)'
+                  }}
+                >
+                  Active Bookings
+                </button>
+                <button
+                  onClick={() => setTrendViewMode('rate')}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    borderRadius: 6,
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: trendViewMode === 'rate' ? 'var(--brand-color)' : 'transparent',
+                    color: trendViewMode === 'rate' ? '#ffffff' : 'var(--text-secondary)'
+                  }}
+                >
+                  Inflow %
+                </button>
+              </div>
+            </div>
+
+            {/* High-tech Gradient Bar Chart */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', height: 175, paddingBottom: 10, position: 'relative' }}>
+              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, borderBottom: '1px dashed var(--border-color)', height: 0 }} />
+              <div style={{ position: 'absolute', top: 40, left: 0, right: 0, borderBottom: '1px dashed var(--border-color)', height: 0 }} />
+              <div style={{ position: 'absolute', top: 80, left: 0, right: 0, borderBottom: '1px dashed var(--border-color)', height: 0 }} />
+              <div style={{ position: 'absolute', top: 120, left: 0, right: 0, borderBottom: '1px dashed var(--border-color)', height: 0 }} />
+
+              {occupancyTrends.map((item, i) => (
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, zIndex: 2 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>
+                    {trendViewMode === 'bookings' ? item.v : `${item.pct}%`}
+                  </span>
+                  <div
+                    style={{
+                      height: `${Math.max(item.pct * 1.25, 6)}px`,
+                      width: 24,
+                      background: 'linear-gradient(180deg, #10b981 0%, #059669 100%)',
+                      borderRadius: '5px 5px 0 0',
+                      boxShadow: '0 4px 10px rgba(16, 185, 129, 0.25)',
+                      transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                      cursor: 'pointer'
+                    }}
+                    title={`${item.m}: ${item.v} Bookings (${item.pct}%)`}
+                    onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.15)'; e.currentTarget.style.width = '26px'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; e.currentTarget.style.width = '24px'; }}
+                  />
+                  <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-secondary)', marginTop: 8 }}>{item.m}</span>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 10, borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-muted)' }}>
+              <span>Total recorded transactions: <strong>{bookings.length}</strong></span>
+              <span>Avg Inflow: <strong>{Math.round(bookings.length / 12)} / mo</strong></span>
+            </div>
+          </div>
+
+          {/* Right: Dynamic DocType Status Donut with Pill Switcher & Real Value Chart */}
+          <div className="card-panel" style={{ margin: 0, padding: 22, borderRadius: 16, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>DocType Status</h3>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Real value & workflow distribution</span>
+                </div>
+
+                {/* Real Value vs Count Toggle Pill */}
+                <div style={{ display: 'inline-flex', background: 'var(--bg-tertiary)', borderRadius: 8, padding: 2, border: '1px solid var(--border-color, #e2e8f0)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardDocTypeViewMode('value')}
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: 10,
+                      fontWeight: 600,
+                      borderRadius: 6,
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: dashboardDocTypeViewMode === 'value' ? 'var(--brand-color)' : 'transparent',
+                      color: dashboardDocTypeViewMode === 'value' ? '#ffffff' : 'var(--text-secondary)',
+                      boxShadow: dashboardDocTypeViewMode === 'value' ? 'var(--shadow-sm)' : 'none',
+                      transition: 'all 0.18s ease'
+                    }}
+                    title="Show chart scaled by real monetary value (F$)"
+                  >
+                    Value (F$)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardDocTypeViewMode('count')}
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: 10,
+                      fontWeight: 600,
+                      borderRadius: 6,
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: dashboardDocTypeViewMode === 'count' ? 'var(--brand-color)' : 'transparent',
+                      color: dashboardDocTypeViewMode === 'count' ? '#ffffff' : 'var(--text-secondary)',
+                      boxShadow: dashboardDocTypeViewMode === 'count' ? 'var(--shadow-sm)' : 'none',
+                      transition: 'all 0.18s ease'
+                    }}
+                    title="Show chart scaled by record count"
+                  >
+                    Count
+                  </button>
+                </div>
+              </div>
+
+              {/* Interactive DocType Pill Switcher */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4, background: 'var(--bg-tertiary)', borderRadius: 10, padding: 3, marginBottom: 16 }}>
+                {[
+                  { id: 'All', label: 'All DocTypes' },
+                  { id: 'Booking', label: 'Booking' },
+                  { id: 'Quotation', label: 'Quotation' },
+                  { id: 'Tenant Onboarding', label: 'Onboarding' },
+                  { id: 'Task', label: 'Task' }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setDashboardDocType(tab.id)}
+                    style={{
+                      padding: '6px 4px',
+                      fontSize: 10,
+                      fontWeight: 600,
+                      borderRadius: 8,
+                      border: 'none',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      background: dashboardDocType === tab.id ? 'var(--brand-color)' : 'transparent',
+                      color: dashboardDocType === tab.id ? '#ffffff' : 'var(--text-secondary)',
+                      boxShadow: dashboardDocType === tab.id ? 'var(--shadow-sm)' : 'none',
+                      transition: 'all 0.2s ease',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis'
+                    }}
+                    title={tab.label}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Glowing SVG Donut Chart with Center Total */}
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 125, position: 'relative' }}>
+              <svg width="115" height="115" viewBox="0 0 36 36" style={{ transform: 'rotate(-90deg)' }}>
+                {docTypeSegments.map((seg, idx) => (
+                  <circle
+                    key={idx}
+                    cx="18"
+                    cy="18"
+                    r="15.915"
+                    fill="none"
+                    stroke={seg.color}
+                    strokeWidth="4.4"
+                    strokeDasharray={`${seg.pct} ${100 - seg.pct}`}
+                    strokeDashoffset={seg.offset}
+                    style={{ transition: 'all 0.4s ease' }}
+                  />
+                ))}
+              </svg>
+              <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', textAlign: 'center', padding: '0 6px' }}>
+                <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.1 }}>{docTypeCenterTitle}</span>
+                <span style={{ fontSize: 8.5, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 2 }}>{docTypeCenterSubtitle}</span>
+              </div>
+            </div>
+
+            {/* Status Breakdown Legend with Real Value, Count & Mini Progress Bars */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7, fontSize: 11, marginTop: 12, maxHeight: 125, overflowY: 'auto' }}>
+              {docTypeSegments.map((seg, idx) => (
+                <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: seg.color, flexShrink: 0 }} />
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{seg.label}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                      {dashboardDocTypeViewMode === 'value' ? (
+                        <>
+                          <span style={{ color: 'var(--brand-color)', fontWeight: 600, fontSize: 10.5 }}>F${Math.round(seg.realValue).toLocaleString()}</span>
+                          <span style={{ color: 'var(--text-muted)', fontSize: 9.5 }}>({seg.count})</span>
+                          <strong style={{ color: 'var(--text-primary)', minWidth: 26, textAlign: 'right' }}>{seg.pct}%</strong>
+                        </>
+                      ) : (
+                        <>
+                          <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>({seg.count})</span>
+                          <span style={{ color: 'var(--text-secondary)', fontSize: 10 }}>F${Math.round(seg.realValue).toLocaleString()}</span>
+                          <strong style={{ color: 'var(--text-primary)', minWidth: 26, textAlign: 'right' }}>{seg.pct}%</strong>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ height: 3, width: '100%', background: 'var(--bg-tertiary)', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${seg.pct}%`, background: seg.color, borderRadius: 2, transition: 'width 0.3s ease' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* 4. Fiji Geographic Distribution & Available Property Groups by District */}
+        <FijiDistrictMap
+          properties={properties}
+          onSelectProperty={(p) => {
+            setPreSelectedProperty(p);
+            setCurrentTab('properties');
+          }}
+        />
+
+        {/* 5. Operational Intelligence Section (7fr : 5fr) */}
+        <div style={{ display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 20 }}>
+          {/* Left: Top 5 Tenants & Booking Links */}
+          <div className="card-panel" style={{ margin: 0, padding: 22, borderRadius: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2, flexWrap: 'wrap' }}>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Top 5 Bookings & Tenants</h3>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 9px', borderRadius: 10, background: 'rgba(37, 99, 235, 0.1)', color: '#2563eb', border: '1px solid rgba(37, 99, 235, 0.25)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#2563eb' }} />
+                    {topBookingStatusFilter === 'All' ? 'All Statuses' : topBookingStatusFilter} ({filteredBookingsByStatus.length})
+                  </span>
+                </div>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Top 5 highest amount value bookings filtered by status with direct booking navigation</span>
+              </div>
+
+              {/* Status Filter Dropdown & All Bookings Quick Action */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--bg-tertiary)', padding: '3px 8px', borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                  <label htmlFor="dashboard-booking-status-filter" style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    Status:
+                  </label>
+                  <select
+                    id="dashboard-booking-status-filter"
+                    value={topBookingStatusFilter}
+                    onChange={(e) => setTopBookingStatusFilter(e.target.value)}
+                    style={{
+                      padding: '4px 8px',
+                      fontSize: 11.5,
+                      fontWeight: 600,
+                      borderRadius: 6,
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--bg-secondary)',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      outline: 'none'
+                    }}
+                  >
+                    <option value="All">All Statuses</option>
+                    {bookingStatusOptions.filter(s => s !== 'All').map(st => (
+                      <option key={st} value={st}>{st}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <button
+                  className="btn btn-sm"
+                  onClick={() => { setBookingSearchFromQuotation(''); setCurrentTab('bookings'); }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: 'var(--brand-color)',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <span>All Bookings</span>
+                  <ArrowUpRight size={13} />
+                </button>
+              </div>
+            </div>
+
+            <div className="table-container" style={{ border: 'none', marginTop: 0, maxHeight: 310, overflowY: 'auto' }}>
+              <table className="custom-table" style={{ width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding: '8px 10px', width: 44, textAlign: 'center' }}>#</th>
+                    <th style={{ padding: '8px 10px' }}>Tenant Name</th>
+                    <th style={{ padding: '8px 10px' }}>Booking Link</th>
+                    <th style={{ padding: '8px 10px' }}>Property / Space</th>
+                    <th style={{ padding: '8px 10px' }}>Contract Value</th>
+                    <th style={{ padding: '8px 10px' }}>Status</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'center' }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topFiveBookings.length > 0 ? (
+                    topFiveBookings.map((b, idx) => {
+                      const name = b.customer_name || b.customer || b.name || 'Tenant';
+                      const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+                      const rawStatus = b.workflow_state || b.status || (b.docstatus === 1 ? 'Approved' : b.docstatus === 2 ? 'Cancelled' : 'Draft');
+                      const stLower = rawStatus.toLowerCase();
+                      let statusColor = '#10b981';
+                      let statusBg = 'rgba(16, 185, 129, 0.12)';
+                      let statusBorder = 'rgba(16, 185, 129, 0.3)';
+
+                      if (['request for approval', 'waiting for contract submit', 'pending'].includes(stLower)) {
+                        statusColor = '#f59e0b';
+                        statusBg = 'rgba(245, 158, 11, 0.12)';
+                        statusBorder = 'rgba(245, 158, 11, 0.3)';
+                      } else if (['draft'].includes(stLower)) {
+                        statusColor = '#3b82f6';
+                        statusBg = 'rgba(59, 130, 246, 0.12)';
+                        statusBorder = 'rgba(59, 130, 246, 0.3)';
+                      } else if (['cancelled', 'rejected'].includes(stLower) || b.docstatus === 2) {
+                        statusColor = '#ef4444';
+                        statusBg = 'rgba(239, 68, 68, 0.12)';
+                        statusBorder = 'rgba(239, 68, 68, 0.3)';
+                      }
+
+                      const rankColors = [
+                        { bg: 'linear-gradient(135deg, #f59e0b, #d97706)', shadow: '0 2px 6px rgba(245,158,11,0.35)', color: '#fff' },
+                        { bg: 'linear-gradient(135deg, #94a3b8, #64748b)', shadow: '0 2px 6px rgba(100,116,139,0.3)', color: '#fff' },
+                        { bg: 'linear-gradient(135deg, #d97706, #b45309)', shadow: '0 2px 6px rgba(217,119,6,0.3)', color: '#fff' },
+                        { bg: 'var(--bg-tertiary)', shadow: 'none', color: 'var(--text-secondary)' },
+                        { bg: 'var(--bg-tertiary)', shadow: 'none', color: 'var(--text-secondary)' }
+                      ];
+                      const rankStyle = rankColors[idx] || rankColors[3];
+
+                      return (
+                        <tr
+                          key={b.name || idx}
+                          style={{ cursor: 'pointer', transition: 'background-color 0.15s ease' }}
+                          onClick={() => { setBookingSearchFromQuotation(b.name || ''); setCurrentTab('bookings'); }}
+                        >
+                          {/* Rank Column */}
+                          <td style={{ padding: '10px 6px', textAlign: 'center' }}>
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: 22,
+                                height: 22,
+                                borderRadius: '50%',
+                                background: rankStyle.bg,
+                                color: rankStyle.color,
+                                fontSize: 11,
+                                fontWeight: 800,
+                                boxShadow: rankStyle.shadow,
+                                border: idx >= 3 ? '1px solid var(--border-color)' : 'none'
+                              }}
+                            >
+                              {idx + 1}
+                            </span>
+                          </td>
+
+                          {/* Tenant Name */}
+                          <td style={{ padding: '10px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <div
+                                style={{
+                                  width: 30,
+                                  height: 30,
+                                  borderRadius: '50%',
+                                  background: idx === 0
+                                    ? 'linear-gradient(135deg, #2563eb, #7c3aed)'
+                                    : idx === 1
+                                    ? 'linear-gradient(135deg, #059669, #10b981)'
+                                    : 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+                                  color: '#fff',
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  flexShrink: 0
+                                }}
+                              >
+                                {initials}
+                              </div>
+                              <div>
+                                <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 12.5 }}>{name}</div>
+                                <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{b.customer || 'Corporate Tenant'}</div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Booking Link */}
+                          <td style={{ padding: '10px' }}>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setBookingSearchFromQuotation(b.name || '');
+                                setCurrentTab('bookings');
+                              }}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                padding: '4px 10px',
+                                borderRadius: 8,
+                                background: 'rgba(37, 99, 235, 0.08)',
+                                border: '1px solid rgba(37, 99, 235, 0.25)',
+                                color: '#2563eb',
+                                fontWeight: 700,
+                                fontSize: 11,
+                                fontFamily: 'monospace',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                textDecoration: 'none'
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.background = '#2563eb';
+                                e.currentTarget.style.color = '#ffffff';
+                                e.currentTarget.style.boxShadow = '0 3px 10px rgba(37, 99, 235, 0.3)';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.background = 'rgba(37, 99, 235, 0.08)';
+                                e.currentTarget.style.color = '#2563eb';
+                                e.currentTarget.style.boxShadow = 'none';
+                              }}
+                              title={`Click to open booking ${b.name}`}
+                            >
+                              <ExternalLink size={12} />
+                              <span>{b.name}</span>
+                            </button>
+                          </td>
+
+                          {/* Property / Space */}
+                          <td style={{ padding: '10px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                            {b.property || 'Estate Asset'}
+                          </td>
+
+                          {/* Contract Value */}
+                          <td style={{ padding: '10px', fontWeight: 700, color: '#10b981', fontSize: 12.5 }}>
+                            F${(parseFloat(b.booking_amount || b.paid_amount || 0)).toLocaleString()}
+                          </td>
+
+                          {/* Status */}
+                          <td style={{ padding: '10px' }}>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                padding: '3px 9px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                background: statusBg,
+                                color: statusColor,
+                                border: `1px solid ${statusBorder}`,
+                                fontWeight: 700,
+                                borderRadius: 12
+                              }}
+                            >
+                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor, boxShadow: `0 0 6px ${statusColor}` }} />
+                              {rawStatus}
+                            </span>
+                          </td>
+
+                          {/* Action Button */}
+                          <td style={{ padding: '10px', textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setBookingSearchFromQuotation(b.name || '');
+                                setCurrentTab('bookings');
+                              }}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3,
+                                padding: '4px 8px',
+                                borderRadius: 6,
+                                fontSize: 11,
+                                fontWeight: 600,
+                                background: 'var(--bg-tertiary)',
+                                color: 'var(--brand-color)',
+                                border: '1px solid var(--border-color)',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease'
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.background = 'var(--brand-color)';
+                                e.currentTarget.style.color = '#fff';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.background = 'var(--bg-tertiary)';
+                                e.currentTarget.style.color = 'var(--brand-color)';
+                              }}
+                            >
+                              <span>Open</span>
+                              <ArrowUpRight size={11} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan="7" style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--text-muted)', fontSize: 12 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                          <span>No booking records found with status "<strong>{topBookingStatusFilter}</strong>"</span>
+                          {topBookingStatusFilter !== 'All' && (
+                            <button
+                              type="button"
+                              onClick={() => setTopBookingStatusFilter('All')}
+                              style={{
+                                marginTop: 4,
+                                padding: '4px 10px',
+                                fontSize: 11,
+                                borderRadius: 6,
+                                border: '1px solid var(--border-color)',
+                                background: 'var(--bg-tertiary)',
+                                color: 'var(--brand-color)',
+                                cursor: 'pointer',
+                                fontWeight: 600
+                              }}
+                            >
+                              Reset Filter to All Statuses
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Right: Financial Health & Aging Pulse */}
+          <div className="card-panel" style={{ margin: 0, padding: 22, borderRadius: 16, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <div>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Invoice Aging Radar</h3>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Receivables risk segmentation</span>
+                </div>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => setCurrentTab('invoices')}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: 'var(--brand-color)',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <span>Ledger</span>
+                  <ArrowUpRight size={13} />
+                </button>
+              </div>
+
+              {/* Progress Bar Rows */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 11, marginTop: 4 }}>
+                {[
+                  { label: 'Current', amount: aging.current, color: '#10b981' },
+                  { label: '1 - 30 Days', amount: aging.overdue30, color: '#f59e0b' },
+                  { label: '31 - 60 Days', amount: aging.overdue60, color: '#ef4444' },
+                  { label: '61 - 90 Days', amount: aging.overdue90, color: '#9333ea' },
+                  { label: '90+ Days', amount: aging.overdueMore, color: '#475569' }
+                ].map((item, idx) => {
+                  const totalOutstanding = aging.current + aging.overdue30 + aging.overdue60 + aging.overdue90 + aging.overdueMore || 1;
+                  const percentage = Math.round((item.amount / totalOutstanding) * 100);
+                  return (
+                    <div key={idx} style={{ fontSize: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{item.label}</span>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>F${item.amount.toLocaleString()} ({percentage}%)</span>
+                      </div>
+                      <div style={{ width: '100%', height: 6, background: 'var(--bg-tertiary)', borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ width: `${percentage}%`, height: '100%', background: item.color, borderRadius: 3 }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Quick Maintenance Health Pill */}
+            <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Hammer size={16} style={{ color: 'var(--brand-color)' }} />
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Maintenance Health</span>
+              </div>
+              <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 8, background: dashboardStats.pendingMaintenance > 5 ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)', color: dashboardStats.pendingMaintenance > 5 ? '#ef4444' : '#10b981' }}>
+                {dashboardStats.pendingMaintenance} Pending Orders
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 5. Executive Floating Add Button (FAB) & Speed-Dial Quick Create Menu */}
+        <div style={{ position: 'fixed', bottom: 32, right: 32, zIndex: 9999 }}>
+          <style>{`
+            @keyframes pmsFabMenuOpen {
+              0% { opacity: 0; transform: translateY(16px) scale(0.92); }
+              100% { opacity: 1; transform: translateY(0) scale(1); }
+            }
+            @keyframes pmsFabPulse {
+              0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45); }
+              70% { box-shadow: 0 0 0 14px rgba(37, 99, 235, 0); }
+              100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+            }
+          `}</style>
+
+          {/* Semi-transparent Backdrop for outside-click dismissal */}
+          {dashboardFabOpen && (
+            <div
+              onClick={() => setDashboardFabOpen(false)}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(15, 23, 42, 0.28)',
+                backdropFilter: 'blur(3px)',
+                WebkitBackdropFilter: 'blur(3px)',
+                zIndex: 9998
+              }}
+            />
+          )}
+
+          {/* Quick Actions Speed-Dial Popup Menu */}
+          {dashboardFabOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                bottom: 72,
+                right: 0,
+                width: 290,
+                background: 'var(--card-bg, #ffffff)',
+                border: '1px solid var(--border-color, #e2e8f0)',
+                borderRadius: 20,
+                padding: '12px 10px',
+                boxShadow: '0 24px 48px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.15)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+                zIndex: 9999,
+                animation: 'pmsFabMenuOpen 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards'
+              }}
+            >
+              {/* Menu Header */}
+              <div
+                style={{
+                  padding: '6px 12px 10px 12px',
+                  borderBottom: '1px solid var(--border-color)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Sparkles size={14} style={{ color: 'var(--brand-color)' }} />
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
+                    Quick Create
+                  </span>
+                </div>
+                <span
+                  style={{
+                    fontSize: 10,
+                    padding: '2px 8px',
+                    borderRadius: 10,
+                    background: 'rgba(37,99,235,0.1)',
+                    color: 'var(--brand-color)',
+                    fontWeight: 700
+                  }}
+                >
+                  Direct Add
+                </span>
+              </div>
+
+              {/* Action Items List */}
+              {[
+                {
+                  title: 'New Booking',
+                  subtitle: 'Reserve property unit & start lease',
+                  icon: <Bookmark size={17} />,
+                  bg: 'rgba(37, 99, 235, 0.12)',
+                  color: '#2563eb',
+                  onClick: () => {
+                    setBookingSearchFromQuotation('');
+                    setCurrentTab('bookings');
+                  }
+                },
+                {
+                  title: 'New Quotation',
+                  subtitle: 'Draft rate proposal for prospect',
+                  icon: <FileSignature size={17} />,
+                  bg: 'rgba(139, 92, 246, 0.12)',
+                  color: '#8b5cf6',
+                  onClick: () => setCurrentTab('quotation')
+                },
+                {
+                  title: 'Add Property',
+                  subtitle: 'Register estate building or unit',
+                  icon: <Building size={17} />,
+                  bg: 'rgba(16, 185, 129, 0.12)',
+                  color: '#10b981',
+                  onClick: () => setCurrentTab('properties')
+                },
+                {
+                  title: 'Tenant Onboarding',
+                  subtitle: 'Initiate tenant verification workflow',
+                  icon: <UserCheck size={17} />,
+                  bg: 'rgba(245, 158, 11, 0.12)',
+                  color: '#f59e0b',
+                  onClick: () => setCurrentTab('tenant-onboarding')
+                },
+                {
+                  title: 'Maintenance Task',
+                  subtitle: 'Log inspection or repair request',
+                  icon: <Hammer size={17} />,
+                  bg: 'rgba(239, 68, 68, 0.12)',
+                  color: '#ef4444',
+                  onClick: () => setCurrentTab('maintenance')
+                },
+                {
+                  title: 'Payment Entry',
+                  subtitle: 'Record tenant payment receipt',
+                  icon: <CreditCard size={17} />,
+                  bg: 'rgba(6, 182, 212, 0.12)',
+                  color: '#06b6d4',
+                  onClick: () => setCurrentTab('payment-entry')
+                }
+              ].map((act, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    setDashboardFabOpen(false);
+                    act.onClick();
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '8px 10px',
+                    borderRadius: 12,
+                    border: 'none',
+                    background: 'transparent',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    transition: 'all 0.18s ease',
+                    width: '100%'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--bg-tertiary, #f1f5f9)';
+                    e.currentTarget.style.transform = 'translateX(-3px)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent';
+                    e.currentTarget.style.transform = 'none';
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 10,
+                      background: act.bg,
+                      color: act.color,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}
+                  >
+                    {act.icon}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {act.title}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {act.subtitle}
+                    </div>
+                  </div>
+                  <ArrowUpRight size={14} style={{ color: 'var(--text-muted)', opacity: 0.6 }} />
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Main Floating Trigger Button */}
+          <button
+            type="button"
+            id="dashboard-floating-add-btn"
+            onClick={() => setDashboardFabOpen(prev => !prev)}
+            title={dashboardFabOpen ? "Close Quick Actions" : "Create New... (Quick Add)"}
+            style={{
+              position: 'relative',
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              height: 56,
+              minWidth: 56,
+              padding: dashboardFabOpen ? '0 18px' : '0 20px 0 16px',
+              borderRadius: 28,
+              background: 'linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)',
+              color: '#ffffff',
+              border: '2px solid rgba(255, 255, 255, 0.3)',
+              boxShadow: dashboardFabOpen
+                ? '0 10px 25px -3px rgba(37, 99, 235, 0.6), 0 0 0 6px rgba(37, 99, 235, 0.2)'
+                : '0 12px 28px -4px rgba(37, 99, 235, 0.5), 0 4px 12px rgba(0, 0, 0, 0.15)',
+              cursor: 'pointer',
+              transition: 'all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
+              animation: dashboardFabOpen ? 'none' : 'pmsFabPulse 2.8s infinite'
+            }}
+            onMouseEnter={(e) => {
+              if (!dashboardFabOpen) {
+                e.currentTarget.style.transform = 'scale(1.06) translateY(-2px)';
+                e.currentTarget.style.boxShadow = '0 18px 32px -4px rgba(37, 99, 235, 0.6), 0 6px 14px rgba(0, 0, 0, 0.2)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!dashboardFabOpen) {
+                e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.boxShadow = '0 12px 28px -4px rgba(37, 99, 235, 0.5), 0 4px 12px rgba(0, 0, 0, 0.15)';
+              }
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
+                transform: dashboardFabOpen ? 'rotate(135deg)' : 'rotate(0deg)'
+              }}
+            >
+              <Plus size={24} strokeWidth={2.6} />
+            </div>
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                letterSpacing: '0.02em',
+                whiteSpace: 'nowrap',
+                userSelect: 'none'
+              }}
+            >
+              {dashboardFabOpen ? 'Close' : 'Quick Add'}
+            </span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
 
   const handleGoToBooking = (quotationDoc) => {
     const quotationId = quotationDoc?.booking_id || quotationDoc?.quotation || quotationDoc?.name || quotationDoc?.quotation_id || '';
@@ -6073,6 +7988,8 @@ export default function App() {
         return (
           <Properties
             properties={properties}
+            preSelectedProperty={preSelectedProperty}
+            clearPreSelectedProperty={() => setPreSelectedProperty(null)}
             onAddProperty={handleAddProperty}
             onToggleListOnline={handleToggleListOnline}
             erpnextConfig={ERPNEXT_CONFIG}
@@ -6212,8 +8129,12 @@ export default function App() {
             onClearInitialQuotation={() => setSelectedQuotationId('')}
           />
         );
+      case 'overview':
+        return renderDashboardOverview('overview');
+      case 'dashboard':
+        return renderExecutiveDashboardView();
       default:
-        return renderDashboardOverview();
+        return renderDashboardOverview(currentTab);
     }
   };
 
@@ -6761,6 +8682,7 @@ export default function App() {
   }
 
   const getCategoryForTab = (tab) => {
+    if (['overview', 'dashboard'].includes(tab)) return 'overview';
     if (['properties', 'bookings', 'listings', 'mall-3d'].includes(tab)) return 'operations';
     if (['owners', 'tenants', 'tenant-onboarding'].includes(tab)) return 'people';
     if (['quotation', 'invoices', 'payment-entry'].includes(tab)) return 'sales';
@@ -6789,9 +8711,13 @@ export default function App() {
         </div>
 
         <ul className="sidebar-menu">
-          <li className={`menu-item ${currentTab === 'dashboard' ? 'active' : ''}`} onClick={() => setCurrentTab('dashboard')}>
+          <li className={`menu-item ${currentTab === 'overview' ? 'active' : ''}`} onClick={() => setCurrentTab('overview')}>
             <LayoutDashboard size={18} />
             <span>Overview</span>
+          </li>
+          <li className={`menu-item ${currentTab === 'dashboard' ? 'active' : ''}`} onClick={() => setCurrentTab('dashboard')}>
+            <BarChart2 size={18} />
+            <span>Dashboard</span>
           </li>
 
           <div className={`sidebar-category-header ${getCategoryForTab(currentTab) === 'operations' ? 'active' : ''}`}>

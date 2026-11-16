@@ -5726,10 +5726,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     if (parts.length > 3) {
       const lastNum = parseInt(parts[parts.length - 1], 10);
       if (!isNaN(lastNum)) {
-        // -1 (standard Frappe 1st amendment) is Version 2
-        // -2 (e.g. QTN-10-00531-2) is Version 2
-        // -3 is Version 3, etc.
-        const vNum = lastNum === 1 ? 2 : lastNum;
+        // Root is V1. Suffix -1 is 1st amendment (Version 2). Suffix -2 is 2nd amendment (Version 3), etc.
+        const vNum = lastNum + 1;
         return { version_no: vNum, isAmendment: true };
       }
     }
@@ -6094,11 +6092,15 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             versionList.push(doc);
           }
 
-          // Sort in ascending order of version number
+          // Sort in ascending order of version number, then timestamp
           versionList.sort((a, b) => {
             const vA = getQuotationVersionInfo(a.name, rootName).version_no;
             const vB = getQuotationVersionInfo(b.name, rootName).version_no;
-            return vA - vB;
+            if (vA !== vB) return vA - vB;
+            const dateA = new Date(a.creation || a.transaction_date || 0).getTime();
+            const dateB = new Date(b.creation || b.transaction_date || 0).getTime();
+            if (dateA !== dateB) return dateA - dateB;
+            return a.name.localeCompare(b.name);
           });
 
           // Fetch items child table for other versions so comparison has complete data
@@ -6125,11 +6127,15 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           detailedVersions = [doc];
         }
 
-        // Sort detailedVersions ascending by version_no
+        // Sort detailedVersions ascending by version_no, then timestamp
         detailedVersions.sort((a, b) => {
           const vA = getQuotationVersionInfo(a.name, rootName).version_no;
           const vB = getQuotationVersionInfo(b.name, rootName).version_no;
-          return vA - vB;
+          if (vA !== vB) return vA - vB;
+          const dateA = new Date(a.creation || a.transaction_date || 0).getTime();
+          const dateB = new Date(b.creation || b.transaction_date || 0).getTime();
+          if (dateA !== dateB) return dateA - dateB;
+          return a.name.localeCompare(b.name);
         });
 
         // 3. Resolve active document (if preferLatest enabled and multiple versions exist, select the last version)
@@ -6150,8 +6156,17 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         setSelectedQuotationDetail(activeDoc);
 
         // 4. Build version history / negotiations array from actual quotation documents
+        let highestAssignedVer = 0;
         const parsedNegotiations = detailedVersions.map((vDoc, index) => {
           const vInfo = getQuotationVersionInfo(vDoc.name, rootName);
+          let assignedVer = vInfo.version_no;
+          if (index === 0) {
+            assignedVer = 1;
+          } else if (assignedVer <= highestAssignedVer) {
+            assignedVer = highestAssignedVer + 1;
+          }
+          highestAssignedVer = assignedVer;
+
           const commItem = (vDoc.items || []).find(isCommercialItem);
           const itemDisc = commItem && commItem.discount_amount !== undefined ? parseFloat(commItem.discount_amount) : 0;
           const docDisc = parseFloat(vDoc.discount_amount) || 0;
@@ -6177,7 +6192,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
           return {
             name: vDoc.name,
-            version_no: vInfo.version_no,
+            version_no: assignedVer,
             total_versions: detailedVersions.length,
             is_current: vDoc.name === activeName,
             negotiation_date: vDoc.custom_last_negotiation_date || vDoc.transaction_date || (vDoc.creation ? vDoc.creation.split(' ')[0] : '—'),
@@ -6270,7 +6285,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         familyQuotes.sort((a, b) => {
           const vA = getQuotationVersionInfo(a.name, rootName).version_no;
           const vB = getQuotationVersionInfo(b.name, rootName).version_no;
-          return vB - vA; // Latest version first
+          if (vB !== vA) return vB - vA; // Latest version first
+          const dateA = new Date(a.creation || a.transaction_date || 0).getTime();
+          const dateB = new Date(b.creation || b.transaction_date || 0).getTime();
+          if (dateB !== dateA) return dateB - dateA;
+          return b.name.localeCompare(a.name);
         });
         targetQuote = familyQuotes[0];
       }
@@ -7178,8 +7197,21 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
 
     const rootName = getRootQuotationName(versionTargetQuotation.name, versionTargetQuotation);
-    const vInfo = getQuotationVersionInfo(versionTargetQuotation.name, rootName);
-    const nextVersionNo = vInfo.version_no + 1;
+    const existingVerNos = [getQuotationVersionInfo(versionTargetQuotation.name, rootName).version_no];
+    if (Array.isArray(negotiations) && negotiations.length > 0) {
+      negotiations.forEach(n => {
+        if (n.version_no) existingVerNos.push(Number(n.version_no));
+      });
+    }
+    if (Array.isArray(quotations)) {
+      quotations.forEach(q => {
+        if (getRootQuotationName(q.name, q) === rootName) {
+          existingVerNos.push(getQuotationVersionInfo(q.name, rootName).version_no);
+        }
+      });
+    }
+    const maxFamilyVer = Math.max(1, ...existingVerNos);
+    const nextVersionNo = maxFamilyVer + 1;
 
     if (!(await confirm(`Create Version ${nextVersionNo} for quotation ${rootName}?`))) return;
 
@@ -7308,11 +7340,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             usedCustomApi = true;
           }
         } else {
-          const errText = await revRes.text();
-          console.warn('pms.utils.create_revised_quotation returned non-ok, falling back to direct flow:', errText);
+          console.info('Custom revision endpoint unavailable, executing direct revision flow...');
         }
       } catch (apiErr) {
-        console.warn('pms.utils.create_revised_quotation call failed, falling back to direct flow:', apiErr);
+        console.info('Custom revision endpoint unavailable, executing direct revision flow...');
       }
 
       // 2. Direct fallback flow if custom endpoint is not available
@@ -7417,19 +7448,24 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
           if (!cancelSuccess) {
             try {
-              await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(latestSource.name)}`, {
+              const putCancelRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(latestSource.name)}`, {
                 method: 'PUT',
                 credentials: 'include',
                 headers: getQuotationHeaders(),
                 body: JSON.stringify({ docstatus: 2, status: 'Cancelled' })
               });
+              if (putCancelRes.ok) cancelSuccess = true;
             } catch (e) {
               console.warn('Cancel PUT error:', e);
             }
           }
+
+          if (cancelSuccess) {
+            latestSource.docstatus = 2;
+          }
         }
 
-        // Step 3: Create Amended Quotation with versioned name format (e.g. QTN-10-00531-2)
+        // Step 3: Create Amended Quotation
         const versionNetTotal = erpItems.reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0);
         const baseSourceTotal = parseFloat(latestSource.net_total || latestSource.total || latestSource.base_net_total || 0);
         const taxSourceTotal = parseFloat(latestSource.total_taxes_and_charges || 0);
@@ -7444,15 +7480,9 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const versionTaxes = versionNetTotal * versionTaxRatePct;
         const versionGrandTotal = versionNetTotal + versionTaxes;
 
-        // Calculate version candidate name (e.g. QTN-10-00531 -> QTN-10-00531-2)
-        const parts = latestSource.name.split('-');
-        const nextNum = parts.length > 3 && !isNaN(parseInt(parts[parts.length - 1], 10))
-          ? parseInt(parts[parts.length - 1], 10) + 1
-          : 2;
-        const candidateName = `${rootName}-${nextNum}`;
+        const isSourceCancelled = latestSource.docstatus === 2;
 
         const payload = {
-          name: candidateName,
           order_type: "Sales",
           quotation_to: "Customer",
           party_name: latestSource.party_name || latestSource.customer,
@@ -7482,7 +7512,6 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           taxes_and_charges: latestSource.taxes_and_charges || "Fiji Tax - CFPL",
           custom_tenant_onboarding: prevOnboarding || latestSource.custom_tenant_onboarding || latestSource.tenant_onboarding || null,
           tenant_onboarding: prevOnboarding || latestSource.tenant_onboarding || latestSource.custom_tenant_onboarding || null,
-          amended_from: latestSource.name,
           items: erpItems,
           total: versionNetTotal,
           net_total: versionNetTotal,
@@ -7490,6 +7519,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           grand_total: versionGrandTotal,
           rounded_total: Math.round(versionGrandTotal)
         };
+
+        if (isSourceCancelled) {
+          payload.amended_from = latestSource.name;
+        }
 
         if (latestSource.taxes && Array.isArray(latestSource.taxes) && latestSource.taxes.length > 0) {
           payload.taxes = latestSource.taxes.map(t => {
@@ -7509,6 +7542,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         if (versionNote && versionNote.trim()) {
           payload.remarks = `Version ${nextVersionNo}: ${versionNote.trim()}`;
           payload.custom_negotiation_status = versionNote.trim();
+        } else {
+          payload.remarks = `Version ${nextVersionNo} (Revised from ${latestSource.name})`;
         }
 
         let res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
@@ -7517,6 +7552,19 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           headers: getQuotationHeaders(),
           body: JSON.stringify(payload)
         });
+
+        if (!res.ok && payload.amended_from) {
+          // If ERPNext rejected due to amended_from validation (e.g. source not cancelled in db),
+          // retry seamlessly without amended_from so creation never fails
+          const retryPayload = { ...payload };
+          delete retryPayload.amended_from;
+          res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify(retryPayload)
+          });
+        }
 
         if (!res.ok) {
           let rawMsg = 'Failed to create new quotation version.';
@@ -7539,7 +7587,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         }
 
         const created = await res.json();
-        createdName = (created.data || created)?.name || candidateName;
+        createdName = (created.data || created)?.name || `${rootName}-${nextVersionNo}`;
       }
 
       // Post comment if note provided
@@ -11241,7 +11289,23 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     </h2>
                     {(() => {
                       const root = getRootQuotationName(versionTargetQuotation.name, versionTargetQuotation);
-                      const vInfo = getQuotationVersionInfo(versionTargetQuotation.name, root);
+                      const currentVInfo = getQuotationVersionInfo(versionTargetQuotation.name, root);
+                      const existingVerNos = [currentVInfo.version_no];
+                      if (Array.isArray(negotiations) && negotiations.length > 0) {
+                        negotiations.forEach(n => {
+                          if (n.version_no) existingVerNos.push(Number(n.version_no));
+                        });
+                      }
+                      if (Array.isArray(quotations)) {
+                        quotations.forEach(q => {
+                          if (getRootQuotationName(q.name, q) === root) {
+                            existingVerNos.push(getQuotationVersionInfo(q.name, root).version_no);
+                          }
+                        });
+                      }
+                      const maxFamilyVer = Math.max(1, ...existingVerNos);
+                      const nextVer = maxFamilyVer + 1;
+
                       return (
                         <span style={{
                           fontSize: 11,
@@ -11252,7 +11316,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                           color: '#1e40af',
                           border: '1px solid #bfdbfe'
                         }}>
-                          Version {vInfo.version_no} → Version {vInfo.version_no + 1}
+                          Version {currentVInfo.version_no} → Version {nextVer}
                         </span>
                       );
                     })()}
