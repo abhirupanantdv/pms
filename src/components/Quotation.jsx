@@ -5300,12 +5300,12 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
   // Company Details (matching Invoice format)
   const [companyDetails, setCompanyDetails] = useState({
-    name: 'CARPENTERS PROPERTIES PTE LTD',
-    address: '123 Cecil Street, #08-01, Singapore 069537',
-    phone: '+65 6123 4567',
-    email: 'info@carpentersproperties.com',
-    website: 'www.carpentersproperties.com',
-    currency: 'SGD'
+    name: 'CARPENTERS PROPERTIES PTE LIMITED',
+    address: 'Suva, Fiji',
+    phone: '',
+    email: '',
+    website: '',
+    currency: 'FJD'
   });
 
   // Selected Customer Address and Contact for current print view
@@ -5332,8 +5332,28 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     if (!erpnextConfig || !erpnextConfig.url) return;
     const fetchCompany = async () => {
       try {
-        const companyName = "CARPENTERS PROPERTIES PTE LIMITED";
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Company/${encodeURIComponent(companyName)}`, {
+        let targetCompany = "CARPENTERS PROPERTIES PTE LIMITED";
+        try {
+          const listRes = await fetch(`${erpnextConfig.url}/api/resource/Company?fields=["name","company_name","default_currency"]&limit_page_length=10`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (listRes.ok) {
+            const listJson = await listRes.json();
+            const comps = listJson.data || [];
+            if (comps.length > 0) {
+              const matched = comps.find(c => {
+                const upper = (c.name || '').toUpperCase();
+                return upper.includes('CARPENTERS') || upper.includes('PROPERTIES');
+              }) || comps[0];
+              if (matched?.name) {
+                targetCompany = matched.name;
+              }
+            }
+          }
+        } catch (_) { }
+
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Company/${encodeURIComponent(targetCompany)}`, {
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json'
@@ -5342,19 +5362,20 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         if (res.ok) {
           const json = await res.json();
           const doc = json.data || json;
+          const finalName = doc.name || targetCompany;
           setCompanyDetails(prev => ({
             ...prev,
-            name: doc.name || prev.name,
-            currency: doc.default_currency || prev.currency,
+            name: finalName,
+            currency: doc.default_currency || 'FJD',
           }));
-          if (doc.name) {
-            setQuoteCompany(doc.name);
+          if (finalName) {
+            setQuoteCompany(finalName);
           }
 
           // Fetch Address
           const filters = encodeURIComponent(JSON.stringify([
             ["Dynamic Link", "link_doctype", "=", "Company"],
-            ["Dynamic Link", "link_name", "=", doc.name]
+            ["Dynamic Link", "link_name", "=", finalName]
           ]));
           const addrRes = await fetch(`${erpnextConfig.url}/api/resource/Address?filters=${filters}&fields=["address_line1","address_line2","city","state","country","pincode","phone","email_id"]`, {
             credentials: 'include',
@@ -5376,6 +5397,12 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
               }));
             }
           }
+        } else {
+          setCompanyDetails(prev => ({
+            ...prev,
+            name: targetCompany
+          }));
+          setQuoteCompany(targetCompany);
         }
       } catch (err) {
         console.warn('Failed fetching company details:', err);
@@ -5726,7 +5753,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     if (parts.length > 3) {
       const lastNum = parseInt(parts[parts.length - 1], 10);
       if (!isNaN(lastNum)) {
-        // Root is V1. Suffix -1 is 1st amendment (Version 2). Suffix -2 is 2nd amendment (Version 3), etc.
+        // -1 (standard Frappe 1st amendment) is Version 2
+        // -2 is Version 3, etc.
         const vNum = lastNum + 1;
         return { version_no: vNum, isAmendment: true };
       }
@@ -6092,15 +6120,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             versionList.push(doc);
           }
 
-          // Sort in ascending order of version number, then timestamp
+          // Sort in ascending order of version number
           versionList.sort((a, b) => {
             const vA = getQuotationVersionInfo(a.name, rootName).version_no;
             const vB = getQuotationVersionInfo(b.name, rootName).version_no;
-            if (vA !== vB) return vA - vB;
-            const dateA = new Date(a.creation || a.transaction_date || 0).getTime();
-            const dateB = new Date(b.creation || b.transaction_date || 0).getTime();
-            if (dateA !== dateB) return dateA - dateB;
-            return a.name.localeCompare(b.name);
+            return vA - vB;
           });
 
           // Fetch items child table for other versions so comparison has complete data
@@ -6127,15 +6151,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           detailedVersions = [doc];
         }
 
-        // Sort detailedVersions ascending by version_no, then timestamp
+        // Sort detailedVersions ascending by version_no
         detailedVersions.sort((a, b) => {
           const vA = getQuotationVersionInfo(a.name, rootName).version_no;
           const vB = getQuotationVersionInfo(b.name, rootName).version_no;
-          if (vA !== vB) return vA - vB;
-          const dateA = new Date(a.creation || a.transaction_date || 0).getTime();
-          const dateB = new Date(b.creation || b.transaction_date || 0).getTime();
-          if (dateA !== dateB) return dateA - dateB;
-          return a.name.localeCompare(b.name);
+          return vA - vB;
         });
 
         // 3. Resolve active document (if preferLatest enabled and multiple versions exist, select the last version)
@@ -6156,17 +6176,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         setSelectedQuotationDetail(activeDoc);
 
         // 4. Build version history / negotiations array from actual quotation documents
-        let highestAssignedVer = 0;
         const parsedNegotiations = detailedVersions.map((vDoc, index) => {
           const vInfo = getQuotationVersionInfo(vDoc.name, rootName);
-          let assignedVer = vInfo.version_no;
-          if (index === 0) {
-            assignedVer = 1;
-          } else if (assignedVer <= highestAssignedVer) {
-            assignedVer = highestAssignedVer + 1;
-          }
-          highestAssignedVer = assignedVer;
-
           const commItem = (vDoc.items || []).find(isCommercialItem);
           const itemDisc = commItem && commItem.discount_amount !== undefined ? parseFloat(commItem.discount_amount) : 0;
           const docDisc = parseFloat(vDoc.discount_amount) || 0;
@@ -6192,7 +6203,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
           return {
             name: vDoc.name,
-            version_no: assignedVer,
+            version_no: vInfo.version_no,
             total_versions: detailedVersions.length,
             is_current: vDoc.name === activeName,
             negotiation_date: vDoc.custom_last_negotiation_date || vDoc.transaction_date || (vDoc.creation ? vDoc.creation.split(' ')[0] : '—'),
@@ -6285,11 +6296,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         familyQuotes.sort((a, b) => {
           const vA = getQuotationVersionInfo(a.name, rootName).version_no;
           const vB = getQuotationVersionInfo(b.name, rootName).version_no;
-          if (vB !== vA) return vB - vA; // Latest version first
-          const dateA = new Date(a.creation || a.transaction_date || 0).getTime();
-          const dateB = new Date(b.creation || b.transaction_date || 0).getTime();
-          if (dateB !== dateA) return dateB - dateA;
-          return b.name.localeCompare(a.name);
+          return vB - vA; // Latest version first
         });
         targetQuote = familyQuotes[0];
       }
@@ -6672,7 +6679,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
 
     setQuoteCustomer('');
     setQuotetamplate('');
-    setQuoteCompany(companyDetails?.name || 'CARPENTERS PROPERTIES PTE LIMITED');
+    const baseComp = (companyDetails?.name || quoteCompany || 'CARPENTERS PROPERTIES PTE LIMITED').trim();
+    setQuoteCompany(baseComp === 'CARPENTERS PROPERTIES PTE LTD' ? 'CARPENTERS PROPERTIES PTE LIMITED' : baseComp);
     setQuoteValidTill(validStr);
     setQuoteEstBookingStart(startStr);
     setQuoteEstBookingEnd(endStr);
@@ -6849,7 +6857,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         : quoteCustomer,
       transaction_date: formatDateToYMD(today),
       valid_till: quoteValidTill || formatDateToYMD(new Date(today.getTime() + (defaultValidityDays || 7) * 86400000)),
-      company: quoteCompany || companyDetails?.name || 'CARPENTERS PROPERTIES PTE LIMITED',
+      company: (() => {
+        const c = (quoteCompany || companyDetails?.name || 'CARPENTERS PROPERTIES PTE LIMITED').trim();
+        return c === 'CARPENTERS PROPERTIES PTE LTD' ? 'CARPENTERS PROPERTIES PTE LIMITED' : c;
+      })(),
       selling_price_list: "Standard Selling For Property Management",
       currency: companyDetails?.currency || "FJD",
       price_list_currency: companyDetails?.currency || "FJD",
@@ -6867,12 +6878,62 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     try {
       let createdName = null;
       if (erpnextConfig && erpnextConfig.url) {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+        let res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
           method: 'POST',
           credentials: 'include',
           headers: getQuotationHeaders(),
           body: JSON.stringify(payload)
         });
+
+        // Auto-recover if company name mismatch occurs
+        if (!res.ok) {
+          const errClone = res.clone();
+          let errText = '';
+          try {
+            errText = await errClone.text();
+          } catch (_) { }
+
+          if (errText.includes('Could not find Company') || (errText.includes('Company') && errText.includes('not found'))) {
+            try {
+              const compRes = await fetch(`${erpnextConfig.url}/api/resource/Company?fields=["name","default_currency"]&limit_page_length=10`, {
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' }
+              });
+              if (compRes.ok) {
+                const compJson = await compRes.json();
+                const comps = compJson.data || [];
+                const matchedComp = comps.find(c => {
+                  const u = (c.name || '').toUpperCase();
+                  return u.includes('CARPENTERS') || u.includes('PROPERTIES');
+                }) || comps[0];
+
+                if (matchedComp?.name && matchedComp.name !== payload.company) {
+                  payload.company = matchedComp.name;
+                  if (matchedComp.default_currency) {
+                    payload.currency = matchedComp.default_currency;
+                    payload.price_list_currency = matchedComp.default_currency;
+                  }
+                  setQuoteCompany(matchedComp.name);
+                  setCompanyDetails(prev => ({
+                    ...prev,
+                    name: matchedComp.name,
+                    currency: matchedComp.default_currency || prev.currency
+                  }));
+
+                  // Retry quotation creation with verified company
+                  res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: getQuotationHeaders(),
+                    body: JSON.stringify(payload)
+                  });
+                }
+              }
+            } catch (retryErr) {
+              console.warn('Company auto-resolve retry failed:', retryErr);
+            }
+          }
+        }
         if (!res.ok) {
           let rawMsg = 'Failed to create quotation on server.';
           const contentType = res.headers.get("content-type");
@@ -6990,19 +7051,19 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         fullDoc = { ...fullDoc, custom_tenant_onboarding: candidateOnboarding };
       } else if (fullDoc.amended_from || fullDoc.name.includes('-')) {
         const rootName = getRootQuotationName(fullDoc.name, fullDoc);
-        const rootDoc = quotations.find(q => (q.name === rootName || q.name === fullDoc.amended_from) && (q.custom_tenant_onboarding || q.tenant_onboarding));
+        const rootDoc = quotations.find(q => (q.name === rootName || q.name === fullDoc.amended_from) && q.custom_tenant_onboarding);
         if (rootDoc) {
-          fullDoc = { ...fullDoc, custom_tenant_onboarding: (rootDoc.custom_tenant_onboarding || rootDoc.tenant_onboarding || '').trim() };
+          fullDoc = { ...fullDoc, custom_tenant_onboarding: (rootDoc.custom_tenant_onboarding || '').trim() };
         } else if (erpnextConfig?.url) {
           try {
-            const rootRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(fullDoc.amended_from || rootName)}?fields=["name","custom_tenant_onboarding","tenant_onboarding"]`, {
+            const rootRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(fullDoc.amended_from || rootName)}?fields=["name","custom_tenant_onboarding"]`, {
               credentials: 'include',
               headers: { 'Content-Type': 'application/json' }
             });
             if (rootRes.ok) {
               const rootJson = await rootRes.json();
               const rData = rootJson.data || rootJson;
-              const foundOnb = (rData.custom_tenant_onboarding || rData.tenant_onboarding || '').trim();
+              const foundOnb = (rData.custom_tenant_onboarding || '').trim();
               if (foundOnb) {
                 fullDoc = { ...fullDoc, custom_tenant_onboarding: foundOnb };
               }
@@ -7197,21 +7258,8 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
     }
 
     const rootName = getRootQuotationName(versionTargetQuotation.name, versionTargetQuotation);
-    const existingVerNos = [getQuotationVersionInfo(versionTargetQuotation.name, rootName).version_no];
-    if (Array.isArray(negotiations) && negotiations.length > 0) {
-      negotiations.forEach(n => {
-        if (n.version_no) existingVerNos.push(Number(n.version_no));
-      });
-    }
-    if (Array.isArray(quotations)) {
-      quotations.forEach(q => {
-        if (getRootQuotationName(q.name, q) === rootName) {
-          existingVerNos.push(getQuotationVersionInfo(q.name, rootName).version_no);
-        }
-      });
-    }
-    const maxFamilyVer = Math.max(1, ...existingVerNos);
-    const nextVersionNo = maxFamilyVer + 1;
+    const vInfo = getQuotationVersionInfo(versionTargetQuotation.name, rootName);
+    const nextVersionNo = vInfo.version_no + 1;
 
     if (!(await confirm(`Create Version ${nextVersionNo} for quotation ${rootName}?`))) return;
 
@@ -7272,38 +7320,38 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
       });
 
       // Resolve custom_tenant_onboarding from previous quotation (versionTargetQuotation, selectedQuotationDetail, or family)
-      let prevOnboarding = (versionTargetQuotation.custom_tenant_onboarding || versionTargetQuotation.tenant_onboarding || '').trim();
+      let prevOnboarding = (versionTargetQuotation.custom_tenant_onboarding || '').trim();
       if (!prevOnboarding && selectedQuotationDetail && selectedQuotationDetail.name === versionTargetQuotation.name) {
-        prevOnboarding = (selectedQuotationDetail.custom_tenant_onboarding || selectedQuotationDetail.tenant_onboarding || '').trim();
+        prevOnboarding = (selectedQuotationDetail.custom_tenant_onboarding || '').trim();
       }
       if (!prevOnboarding && quotations && quotations.length > 0) {
         const matchInList = quotations.find(q =>
           (q.name === versionTargetQuotation.name || q.name === rootName || q.amended_from === rootName || q.name === versionTargetQuotation.amended_from) &&
-          (q.custom_tenant_onboarding || q.tenant_onboarding)
+          q.custom_tenant_onboarding
         );
         if (matchInList) {
-          prevOnboarding = (matchInList.custom_tenant_onboarding || matchInList.tenant_onboarding || '').trim();
+          prevOnboarding = (matchInList.custom_tenant_onboarding || '').trim();
         }
       }
       if (!prevOnboarding && erpnextConfig?.url) {
         try {
-          const qCheckRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(versionTargetQuotation.name)}?fields=["name","custom_tenant_onboarding","tenant_onboarding","amended_from"]`, {
+          const qCheckRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(versionTargetQuotation.name)}?fields=["name","custom_tenant_onboarding","amended_from"]`, {
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' }
           });
           if (qCheckRes.ok) {
             const qCheckJson = await qCheckRes.json();
             const qCheckDoc = qCheckJson.data || qCheckJson;
-            prevOnboarding = (qCheckDoc.custom_tenant_onboarding || qCheckDoc.tenant_onboarding || '').trim();
+            prevOnboarding = (qCheckDoc.custom_tenant_onboarding || '').trim();
             if (!prevOnboarding && (qCheckDoc.amended_from || rootName)) {
-              const rootCheckRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(qCheckDoc.amended_from || rootName)}?fields=["name","custom_tenant_onboarding","tenant_onboarding"]`, {
+              const rootCheckRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(qCheckDoc.amended_from || rootName)}?fields=["name","custom_tenant_onboarding"]`, {
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' }
               });
               if (rootCheckRes.ok) {
                 const rootCheckJson = await rootCheckRes.json();
                 const rootDoc = rootCheckJson.data || rootCheckJson;
-                prevOnboarding = (rootDoc.custom_tenant_onboarding || rootDoc.tenant_onboarding || '').trim();
+                prevOnboarding = (rootDoc.custom_tenant_onboarding || '').trim();
               }
             }
           }
@@ -7311,6 +7359,142 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           console.warn('Could not query previous quotation for custom_tenant_onboarding:', err);
         }
       }
+
+      // Helper function to submit old version, then cancel old version, and ensure previous versions are cancelled
+      const submitAndCancelOldQuotation = async (sourceQuotationName, rootQuotationName) => {
+        if (!erpnextConfig?.url) return;
+
+        // 1. Fetch fresh document from ERPNext to determine docstatus
+        let targetDoc = null;
+        try {
+          const fetchRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(sourceQuotationName)}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (fetchRes.ok) {
+            const fj = await fetchRes.json();
+            targetDoc = fj.data || fj;
+          }
+        } catch (_) { }
+
+        const currentDocstatus = targetDoc?.docstatus ?? 0;
+
+        // 2. Step 1: If Draft (docstatus === 0), SUBMIT old version
+        if (currentDocstatus === 0) {
+          let docCompany = (targetDoc?.company || '').trim();
+          if (!docCompany || docCompany === 'CARPENTERS PROPERTIES PTE LTD') {
+            docCompany = 'CARPENTERS PROPERTIES PTE LIMITED';
+          }
+
+          // Ensure payment details has at least 40 characters so submit validation succeeds
+          const payDetails = (targetDoc?.custom_payment_details || '').trim();
+          if (!targetDoc?.custom_service_quotation && payDetails.length < 40) {
+            try {
+              await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getQuotationHeaders(),
+                body: JSON.stringify({
+                  doctype: 'Quotation',
+                  name: sourceQuotationName,
+                  fieldname: 'custom_payment_details',
+                  value: 'Quotation submitted automatically to allow revision and amendment.'
+                })
+              });
+            } catch (_) { }
+          }
+
+          // Submit via frappe.client.submit
+          let submitted = false;
+          try {
+            const subRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.submit`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: getQuotationHeaders(),
+              body: JSON.stringify({
+                doc: { ...(targetDoc || {}), name: sourceQuotationName, doctype: 'Quotation', company: docCompany, docstatus: 1 }
+              })
+            });
+            const subJson = await subRes.json();
+            if (subRes.ok && !subJson.exc) {
+              submitted = true;
+            }
+          } catch (_) { }
+
+          // Fallback: try update_quotation_workflow
+          if (!submitted) {
+            try {
+              await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getQuotationHeaders(),
+                body: JSON.stringify({ quotation: sourceQuotationName, action: 'Submit' })
+              });
+            } catch (_) { }
+          }
+        }
+
+        // 3. Step 2: Now CANCEL the old version (docstatus === 2)
+        try {
+          await fetch(`${erpnextConfig.url}/api/method/frappe.client.cancel`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({ doctype: 'Quotation', name: sourceQuotationName })
+          });
+        } catch (_) { }
+
+        try {
+          await fetch(`${erpnextConfig.url}/api/method/pms.utils.cancel_quotation`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({ name: sourceQuotationName })
+          });
+        } catch (_) { }
+
+        // Also cancel all earlier versions in the family
+        try {
+          await fetch(`${erpnextConfig.url}/api/method/pms.utils.cancel_quotation_family`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify({ name: sourceQuotationName || rootQuotationName })
+          });
+        } catch (_) { }
+
+        if (Array.isArray(quotations)) {
+          for (const q of quotations) {
+            if (
+              (q.name === rootQuotationName || q.name.startsWith(`${rootQuotationName}-`)) &&
+              q.name !== sourceQuotationName &&
+              q.docstatus !== 2
+            ) {
+              try {
+                await fetch(`${erpnextConfig.url}/api/method/frappe.client.cancel`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getQuotationHeaders(),
+                  body: JSON.stringify({ doctype: 'Quotation', name: q.name })
+                });
+              } catch (_) { }
+              try {
+                await fetch(`${erpnextConfig.url}/api/method/pms.utils.cancel_quotation`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: getQuotationHeaders(),
+                  body: JSON.stringify({ name: q.name })
+                });
+              } catch (_) { }
+            }
+          }
+        }
+      };
+
+      const cancelQuotationAndFamily = submitAndCancelOldQuotation;
+
+      // Ensure the old version is submitted, then cancelled before creating amendment
+      await submitAndCancelOldQuotation(versionTargetQuotation.name, rootName);
 
       // 1. Primary path: Use dedicated server-side endpoint in pms.utils
       let createdName = null;
@@ -7327,8 +7511,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             start_date: versionStartDate,
             end_date: versionEndDate,
             remarks: versionNote && versionNote.trim() ? `Version ${nextVersionNo}: ${versionNote.trim()}` : '',
-            custom_tenant_onboarding: prevOnboarding || undefined,
-            tenant_onboarding: prevOnboarding || undefined
+            custom_tenant_onboarding: prevOnboarding || undefined
           })
         });
 
@@ -7340,10 +7523,11 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             usedCustomApi = true;
           }
         } else {
-          console.info('Custom revision endpoint unavailable, executing direct revision flow...');
+          const errText = await revRes.text();
+          console.warn('pms.utils.create_revised_quotation returned non-ok, falling back to direct flow:', errText);
         }
       } catch (apiErr) {
-        console.info('Custom revision endpoint unavailable, executing direct revision flow...');
+        console.warn('pms.utils.create_revised_quotation call failed, falling back to direct flow:', apiErr);
       }
 
       // 2. Direct fallback flow if custom endpoint is not available
@@ -7362,110 +7546,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
           console.warn('Could not fetch fresh source quotation:', fErr);
         }
 
-        // Step 1: Submit source quotation if Draft (docstatus === 0)
-        if (latestSource.docstatus === 0) {
-          if (!latestSource.custom_service_quotation && (latestSource.custom_payment_details || '').trim().length < 40) {
-            try {
-              await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: getQuotationHeaders(),
-                body: JSON.stringify({
-                  doctype: 'Quotation',
-                  name: latestSource.name,
-                  fieldname: 'custom_payment_details',
-                  value: 'Quotation submitted automatically to allow revision and amendment.'
-                })
-              });
-              latestSource.custom_payment_details = 'Quotation submitted automatically to allow revision and amendment.';
-            } catch (_) { }
-          }
+        // Old version: Submit then Cancel
+        await submitAndCancelOldQuotation(latestSource.name, rootName);
 
-          let submitSuccess = false;
-          try {
-            const submitRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.submit`, {
-              method: 'POST',
-              credentials: 'include',
-              headers: getQuotationHeaders(),
-              body: JSON.stringify({
-                doc: { ...latestSource, docstatus: 1 }
-              })
-            });
-            const submitJson = await submitRes.json();
-            if (submitRes.ok && !submitJson.exc) {
-              submitSuccess = true;
-            }
-          } catch (e) {
-            console.warn('Submit RPC error:', e);
-          }
-
-          if (!submitSuccess) {
-            try {
-              const putRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(latestSource.name)}`, {
-                method: 'PUT',
-                credentials: 'include',
-                headers: getQuotationHeaders(),
-                body: JSON.stringify({ docstatus: 1, status: 'Submitted' })
-              });
-              if (putRes.ok) submitSuccess = true;
-            } catch (e) {
-              console.warn('Submit PUT error:', e);
-            }
-          }
-
-          if (!submitSuccess) {
-            try {
-              await fetch(`${erpnextConfig.url}/api/method/update_quotation_workflow`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: getQuotationHeaders(),
-                body: JSON.stringify({
-                  quotation: latestSource.name,
-                  action: 'Submit'
-                })
-              });
-            } catch (_) { }
-          }
-        }
-
-        // Step 2: Cancel source quotation if Submitted (docstatus === 1)
-        if (latestSource.docstatus !== 2) {
-          let cancelSuccess = false;
-          try {
-            const cancelRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.cancel`, {
-              method: 'POST',
-              credentials: 'include',
-              headers: getQuotationHeaders(),
-              body: JSON.stringify({ doctype: 'Quotation', name: latestSource.name })
-            });
-            const cancelJson = await cancelRes.json();
-            if (cancelRes.ok && !cancelJson.exc) {
-              cancelSuccess = true;
-            }
-          } catch (cErr) {
-            console.warn('Cancel RPC error:', cErr);
-          }
-
-          if (!cancelSuccess) {
-            try {
-              const putCancelRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation/${encodeURIComponent(latestSource.name)}`, {
-                method: 'PUT',
-                credentials: 'include',
-                headers: getQuotationHeaders(),
-                body: JSON.stringify({ docstatus: 2, status: 'Cancelled' })
-              });
-              if (putCancelRes.ok) cancelSuccess = true;
-            } catch (e) {
-              console.warn('Cancel PUT error:', e);
-            }
-          }
-
-          if (cancelSuccess) {
-            latestSource.docstatus = 2;
-          }
-        }
-
-        // Step 3: Create Amended Quotation
+        // Step 3: Amend Quotation
         const versionNetTotal = erpItems.reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0);
         const baseSourceTotal = parseFloat(latestSource.net_total || latestSource.total || latestSource.base_net_total || 0);
         const taxSourceTotal = parseFloat(latestSource.total_taxes_and_charges || 0);
@@ -7480,114 +7564,209 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         const versionTaxes = versionNetTotal * versionTaxRatePct;
         const versionGrandTotal = versionNetTotal + versionTaxes;
 
-        const isSourceCancelled = latestSource.docstatus === 2;
-
-        const payload = {
-          order_type: "Sales",
-          quotation_to: "Customer",
-          party_name: latestSource.party_name || latestSource.customer,
-          customer: latestSource.party_name || latestSource.customer,
-          customer_name: latestSource.customer_name,
-          contact_person: latestSource.contact_person || null,
-          contact_display: latestSource.contact_display || null,
-          contact_mobile: latestSource.contact_mobile || null,
-          contact_email: latestSource.contact_email || null,
-          customer_address: latestSource.customer_address || null,
-          address_display: latestSource.address_display || null,
-          transaction_date: formatDate(today),
-          valid_till: formatDate(validTill),
-          company: latestSource.company || quoteCompany || 'CARPENTERS PROPERTIES PTE LIMITED',
-          company_address: latestSource.company_address || null,
-          company_address_display: latestSource.company_address_display || null,
-          selling_price_list: latestSource.selling_price_list || "Standard Selling For Property Management",
-          currency: latestSource.currency || companyDetails?.currency || "FJD",
-          price_list_currency: latestSource.price_list_currency || companyDetails?.currency || "FJD",
-          conversion_rate: 1,
-          plc_conversion_rate: 1,
-          status: "Draft",
-          docstatus: 0,
-          custom_start_date: versionStartDate || null,
-          custom_end_date: versionEndDate || null,
-          custom_template: latestSource.custom_template || quotetamplate || "Quotation Template 1",
-          taxes_and_charges: latestSource.taxes_and_charges || "Fiji Tax - CFPL",
-          custom_tenant_onboarding: prevOnboarding || latestSource.custom_tenant_onboarding || latestSource.tenant_onboarding || null,
-          tenant_onboarding: prevOnboarding || latestSource.tenant_onboarding || latestSource.custom_tenant_onboarding || null,
-          items: erpItems,
-          total: versionNetTotal,
-          net_total: versionNetTotal,
-          total_taxes_and_charges: versionTaxes,
-          grand_total: versionGrandTotal,
-          rounded_total: Math.round(versionGrandTotal)
-        };
-
-        if (isSourceCancelled) {
-          payload.amended_from = latestSource.name;
-        }
-
-        if (latestSource.taxes && Array.isArray(latestSource.taxes) && latestSource.taxes.length > 0) {
-          payload.taxes = latestSource.taxes.map(t => {
-            const rateVal = parseFloat(t.rate) || (versionTaxRatePct * 100);
-            const taxAmt = versionNetTotal * (rateVal / 100);
-            return {
-              charge_type: t.charge_type || 'On Net Total',
-              account_head: t.account_head,
-              description: t.description || `VAT @ ${rateVal}%`,
-              rate: rateVal,
-              tax_amount: taxAmt,
-              total: versionNetTotal + taxAmt
-            };
-          });
-        }
-
-        if (versionNote && versionNote.trim()) {
-          payload.remarks = `Version ${nextVersionNo}: ${versionNote.trim()}`;
-          payload.custom_negotiation_status = versionNote.trim();
-        } else {
-          payload.remarks = `Version ${nextVersionNo} (Revised from ${latestSource.name})`;
-        }
-
-        let res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: getQuotationHeaders(),
-          body: JSON.stringify(payload)
-        });
-
-        if (!res.ok && payload.amended_from) {
-          // If ERPNext rejected due to amended_from validation (e.g. source not cancelled in db),
-          // retry seamlessly without amended_from so creation never fails
-          const retryPayload = { ...payload };
-          delete retryPayload.amended_from;
-          res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+        // Try standard Frappe make_amended_doc RPC first
+        try {
+          const makeRes = await fetch(`${erpnextConfig.url}/api/method/frappe.client.make_amended_doc`, {
             method: 'POST',
             credentials: 'include',
             headers: getQuotationHeaders(),
-            body: JSON.stringify(retryPayload)
+            body: JSON.stringify({ doctype: 'Quotation', docname: latestSource.name })
           });
-        }
-
-        if (!res.ok) {
-          let rawMsg = 'Failed to create new quotation version.';
-          try {
-            const errData = await res.json();
-            if (errData._server_messages) {
-              try {
-                const msgs = JSON.parse(errData._server_messages);
-                rawMsg = JSON.parse(msgs[0]).message || rawMsg;
-              } catch (_) {
-                rawMsg = errData._server_messages;
+          if (makeRes.ok) {
+            const makeJson = await makeRes.json();
+            const draftDoc = makeJson.message;
+            if (draftDoc) {
+              draftDoc.items = erpItems;
+              draftDoc.total = versionNetTotal;
+              draftDoc.net_total = versionNetTotal;
+              draftDoc.grand_total = versionGrandTotal;
+              draftDoc.rounded_total = Math.round(versionGrandTotal);
+              draftDoc.total_taxes_and_charges = versionTaxes;
+              draftDoc.custom_start_date = versionStartDate || null;
+              draftDoc.custom_end_date = versionEndDate || null;
+              draftDoc.company = 'CARPENTERS PROPERTIES PTE LIMITED';
+              draftDoc.custom_tenant_onboarding = prevOnboarding || draftDoc.custom_tenant_onboarding || null;
+              if (versionNote && versionNote.trim()) {
+                draftDoc.remarks = `Version ${nextVersionNo}: ${versionNote.trim()}`;
+                draftDoc.custom_negotiation_status = versionNote.trim();
               }
-            } else if (errData.message) {
-              rawMsg = errData.message;
-            } else if (errData.exception) {
-              rawMsg = errData.exception;
+              const saveRes = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getQuotationHeaders(),
+                body: JSON.stringify(draftDoc)
+              });
+              if (saveRes.ok) {
+                const sJson = await saveRes.json();
+                createdName = (sJson.data || sJson)?.name || draftDoc.name;
+              }
             }
-          } catch (_) { }
-          throw new Error(rawMsg);
-        }
+          }
+        } catch (_) { }
 
-        const created = await res.json();
-        createdName = (created.data || created)?.name || `${rootName}-${nextVersionNo}`;
+        // If make_amended_doc did not produce createdName, proceed with structured payload
+        if (!createdName) {
+          const parts = latestSource.name.split('-');
+          let nextNum = parts.length > 3 && !isNaN(parseInt(parts[parts.length - 1], 10))
+            ? parseInt(parts[parts.length - 1], 10) + 1
+            : 1;
+          let candidateName = `${rootName}-${nextNum}`;
+          while (quotations && quotations.some(q => q.name === candidateName)) {
+            nextNum += 1;
+            candidateName = `${rootName}-${nextNum}`;
+          }
+
+          const payload = {
+            name: candidateName,
+            order_type: "Sales",
+            quotation_to: "Customer",
+            party_name: latestSource.party_name || latestSource.customer,
+            customer: latestSource.party_name || latestSource.customer,
+            customer_name: latestSource.customer_name,
+            contact_person: latestSource.contact_person || null,
+            contact_display: latestSource.contact_display || null,
+            contact_mobile: latestSource.contact_mobile || null,
+            contact_email: latestSource.contact_email || null,
+            customer_address: latestSource.customer_address || null,
+            address_display: latestSource.address_display || null,
+            transaction_date: formatDate(today),
+            valid_till: formatDate(validTill),
+            company: (() => {
+              const c = (latestSource.company || quoteCompany || companyDetails?.name || 'CARPENTERS PROPERTIES PTE LIMITED').trim();
+              return c === 'CARPENTERS PROPERTIES PTE LTD' ? 'CARPENTERS PROPERTIES PTE LIMITED' : c;
+            })(),
+            company_address: latestSource.company_address || null,
+            company_address_display: latestSource.company_address_display || null,
+            selling_price_list: latestSource.selling_price_list || "Standard Selling For Property Management",
+            currency: latestSource.currency || companyDetails?.currency || "FJD",
+            price_list_currency: latestSource.price_list_currency || companyDetails?.currency || "FJD",
+            conversion_rate: 1,
+            plc_conversion_rate: 1,
+            status: "Draft",
+            docstatus: 0,
+            custom_start_date: versionStartDate || null,
+            custom_end_date: versionEndDate || null,
+            custom_template: latestSource.custom_template || quotetamplate || "Quotation Template 1",
+            taxes_and_charges: latestSource.taxes_and_charges || "Fiji Tax - CFPL",
+            custom_tenant_onboarding: prevOnboarding || latestSource.custom_tenant_onboarding || null,
+            amended_from: latestSource.name,
+            items: erpItems,
+            total: versionNetTotal,
+            net_total: versionNetTotal,
+            total_taxes_and_charges: versionTaxes,
+            grand_total: versionGrandTotal,
+            rounded_total: Math.round(versionGrandTotal)
+          };
+
+          if (latestSource.taxes && Array.isArray(latestSource.taxes) && latestSource.taxes.length > 0) {
+            payload.taxes = latestSource.taxes.map(t => {
+              const rateVal = parseFloat(t.rate) || (versionTaxRatePct * 100);
+              const taxAmt = versionNetTotal * (rateVal / 100);
+              return {
+                charge_type: t.charge_type || 'On Net Total',
+                account_head: t.account_head,
+                description: t.description || `VAT @ ${rateVal}%`,
+                rate: rateVal,
+                tax_amount: taxAmt,
+                total: versionNetTotal + taxAmt
+              };
+            });
+          }
+
+          if (versionNote && versionNote.trim()) {
+            payload.remarks = `Version ${nextVersionNo}: ${versionNote.trim()}`;
+            payload.custom_negotiation_status = versionNote.trim();
+          }
+
+          let res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: getQuotationHeaders(),
+            body: JSON.stringify(payload)
+          });
+
+          // If failed because name already exists, increment candidate and retry
+          if (!res.ok) {
+            const errClone = res.clone();
+            const errCheck = await errClone.text();
+            if (errCheck.includes('already exists') || errCheck.includes('Duplicate')) {
+              nextNum += 1;
+              payload.name = `${rootName}-${nextNum}`;
+              res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getQuotationHeaders(),
+                body: JSON.stringify(payload)
+              });
+            }
+          }
+
+          // If insert failed because amended_from is not cancelled, submit then cancel again and retry
+          if (!res.ok) {
+            const errRaw = await res.clone().text();
+            if (errRaw.includes('cannot be amended because it is not cancelled')) {
+              await submitAndCancelOldQuotation(latestSource.name, rootName);
+
+              const { amended_from: _omit, ...retryPayload } = payload;
+              res = await fetch(`${erpnextConfig.url}/api/resource/Quotation`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getQuotationHeaders(),
+                body: JSON.stringify(retryPayload)
+              });
+
+              if (res.ok) {
+                const rCreated = await res.json();
+                const rName = (rCreated.data || rCreated)?.name || candidateName;
+                try {
+                  await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: getQuotationHeaders(),
+                    body: JSON.stringify({
+                      doctype: 'Quotation',
+                      name: rName,
+                      fieldname: 'amended_from',
+                      value: latestSource.name
+                    })
+                  });
+                } catch (_) { }
+              }
+            }
+          }
+
+          if (!res.ok) {
+            let rawMsg = 'Failed to create new quotation version.';
+            try {
+              const errText = await res.text();
+              if (errText) {
+                try {
+                  const errData = JSON.parse(errText);
+                  if (errData._server_messages) {
+                    const msgs = JSON.parse(errData._server_messages);
+                    const parsedInner = JSON.parse(msgs[0]);
+                    rawMsg = parsedInner.message || msgs[0] || rawMsg;
+                  } else if (errData.message) {
+                    rawMsg = errData.message;
+                  } else if (errData.exception) {
+                    rawMsg = errData.exception;
+                  }
+                } catch (_) {
+                  const m = errText.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i) || errText.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+                  if (m) {
+                    rawMsg = m[1].replace(/<[^>]*>/g, '').trim().slice(0, 300);
+                  } else {
+                    rawMsg = errText.slice(0, 300);
+                  }
+                }
+              }
+            } catch (_) { }
+            throw new Error(rawMsg);
+          }
+
+          const created = await res.json();
+          createdName = (created.data || created)?.name || candidateName;
+        }
       }
 
       // Post comment if note provided
@@ -7631,8 +7810,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
             credentials: 'include',
             headers: getQuotationHeaders(),
             body: JSON.stringify({
-              custom_tenant_onboarding: prevOnboarding,
-              tenant_onboarding: prevOnboarding
+              custom_tenant_onboarding: prevOnboarding
             })
           });
         } catch (putErr) {
@@ -7640,8 +7818,39 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
         }
       }
 
-      showToast('success', `Revised quotation ${createdName || ''} created successfully.`);
-      showAlert('Success', `Revised quotation ${createdName || ''} has been created successfully.`);
+      // Immediately cancel all previous family documents and update local frontend state
+      if (typeof submitAndCancelOldQuotation === 'function') {
+        submitAndCancelOldQuotation(versionTargetQuotation.name, rootName).catch(() => {});
+      }
+
+      // Mark all previous quotations in this family as 'Cancelled' in local state
+      setQuotations(prevQuotes => {
+        if (!Array.isArray(prevQuotes)) return prevQuotes;
+        return prevQuotes.map(q => {
+          if (
+            q.name !== createdName &&
+            (q.name === rootName || q.name.startsWith(`${rootName}-`) || q.name === versionTargetQuotation.name || q.amended_from === rootName)
+          ) {
+            return { ...q, status: 'Cancelled', docstatus: 2 };
+          }
+          return q;
+        });
+      });
+
+      // Update selectedQuotationDetail if it was the previous document
+      setSelectedQuotationDetail(prev => {
+        if (!prev) return null;
+        if (
+          prev.name !== createdName &&
+          (prev.name === rootName || prev.name.startsWith(`${rootName}-`) || prev.name === versionTargetQuotation.name)
+        ) {
+          return { ...prev, status: 'Cancelled', docstatus: 2 };
+        }
+        return prev;
+      });
+
+      showToast('success', `Revised quotation ${createdName || ''} created successfully. Previous versions cancelled.`);
+      showAlert('Success', `Revised quotation ${createdName || ''} has been created successfully. All previous versions have been cancelled.`);
       setShowNewVersionModal(false);
       await fetchQuotations();
 
@@ -11289,23 +11498,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     </h2>
                     {(() => {
                       const root = getRootQuotationName(versionTargetQuotation.name, versionTargetQuotation);
-                      const currentVInfo = getQuotationVersionInfo(versionTargetQuotation.name, root);
-                      const existingVerNos = [currentVInfo.version_no];
-                      if (Array.isArray(negotiations) && negotiations.length > 0) {
-                        negotiations.forEach(n => {
-                          if (n.version_no) existingVerNos.push(Number(n.version_no));
-                        });
-                      }
-                      if (Array.isArray(quotations)) {
-                        quotations.forEach(q => {
-                          if (getRootQuotationName(q.name, q) === root) {
-                            existingVerNos.push(getQuotationVersionInfo(q.name, root).version_no);
-                          }
-                        });
-                      }
-                      const maxFamilyVer = Math.max(1, ...existingVerNos);
-                      const nextVer = maxFamilyVer + 1;
-
+                      const vInfo = getQuotationVersionInfo(versionTargetQuotation.name, root);
                       return (
                         <span style={{
                           fontSize: 11,
@@ -11316,7 +11509,7 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                           color: '#1e40af',
                           border: '1px solid #bfdbfe'
                         }}>
-                          Version {currentVInfo.version_no} → Version {nextVer}
+                          Version {vInfo.version_no} → Version {vInfo.version_no + 1}
                         </span>
                       );
                     })()}
@@ -11325,10 +11518,10 @@ export default function Quotation({ erpnextConfig, properties = [], onGoToBookin
                     <span>Source: <strong style={{ color: '#0f172a' }}>{versionTargetQuotation.name}</strong></span>
                     <span>•</span>
                     <span>Customer: <strong style={{ color: '#0f172a' }}>{versionTargetQuotation.customer_name || versionTargetQuotation.party_name}</strong></span>
-                    {(versionTargetQuotation.custom_tenant_onboarding || versionTargetQuotation.tenant_onboarding) && (
+                    {versionTargetQuotation.custom_tenant_onboarding && (
                       <>
                         <span>•</span>
-                        <span>Tenant Onboarding: <strong style={{ color: '#0a6c66', fontWeight: 700 }}>{versionTargetQuotation.custom_tenant_onboarding || versionTargetQuotation.tenant_onboarding}</strong></span>
+                        <span>Tenant Onboarding: <strong style={{ color: '#0a6c66', fontWeight: 700 }}>{versionTargetQuotation.custom_tenant_onboarding}</strong></span>
                       </>
                     )}
                   </div>

@@ -3421,8 +3421,8 @@ export default function Maintenance({
       (u.item_code && u.item_code.toString().trim().toLowerCase() === trimmedCode.toLowerCase()) ||
       (u.item_name && u.item_name.toString().trim().toLowerCase() === trimmedCode.toLowerCase())
     );
-    if (inSched && (inSched.custom_property_group || inSched.custom_property_reference)) {
-      const propGroupVal = inSched.custom_property_group || inSched.custom_property_reference || '';
+    if (inSched && (inSched.custom_property_group || inSched.custom_property_reference || inSched.property_group)) {
+      const propGroupVal = inSched.custom_property_group || inSched.property_group || inSched.custom_property_reference || '';
       const result = {
         itemName: inSched.item_name || inSched.name || trimmedCode,
         propertyGroup: propGroupVal,
@@ -3438,78 +3438,90 @@ export default function Maintenance({
     let foundName = '';
     let foundItemGroup = '';
 
-    // Search Item DocType by itemCode for custom_property_group
     try {
-      const fields = encodeURIComponent(JSON.stringify(["name", "item_code", "item_name", "item_group", "custom_property_group", "custom_property_reference"]));
-
-      // 1. Try direct GET /api/resource/Item/{trimmedCode}
-      const res = await fetch(`${erpnextConfig.url}/api/resource/Item/${encodeURIComponent(trimmedCode)}?fields=${fields}`, {
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      if (res.ok) {
-        const json = await res.json();
-        const data = json.data || json || {};
-        foundPropGroup = data.custom_property_group || data.custom_property_reference || '';
-        foundName = data.item_name || data.name || trimmedCode;
-        foundItemGroup = data.item_group || '';
-      }
-
-      // 2. Try filter by item_code in Item DocType
-      if (!foundPropGroup) {
-        const itemFilters = encodeURIComponent(JSON.stringify([["item_code", "=", trimmedCode]]));
-        const listRes = await fetch(`${erpnextConfig.url}/api/resource/Item?filters=${itemFilters}&fields=${fields}&limit_page_length=1`, {
+      // 1. Try dedicated whitelisted backend API: pms.utils.get_unit_property_group
+      try {
+        const uRes = await fetch(`${erpnextConfig.url}/api/method/pms.utils.get_unit_property_group?item_code=${encodeURIComponent(trimmedCode)}`, {
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' }
         });
-        if (listRes.ok) {
-          const lJson = await listRes.json();
-          if (Array.isArray(lJson.data) && lJson.data.length > 0) {
-            const data = lJson.data[0];
-            foundPropGroup = data.custom_property_group || data.custom_property_reference || '';
-            if (!foundName) foundName = data.item_name || data.name || trimmedCode;
-            foundItemGroup = data.item_group || '';
+        if (uRes.ok) {
+          const uJson = await uRes.json();
+          const uMsg = uJson.message || uJson;
+          if (uMsg?.property_group_name || uMsg?.property_group) {
+            foundPropGroup = uMsg.property_group_name || uMsg.property_group || '';
+            foundName = uMsg.item_name || trimmedCode;
           }
         }
+      } catch (beErr) {
+        console.warn('pms.utils.get_unit_property_group call failed:', beErr);
       }
 
-      // 3. Try filter by name in Item DocType
+      // 2. Try direct GET /api/resource/Item/{trimmedCode} without fields param (never fails on unknown columns)
       if (!foundPropGroup) {
-        const nameFilters = encodeURIComponent(JSON.stringify([["name", "=", trimmedCode]]));
-        const nameRes = await fetch(`${erpnextConfig.url}/api/resource/Item?filters=${nameFilters}&fields=${fields}&limit_page_length=1`, {
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        if (nameRes.ok) {
-          const nJson = await nameRes.json();
-          if (Array.isArray(nJson.data) && nJson.data.length > 0) {
-            const data = nJson.data[0];
-            foundPropGroup = data.custom_property_group || data.custom_property_reference || '';
-            if (!foundName) foundName = data.item_name || data.name || trimmedCode;
+        try {
+          const res = await fetch(`${erpnextConfig.url}/api/resource/Item/${encodeURIComponent(trimmedCode)}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (res.ok) {
+            const json = await res.json();
+            const data = json.data || json || {};
+            foundPropGroup = data.custom_property_group || data.property_group || data.custom_property_reference || data.custom_property || data.property || data.custom_group || '';
+            foundName = data.item_name || data.name || trimmedCode;
             foundItemGroup = data.item_group || '';
           }
-        }
+        } catch (_) { }
       }
 
-      // 4. Try filter by item_name in Item DocType
+      // 3. Try filter by item_code in Item DocType
       if (!foundPropGroup) {
-        const itemNameFilters = encodeURIComponent(JSON.stringify([["item_name", "=", trimmedCode]]));
-        const inameRes = await fetch(`${erpnextConfig.url}/api/resource/Item?filters=${itemNameFilters}&fields=${fields}&limit_page_length=1`, {
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        if (inameRes.ok) {
-          const inJson = await inameRes.json();
-          if (Array.isArray(inJson.data) && inJson.data.length > 0) {
-            const data = inJson.data[0];
-            foundPropGroup = data.custom_property_group || data.custom_property_reference || '';
-            if (!foundName) foundName = data.item_name || data.name || trimmedCode;
-            foundItemGroup = data.item_group || '';
+        try {
+          const itemFilters = encodeURIComponent(JSON.stringify([["item_code", "=", trimmedCode]]));
+          const listRes = await fetch(`${erpnextConfig.url}/api/resource/Item?filters=${itemFilters}&limit_page_length=1`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (listRes.ok) {
+            const lJson = await listRes.json();
+            if (Array.isArray(lJson.data) && lJson.data.length > 0) {
+              const data = lJson.data[0];
+              foundPropGroup = data.custom_property_group || data.property_group || data.custom_property_reference || data.custom_property || data.property || '';
+              if (!foundName) foundName = data.item_name || data.name || trimmedCode;
+              foundItemGroup = data.item_group || '';
+            }
           }
+        } catch (_) { }
+      }
+
+      // 4. Try erpnext.api.get_unit
+      if (!foundPropGroup) {
+        try {
+          const apiRes = await fetch(`${erpnextConfig.url}/api/method/erpnext.api.get_unit?item_code=${encodeURIComponent(trimmedCode)}`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          if (apiRes.ok) {
+            const apiJson = await apiRes.json();
+            const aData = apiJson.message || apiJson.data || apiJson || {};
+            foundPropGroup = aData.custom_property_group || aData.property_group || aData.property || aData.custom_property_reference || '';
+            if (!foundName) foundName = aData.item_name || aData.name || trimmedCode;
+          }
+        } catch (_) { }
+      }
+
+      // 5. Match against properties prop
+      if (!foundPropGroup && Array.isArray(properties) && properties.length > 0) {
+        const propMatch = properties.find(p =>
+          (p.units && Array.isArray(p.units) && p.units.some(u => (u.id === trimmedCode || u.name === trimmedCode || u.unitCode === trimmedCode || u.item_code === trimmedCode))) ||
+          p.name === trimmedCode || p.id === trimmedCode
+        );
+        if (propMatch) {
+          foundPropGroup = propMatch.name || propMatch.id || '';
         }
       }
     } catch (e) {
-      console.warn('Item DocType search error for custom_property_group:', e);
+      console.warn('Item DocType search error for property_group:', e);
     } finally {
       setLoadingPropertyGroup(false);
     }
@@ -3536,33 +3548,51 @@ export default function Maintenance({
       setDetailPropertyGroup(directGroup);
     }
 
-    // Collect candidate identifiers (unit code / item name) from items child table, schedules, or selectedSchedule
-    const candidates = [];
-    if (Array.isArray(selectedSchedule.items)) {
-      selectedSchedule.items.forEach(it => {
-        if (it.item_code) candidates.push(it.item_code);
-        if (it.item_name) candidates.push(it.item_name);
-      });
-    }
-    if (Array.isArray(selectedSchedule.schedules)) {
-      selectedSchedule.schedules.forEach(s => {
-        if (s.item_code) candidates.push(s.item_code);
-        if (s.item_name) candidates.push(s.item_name);
-      });
-    }
-    if (selectedSchedule.custom_property) candidates.push(selectedSchedule.custom_property);
-    if (scheduleRows.length > 0) {
-      scheduleRows.forEach(r => {
-        if (r.item_code) candidates.push(r.item_code);
-      });
-    }
-
-    const uniqueCandidates = [...new Set(candidates.filter(Boolean).map(c => c.toString().trim()))];
-
     (async () => {
       setLoadingDetailPropertyGroup(true);
       let foundGroup = directGroup;
 
+      // 1. Resolve Property Group per Unit Code for each row in scheduleRows
+      if (Array.isArray(scheduleRows) && scheduleRows.length > 0) {
+        for (const row of scheduleRows) {
+          const uCode = (row.item_code || '').trim();
+          if (uCode) {
+            try {
+              const uDetails = await fetchItemDetails(uCode);
+              const pGroup = uDetails?.propertyGroup;
+              if (pGroup && isMounted) {
+                if (!foundGroup) {
+                  foundGroup = pGroup;
+                  setDetailPropertyGroup(pGroup);
+                }
+                setScheduleRows(prev => prev.map(pr =>
+                  (pr.id === row.id || pr.item_code === uCode)
+                    ? { ...pr, property_group: pGroup }
+                    : pr
+                ));
+              }
+            } catch (_) { }
+          }
+        }
+      }
+
+      // 2. Also check items, schedules child tables, custom_property
+      const candidates = [];
+      if (Array.isArray(selectedSchedule.items)) {
+        selectedSchedule.items.forEach(it => {
+          if (it.item_code) candidates.push(it.item_code);
+          if (it.item_name) candidates.push(it.item_name);
+        });
+      }
+      if (Array.isArray(selectedSchedule.schedules)) {
+        selectedSchedule.schedules.forEach(s => {
+          if (s.item_code) candidates.push(s.item_code);
+          if (s.item_name) candidates.push(s.item_name);
+        });
+      }
+      if (selectedSchedule.custom_property) candidates.push(selectedSchedule.custom_property);
+
+      const uniqueCandidates = [...new Set(candidates.filter(Boolean).map(c => c.toString().trim()))];
       for (const candidate of uniqueCandidates) {
         if (foundGroup) break;
         try {
@@ -3576,7 +3606,7 @@ export default function Maintenance({
         }
       }
 
-      // If still not found, check linked booking doc and its items
+      // 3. If still not found, check linked booking doc and its items
       const bookingId = selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number;
       if (!foundGroup && bookingId) {
         try {
@@ -3611,7 +3641,115 @@ export default function Maintenance({
     })();
 
     return () => { isMounted = false; };
-  }, [selectedSchedule?.name, selectedSchedule?.items, selectedSchedule?.custom_booking_id]);
+  }, [selectedSchedule?.name, selectedSchedule?.items, selectedSchedule?.custom_booking_id, scheduleRows.map(r => r.item_code).join(',')]);
+
+  // ── Auto-load Tasks for selectedSchedule from Task DocType ──
+  useEffect(() => {
+    if (!erpnextConfig?.url || !selectedSchedule?.name) return;
+    let isMounted = true;
+
+    (async () => {
+      try {
+        let fetchedTasks = [];
+        // 1. Primary: Use dedicated backend API in pms.utils
+        try {
+          const tRes = await fetch(
+            `${erpnextConfig.url}/api/method/pms.utils.get_schedule_tasks?schedule_name=${encodeURIComponent(selectedSchedule.name)}&booking_id=${encodeURIComponent(selectedSchedule.custom_booking_id || selectedSchedule.custom_booking_number || '')}`,
+            { credentials: 'include', headers: { 'Content-Type': 'application/json' } }
+          );
+          if (tRes.ok) {
+            const tJson = await tRes.json();
+            fetchedTasks = tJson.message?.tasks || tJson.tasks || [];
+          }
+        } catch (apiErr) {
+          console.warn('pms.utils.get_schedule_tasks error, trying direct Task search:', apiErr);
+        }
+
+        // 2. Fallback: Search /api/resource/Task by filters
+        if (!fetchedTasks || fetchedTasks.length === 0) {
+          try {
+            const f1 = encodeURIComponent(JSON.stringify([["custom_maintenance_schedule", "=", selectedSchedule.name]]));
+            const r1 = await fetch(`${erpnextConfig.url}/api/resource/Task?filters=${f1}&limit_page_length=100`, { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+            if (r1.ok) {
+              const j1 = await r1.json();
+              if (Array.isArray(j1.data) && j1.data.length > 0) fetchedTasks = j1.data;
+            }
+          } catch (_) { }
+
+          if (!fetchedTasks || fetchedTasks.length === 0) {
+            try {
+              const f2 = encodeURIComponent(JSON.stringify([["custom_mantainence_sechedule", "=", selectedSchedule.name]]));
+              const r2 = await fetch(`${erpnextConfig.url}/api/resource/Task?filters=${f2}&limit_page_length=100`, { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+              if (r2.ok) {
+                const j2 = await r2.json();
+                if (Array.isArray(j2.data) && j2.data.length > 0) fetchedTasks = j2.data;
+              }
+            } catch (_) { }
+          }
+
+          if (!fetchedTasks || fetchedTasks.length === 0) {
+            try {
+              const f3 = encodeURIComponent(JSON.stringify([["description", "like", `%${selectedSchedule.name}%`]]));
+              const r3 = await fetch(`${erpnextConfig.url}/api/resource/Task?filters=${f3}&limit_page_length=100`, { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+              if (r3.ok) {
+                const j3 = await r3.json();
+                if (Array.isArray(j3.data) && j3.data.length > 0) fetchedTasks = j3.data;
+              }
+            } catch (_) { }
+          }
+        }
+
+        if (!isMounted) return;
+
+        if (Array.isArray(fetchedTasks) && fetchedTasks.length > 0) {
+          // Merge fetched tasks into workOrders state so clicking them works
+          setWorkOrders(prev => {
+            const existingIds = new Set((prev || []).map(w => w.name || w.id));
+            const newTasks = fetchedTasks.filter(t => !existingIds.has(t.name));
+            if (newTasks.length === 0) return prev;
+            return [...newTasks.map(t => ({
+              ...t,
+              id: t.name,
+              property: t.custom_property_group || t.custom_property || '',
+              unit: t.custom_asset || '',
+              status: t.status || 'Open',
+              description: t.description || t.subject || '',
+              expStartDate: t.exp_start_date,
+              expEndDate: t.exp_end_date,
+              scheduleId: selectedSchedule.name
+            })), ...prev];
+          });
+
+          // Match tasks to scheduleRows by task_id, scheduled_date, unit code or description
+          setScheduleRows(prevRows => {
+            if (!Array.isArray(prevRows) || prevRows.length === 0) return prevRows;
+            return prevRows.map(row => {
+              const rDate = row.scheduled_date;
+              const matched = fetchedTasks.find(t =>
+                (row.task_id && t.name === row.task_id) ||
+                (t.exp_start_date && rDate && t.exp_start_date === rDate) ||
+                (t.description && (t.description.includes(row.id) || t.description.includes(row.schedule_id) || (rDate && t.description.includes(rDate)))) ||
+                (t.subject && (t.subject.includes(row.id) || (rDate && t.subject.includes(rDate))))
+              );
+
+              if (matched) {
+                return {
+                  ...row,
+                  task_id: matched.name,
+                  task_status: matched.status || 'Open'
+                };
+              }
+              return row;
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('Error loading schedule tasks from Task DocType:', err);
+      }
+    })();
+
+    return () => { isMounted = false; };
+  }, [selectedSchedule?.name, erpnextConfig]);
 
   const handleSchedBookingChange = (value) => {
     setSchedBookingId(value);
@@ -4975,7 +5113,7 @@ export default function Maintenance({
           schedule_name: selectedSchedule.name,
           schedule_id: r.name || `row-${idx}`,
           item_code: r.item_code || selectedSchedule.items?.[0]?.item_code || '001',
-          property_group: r.custom_property_group || r.property_group || prev?.property_group || detailPropertyGroup || selectedSchedule.custom_property_group || selectedSchedule.property_group || '',
+          property_group: r.custom_property_group || r.property_group || (r.item_code ? itemDetailCache[r.item_code]?.propertyGroup : '') || prev?.property_group || detailPropertyGroup || selectedSchedule.custom_property_group || selectedSchedule.property_group || '',
           scheduled_date: rowDate,
           maintenance_visit: r.maintenance_visit || '',
           visit_status: r.completion_status || r.visit_status || '',
@@ -4990,15 +5128,15 @@ export default function Maintenance({
     });
   }, [selectedSchedule?.name, selectedSchedule?.schedules, workOrders]);
 
-  // ── Auto-resolve person names and assignments from Task doc if missing on child table ───
+  // ── Auto-resolve Task details (status, persons, assign_type) from Task doc ───
   useEffect(() => {
     if (!erpnextConfig?.url || !selectedSchedule) return;
-    const rowsNeedingPersons = scheduleRows.filter(r => r.task_id && (!r.persons || r.persons.length === 0));
-    if (rowsNeedingPersons.length === 0) return;
+    const rowsNeedingTaskInfo = scheduleRows.filter(r => r.task_id && (!r.task_status || !r.persons || r.persons.length === 0));
+    if (rowsNeedingTaskInfo.length === 0) return;
 
     let isMounted = true;
     (async () => {
-      for (const row of rowsNeedingPersons) {
+      for (const row of rowsNeedingTaskInfo) {
         try {
           const res = await fetch(`${erpnextConfig.url}/api/resource/Task/${encodeURIComponent(row.task_id)}`, {
             credentials: 'include',
@@ -5007,6 +5145,7 @@ export default function Maintenance({
           if (res.ok) {
             const json = await res.json();
             const taskDoc = json.data || json;
+            const fetchedStatus = taskDoc.status || 'Open';
             let fetchedPersons = [];
             let fetchedAssign = taskDoc.custom_assign || row.assign_type || 'Employee';
 
@@ -5029,12 +5168,17 @@ export default function Maintenance({
               }
             }
 
-            if (isMounted && fetchedPersons.length > 0) {
-              setScheduleRows(prev => prev.map(pr => pr.id === row.id ? { ...pr, persons: fetchedPersons, assign_type: fetchedAssign } : pr));
+            if (isMounted) {
+              setScheduleRows(prev => prev.map(pr => pr.id === row.id ? {
+                ...pr,
+                task_status: fetchedStatus,
+                persons: (fetchedPersons.length > 0) ? fetchedPersons : pr.persons,
+                assign_type: fetchedAssign
+              } : pr));
 
               // Also persist back to child table in ERPNext so next time it is already saved
               if (row.schedule_id && !row.schedule_id.startsWith('sched-') && !row.schedule_id.startsWith('row-')) {
-                const personVal = fetchedPersons[0] || fetchedPersons.join(', ');
+                const personVal = fetchedPersons[0] || (Array.isArray(row.persons) ? row.persons[0] : '') || '';
                 try {
                   await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
                     method: 'POST',
@@ -5046,7 +5190,9 @@ export default function Maintenance({
                       fieldname: {
                         custom_assign: fetchedAssign,
                         custom_select_person: personVal,
-                        custom_assign_to: personVal
+                        custom_assign_to: personVal,
+                        task_id: row.task_id,
+                        task_status: fetchedStatus
                       }
                     })
                   });
@@ -5055,13 +5201,13 @@ export default function Maintenance({
             }
           }
         } catch (err) {
-          console.warn(`Failed fetching Task ${row.task_id} to resolve person:`, err);
+          console.warn(`Failed fetching Task ${row.task_id} to resolve status and person:`, err);
         }
       }
     })();
 
     return () => { isMounted = false; };
-  }, [scheduleRows.map(r => `${r.id}:${r.task_id}:${r.persons?.length || 0}`).join(','), erpnextConfig, selectedSchedule]);
+  }, [scheduleRows.map(r => `${r.id}:${r.task_id}:${r.task_status}:${r.persons?.length || 0}`).join(','), erpnextConfig, selectedSchedule]);
 
 
   const get_persons = (row) => {
