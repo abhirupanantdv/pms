@@ -4,7 +4,9 @@ import { getAuthHeaders } from '../config';
 export default function OnboardingQuotationAction({ name, onboardingDoc, approved, baseUrl, onNavigateToQuotation }) {
   const [state, setState] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [existingQuotation, setExistingQuotation] = useState(null);
+  const [existingQuotation, setExistingQuotation] = useState(
+    onboardingDoc?.custom_quotation || onboardingDoc?.quotation || onboardingDoc?.custom_quotation_id || null
+  );
   const locked = useRef(false);
   const current = state?.name === name ? state : { quotation: '', error: '', message: '' };
 
@@ -14,47 +16,68 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
     return () => clearTimeout(timer);
   }, [state]);
 
-  // Helper to ensure custom_tenant_onboarding is set in Quotation DocType
-  const ensureQuotationLinked = async (qId) => {
+  // Non-blocking helper to ensure custom_tenant_onboarding and Draft status are set in Quotation DocType
+  const ensureQuotationLinked = (qId) => {
     if (!qId || !name || !baseUrl) return;
 
-    // 1. Update via standard REST PUT
-    try {
-      await fetch(`${baseUrl}/api/resource/Quotation/${encodeURIComponent(qId)}`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ custom_tenant_onboarding: name })
-      });
-    } catch (err) {
-      console.warn('Could not set custom_tenant_onboarding on Quotation via PUT:', err);
-    }
+    // Fire in background without stalling UI redirect
+    (async () => {
+      try {
+        await fetch(`${baseUrl}/api/resource/Quotation/${encodeURIComponent(qId)}`, {
+          method: 'PUT',
+          credentials: 'include',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            custom_tenant_onboarding: name,
+            status: 'Draft',
+            workflow_state: 'Draft'
+          })
+        });
+      } catch (err) {
+        console.warn('Could not set custom_tenant_onboarding on Quotation via PUT:', err);
+      }
 
-    // 2. Also update via frappe.client.set_value to ensure direct DB write
-    try {
-      await fetch(`${baseUrl}/api/method/frappe.client.set_value`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          doctype: 'Quotation',
-          name: qId,
-          fieldname: 'custom_tenant_onboarding',
-          value: name
-        })
-      });
-    } catch (err) {
-      console.warn('Could not set custom_tenant_onboarding via set_value:', err);
-    }
+      try {
+        await fetch(`${baseUrl}/api/method/frappe.client.set_value`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            doctype: 'Quotation',
+            name: qId,
+            fieldname: 'custom_tenant_onboarding',
+            value: name
+          })
+        });
+      } catch (err) {
+        console.warn('Could not set custom_tenant_onboarding via set_value:', err);
+      }
+    })();
   };
 
-  // Check if a Quotation has already been created for this Onboarding case
+  // Fast check if a Quotation has already been created for this Onboarding case
   useEffect(() => {
     let active = true;
     if (!name || !baseUrl) return;
+    if (existingQuotation) return;
 
     const checkExistingQuotation = async () => {
-      // 1. Check via property_management quotation_status endpoint
+      // 1. Direct fast indexed query on Quotation by custom_tenant_onboarding
+      try {
+        const qRes = await fetch(`${baseUrl}/api/resource/Quotation?filters=${encodeURIComponent(JSON.stringify([['custom_tenant_onboarding', '=', name]]))}&fields=["name"]&limit_page_length=1`, {
+          credentials: 'include',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+        });
+        if (qRes.ok) {
+          const qJson = await qRes.json().catch(() => ({}));
+          if (active && qJson.data?.[0]?.name) {
+            setExistingQuotation(qJson.data[0].name);
+            return;
+          }
+        }
+      } catch {}
+
+      // 2. Fallback check via quotation_status endpoint
       try {
         const res = await fetch(`${baseUrl}/api/method/property_management.property_managmenet_system.doctype.tenant_onboarding.tenant_onboarding.quotation_status?tenant_onboarding=${encodeURIComponent(name)}`, {
           credentials: 'include',
@@ -68,42 +91,13 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
           }
         }
       } catch {}
-
-      // 2. Check via pms quotation_status endpoint
-      try {
-        const resPms = await fetch(`${baseUrl}/api/method/pms.onboarding_quotation.quotation_status?tenant_onboarding=${encodeURIComponent(name)}`, {
-          credentials: 'include',
-          headers: getAuthHeaders({ 'Content-Type': 'application/json' })
-        });
-        if (resPms.ok) {
-          const json = await resPms.json().catch(() => ({}));
-          if (active && json.message?.quotation) {
-            setExistingQuotation(json.message.quotation);
-            return;
-          }
-        }
-      } catch {}
-
-      // 3. Check directly via Quotation resource filtered by custom_tenant_onboarding
-      try {
-        const qRes = await fetch(`${baseUrl}/api/resource/Quotation?filters=${encodeURIComponent(JSON.stringify([['custom_tenant_onboarding', '=', name]]))}&fields=["name"]&limit_page_length=1`, {
-          credentials: 'include',
-          headers: getAuthHeaders({ 'Content-Type': 'application/json' })
-        });
-        if (qRes.ok) {
-          const qJson = await qRes.json().catch(() => ({}));
-          if (active && qJson.data?.[0]?.name) {
-            setExistingQuotation(qJson.data[0].name);
-          }
-        }
-      } catch {}
     };
 
     checkExistingQuotation();
     return () => { active = false; };
-  }, [name, baseUrl]);
+  }, [name, baseUrl, existingQuotation]);
 
-  // Central redirect handler to switch to Quotation view
+  // Central redirect handler to switch to Quotation view immediately
   const handleRedirectToQuotation = (qId) => {
     if (!qId) return;
 
@@ -135,25 +129,17 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
       if (!document.querySelector('.quotation-table-container')) {
         window.location.href = targetUrl;
       }
-    }, 300);
+    }, 200);
   };
 
   const create = async () => {
     if (locked.current || !approved || !name || !baseUrl) return;
 
-    // If quotation already exists, ensure custom_tenant_onboarding is set and redirect!
+    // FAST-PATH: If quotation already exists, REDIRECT IMMEDIATELY without blocking!
     if (existingQuotation) {
       setBusy(true);
-      await ensureQuotationLinked(existingQuotation);
-      setState({
-        name,
-        quotation: existingQuotation,
-        ready: true,
-        error: '',
-        message: 'Quotation already created. Redirecting...'
-      });
+      ensureQuotationLinked(existingQuotation);
       handleRedirectToQuotation(existingQuotation);
-      setTimeout(() => setBusy(false), 800);
       return;
     }
 
@@ -163,7 +149,27 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
 
     try {
       let createdQId = null;
-      let isNewlyCreated = false;
+
+      // Fast check if already created in database
+      try {
+        const qRes = await fetch(`${baseUrl}/api/resource/Quotation?filters=${encodeURIComponent(JSON.stringify([['custom_tenant_onboarding', '=', name]]))}&fields=["name"]&limit_page_length=1`, {
+          credentials: 'include',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+        });
+        if (qRes.ok) {
+          const qJson = await qRes.json().catch(() => ({}));
+          if (qJson.data?.[0]?.name) {
+            createdQId = qJson.data[0].name;
+          }
+        }
+      } catch {}
+
+      if (createdQId) {
+        setExistingQuotation(createdQId);
+        ensureQuotationLinked(createdQId);
+        handleRedirectToQuotation(createdQId);
+        return;
+      }
 
       // Method 1: Primary backend method
       try {
@@ -177,7 +183,6 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
           const data = await response.json().catch(() => ({}));
           if (data.message?.quotation) {
             createdQId = data.message.quotation;
-            isNewlyCreated = !!data.message.created;
           }
         }
       } catch (e) {
@@ -197,7 +202,6 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
             const dataPms = await responsePms.json().catch(() => ({}));
             if (dataPms.message?.quotation) {
               createdQId = dataPms.message.quotation;
-              isNewlyCreated = !!dataPms.message.created;
             }
           }
         } catch (e) {
@@ -205,23 +209,7 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
         }
       }
 
-      // Method 3: Check fallback in case quotation was created or already existed
-      if (!createdQId) {
-        try {
-          const qRes = await fetch(`${baseUrl}/api/resource/Quotation?filters=${encodeURIComponent(JSON.stringify([['custom_tenant_onboarding', '=', name]]))}&fields=["name"]&limit_page_length=1`, {
-            credentials: 'include',
-            headers: getAuthHeaders({ 'Content-Type': 'application/json' })
-          });
-          if (qRes.ok) {
-            const qJson = await qRes.json().catch(() => ({}));
-            if (qJson.data?.[0]?.name) {
-              createdQId = qJson.data[0].name;
-            }
-          }
-        } catch {}
-      }
-
-      // Method 4: Fallback direct Quotation resource creation with custom_tenant_onboarding set
+      // Method 3: Fallback direct Quotation resource creation with items
       if (!createdQId && onboardingDoc) {
         const custName = onboardingDoc.customer || onboardingDoc.customer_name || onboardingDoc.company_name || onboardingDoc.contact_name;
         if (custName) {
@@ -249,6 +237,8 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
             transaction_date: todayStr,
             valid_till: validTillStr,
             status: "Draft",
+            docstatus: 0,
+            workflow_state: "Draft",
             company: onboardingDoc.company || "CARPENTERS PROPERTIES PTE LIMITED",
             ...(items.length > 0 ? { items } : {})
           };
@@ -263,7 +253,6 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
             if (restRes.ok) {
               const restJson = await restRes.json().catch(() => ({}));
               createdQId = restJson.data?.name || restJson.name;
-              isNewlyCreated = true;
             }
           } catch (rErr) {
             console.warn('Direct REST fallback quotation creation error:', rErr);
@@ -272,16 +261,10 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
       }
 
       if (createdQId) {
-        // Explicitly set and ensure custom_tenant_onboarding in Quotation doctype
-        await ensureQuotationLinked(createdQId);
         setExistingQuotation(createdQId);
-        setState({
-          name,
-          quotation: createdQId,
-          ready: true,
-          error: '',
-          message: isNewlyCreated ? 'Quotation created successfully. Redirecting...' : 'Quotation already created. Redirecting...'
-        });
+        // Fire database linking in background without stalling redirect
+        ensureQuotationLinked(createdQId);
+        // Instant redirect to quotation page
         handleRedirectToQuotation(createdQId);
         return;
       }
@@ -289,9 +272,8 @@ export default function OnboardingQuotationAction({ name, onboardingDoc, approve
       throw new Error('Quotation could not be created. Please verify customer and unit details.');
     } catch (error) {
       setState({ name, quotation: '', error: error.message, message: '' });
-    } finally {
-      locked.current = false;
       setBusy(false);
+      locked.current = false;
     }
   };
 

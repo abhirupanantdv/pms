@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   DollarSign,
   Printer,
@@ -23,9 +23,13 @@ import {
   ChevronDown,
   Percent,
   CreditCard,
-  ExternalLink
+  ExternalLink,
+  ChevronLeft,
+  ChevronRight,
+  RefreshCw
 } from 'lucide-react';
 import { getAuthHeaders, getCsrfToken, ensureCsrfToken } from '../config';
+import { fetchDocTypeList } from '../services/api';
 
 const numberToWords = (num, currency = 'FJD') => {
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
@@ -141,6 +145,72 @@ export default function Invoices({
   const [linkedPaymentEntries, setLinkedPaymentEntries] = useState([]);
   const [loadingLinkedPayments, setLoadingLinkedPayments] = useState(false);
   const [selectedPaymentEntryId, setSelectedPaymentEntryId] = useState('');
+  // Sales Invoice DocType API state
+  const [apiInvoices, setApiInvoices] = useState([]);
+  const [loadingApiInvoices, setLoadingApiInvoices] = useState(true);
+  const [hasLoadedApi, setHasLoadedApi] = useState(false);
+  const [refreshSpin, setRefreshSpin] = useState(false);
+
+  // Filters & Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  // Fetch Sales Invoice DocType records using common API service
+  const fetchSalesInvoices = useCallback(async (isManual = false) => {
+    if (isManual) setRefreshSpin(true);
+    setLoadingApiInvoices(true);
+    try {
+      const res = await fetchDocTypeList('Sales Invoice', {
+        page: 1,
+        limit: 100, // Fetch up to 100 for instant client filtering & 10 rows/page pagination
+        orderBy: 'creation desc',
+        baseUrl: erpnextConfig?.url
+      });
+      if (res && Array.isArray(res.data)) {
+        setApiInvoices(res.data);
+      }
+    } catch (err) {
+      console.warn('Could not fetch Sales Invoice DocType list:', err);
+    } finally {
+      setLoadingApiInvoices(false);
+      setHasLoadedApi(true);
+      if (isManual) {
+        setTimeout(() => setRefreshSpin(false), 500);
+      }
+    }
+  }, [erpnextConfig?.url]);
+
+  useEffect(() => {
+    fetchSalesInvoices();
+
+    const handleSidebarClick = (e) => {
+      const target = e.target;
+      const menuItem = target.closest && target.closest('.menu-item');
+      if (
+        menuItem &&
+        menuItem.textContent &&
+        (menuItem.textContent.trim().toLowerCase().includes('billing') ||
+          menuItem.textContent.trim().toLowerCase().includes('invoice'))
+      ) {
+        fetchSalesInvoices(true);
+      }
+    };
+
+    const handleNavigate = () => {
+      fetchSalesInvoices(true);
+    };
+
+    document.addEventListener('click', handleSidebarClick);
+    window.addEventListener('pms:navigate-invoices', handleNavigate);
+    window.addEventListener('pms:navigate-billing-ledger', handleNavigate);
+    window.addEventListener('pms:invoice-created', handleNavigate);
+    return () => {
+      document.removeEventListener('click', handleSidebarClick);
+      window.removeEventListener('pms:navigate-invoices', handleNavigate);
+      window.removeEventListener('pms:navigate-billing-ledger', handleNavigate);
+      window.removeEventListener('pms:invoice-created', handleNavigate);
+    };
+  }, [fetchSalesInvoices]);
 
   useEffect(() => {
     setCreatedPaymentEntryId(null);
@@ -347,7 +417,8 @@ export default function Invoices({
   // Fetch Sales Invoice detail & Unit details & Customer details dynamically
   useEffect(() => {
     const targetInvoice = activeReceipt || selectedInvoice;
-    if (!targetInvoice || !erpnextConfig || !erpnextConfig.url) {
+    const targetId = targetInvoice ? (targetInvoice.id || targetInvoice.name) : null;
+    if (!targetInvoice || !targetId || !erpnextConfig || !erpnextConfig.url) {
       setInvoiceDetailsExtra(null);
       return;
     }
@@ -356,7 +427,7 @@ export default function Invoices({
     const fetchExtra = async () => {
       setLoadingExtra(true);
       try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice/${encodeURIComponent(targetInvoice.id)}`, {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Sales%20Invoice/${encodeURIComponent(targetId)}`, {
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json'
@@ -486,7 +557,7 @@ export default function Invoices({
     return () => {
       isMounted = false;
     };
-  }, [selectedInvoice?.id, activeReceipt?.id, erpnextConfig]);
+  }, [selectedInvoice?.id, selectedInvoice?.name, activeReceipt?.id, activeReceipt?.name, erpnextConfig]);
 
   // Fetch linked payment entries for selected invoice via custom backend api.py
   const fetchLinkedPaymentEntries = async (invoiceId) => {
@@ -652,18 +723,69 @@ export default function Invoices({
     };
   }, [selectedInvoice?.id, activeReceipt?.id]);
 
-  // Sort invoices so that latest created invoice is ALWAYS on top (descending by creation / id)
+  // Strictly use API Sales Invoices - NO dummy data fallback!
+  const effectiveInvoices = useMemo(() => {
+    const list = (apiInvoices && apiInvoices.length > 0)
+      ? apiInvoices
+      : (invoices && invoices.length > 0 ? invoices : []);
+
+    return list.map((inv, idx) => {
+      const invId = inv.id || inv.name || `INV-${idx}`;
+      const invName = inv.name || inv.id || invId;
+      const tenant = inv.tenantName || inv.customer_name || inv.customer || '—';
+      const amt = Number(inv.amount !== undefined ? inv.amount : (inv.grand_total !== undefined ? inv.grand_total : (inv.rounded_total || 0))) || 0;
+      const outAmt = Number(inv.outstandingAmount !== undefined ? inv.outstandingAmount : (inv.outstanding_amount !== undefined ? inv.outstanding_amount : (String(inv.status || '').toLowerCase() === 'paid' ? 0 : amt))) || 0;
+      const rawStatus = String(inv.status || (inv.docstatus === 1 ? 'Unpaid' : 'Draft')).toLowerCase();
+      const status = rawStatus === 'unpaid' ? 'pending' : rawStatus;
+
+      return {
+        ...inv,
+        id: invId,
+        name: invName,
+        tenantName: tenant,
+        amount: amt,
+        outstandingAmount: outAmt,
+        generateDate: inv.generateDate || inv.posting_date || inv.issuedDate || (inv.creation ? String(inv.creation).split(' ')[0] : ''),
+        issuedDate: inv.issuedDate || inv.posting_date,
+        posting_date: inv.posting_date || inv.issuedDate,
+        status,
+        rawDoc: inv.rawDoc || inv
+      };
+    });
+  }, [apiInvoices, invoices]);
+
+  const filteredInvoices = useMemo(() => {
+    return effectiveInvoices.filter(inv => {
+      if (statusFilter !== 'all') {
+        const s = String(inv.status || '').toLowerCase();
+        if (statusFilter === 'paid' && s !== 'paid') return false;
+        if (statusFilter === 'pending' && s !== 'pending' && s !== 'unpaid') return false;
+        if (statusFilter === 'draft' && s !== 'draft') return false;
+        if (statusFilter === 'overdue' && s !== 'overdue') return false;
+        if (statusFilter === 'cancelled' && s !== 'cancelled') return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const idMatch = String(inv.id || inv.name || '').toLowerCase().includes(q);
+        const tenantMatch = String(inv.tenantName || inv.customer_name || inv.customer || '').toLowerCase().includes(q);
+        const dateStr = String(inv.generateDate || (inv.creation ? String(inv.creation).split(' ')[0] : '') || inv.posting_date || inv.issuedDate || '').toLowerCase();
+        const dateMatch = dateStr.includes(q);
+        const amtMatch = String(inv.amount || inv.grand_total || '').includes(q);
+        if (!idMatch && !tenantMatch && !dateMatch && !amtMatch) return false;
+      }
+      return true;
+    });
+  }, [effectiveInvoices, statusFilter, searchQuery]);
+
   const sortedInvoices = useMemo(() => {
-    if (!invoices || !Array.isArray(invoices)) return [];
-    return [...invoices].sort((a, b) => {
-      // 1. Sort by creation timestamp descending if present
+    return [...filteredInvoices].sort((a, b) => {
       const parseTime = (inv) => {
         if (inv.creation) {
           const t = new Date(String(inv.creation).replace(' ', 'T')).getTime();
           if (!isNaN(t) && t > 0) return t;
         }
-        if (inv.issuedDate) {
-          const t = new Date(String(inv.issuedDate).replace(' ', 'T')).getTime();
+        if (inv.posting_date || inv.issuedDate) {
+          const t = new Date(String(inv.posting_date || inv.issuedDate).replace(' ', 'T')).getTime();
           if (!isNaN(t) && t > 0) return t;
         }
         return 0;
@@ -672,12 +794,11 @@ export default function Invoices({
       const timeB = parseTime(b);
       if (timeB !== timeA) return timeB - timeA;
 
-      // 2. Fall back to natural numeric sort on ID / name descending (e.g. ACC-SINV-2026-00105 > ACC-SINV-2026-00104)
       const idA = String(a.id || a.name || '');
       const idB = String(b.id || b.name || '');
       return idB.localeCompare(idA, undefined, { numeric: true, sensitivity: 'base' });
     });
-  }, [invoices]);
+  }, [filteredInvoices]);
 
   // Handle preSelectedInvoiceId from navigation
   useEffect(() => {
@@ -687,7 +808,7 @@ export default function Invoices({
         setSelectedInvoice(match);
         const idx = sortedInvoices.findIndex(inv => inv.id === preSelectedInvoiceId || inv.name === preSelectedInvoiceId);
         if (idx >= 0) {
-          setCurrentPage(Math.floor(idx / 6) + 1);
+          setCurrentPage(Math.floor(idx / 10) + 1);
         }
       } else {
         setSelectedInvoice({ id: preSelectedInvoiceId, name: preSelectedInvoiceId });
@@ -706,7 +827,7 @@ export default function Invoices({
           setSelectedInvoice(match);
           const idx = sortedInvoices.findIndex(inv => inv.id === targetInvId || inv.name === targetInvId);
           if (idx >= 0) {
-            setCurrentPage(Math.floor(idx / 6) + 1);
+            setCurrentPage(Math.floor(idx / 10) + 1);
           }
         } else {
           setSelectedInvoice({ id: targetInvId, name: targetInvId });
@@ -726,44 +847,150 @@ export default function Invoices({
     }
   }, [sortedInvoices, preSelectedInvoiceId]);
 
-  // Pagination states & calculations
+  // Pagination states & calculations - 10 rows per page
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = selectedInvoice ? 6 : 10;
+  const itemsPerPage = 10;
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [sortedInvoices.length]);
+  }, [searchQuery, statusFilter, sortedInvoices.length]);
 
-  const totalPages = Math.ceil(sortedInvoices.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(sortedInvoices.length / itemsPerPage));
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentItems = sortedInvoices.slice(indexOfFirstItem, indexOfLastItem);
+  const startRecord = sortedInvoices.length > 0 ? indexOfFirstItem + 1 : 0;
+  const endRecord = Math.min(indexOfLastItem, sortedInvoices.length);
 
   const renderPaginationControls = () => {
-    if (totalPages <= 1) return null;
-    return (
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-card)', flexShrink: 0 }}>
-        <button
-          type="button"
-          disabled={currentPage === 1}
-          onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', minWidth: 60 }}
+    if (loadingApiInvoices || !hasLoadedApi) {
+      return (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: '12px 20px',
+            borderTop: '1px solid var(--border-color)',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+            background: 'var(--bg-card, #ffffff)',
+            gap: 8
+          }}
         >
-          Previous
-        </button>
-        <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-          Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong>
+          <RefreshCw size={13} className="spin" style={{ color: 'var(--brand-color)' }} />
+          <span>Waiting for response</span>
         </div>
-        <button
-          type="button"
-          disabled={currentPage === totalPages}
-          onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', minWidth: 60 }}
-        >
-          Next
-        </button>
+      );
+    }
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '12px 20px',
+          borderTop: '1px solid var(--border-color)',
+          fontSize: 11,
+          color: 'var(--text-secondary)',
+          background: 'var(--bg-card, #ffffff)',
+          flexShrink: 0,
+          flexWrap: 'wrap',
+          gap: 10
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>
+            Showing <strong style={{ color: 'var(--text-primary)' }}>{startRecord}</strong> to{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{endRecord}</strong> of{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{sortedInvoices.length}</strong> entries (10 rows/page)
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => fetchSalesInvoices(true)}
+            disabled={loadingApiInvoices || refreshSpin}
+            title="Refresh Sales Invoices from ERPNext"
+            style={{
+              padding: '2px 8px',
+              fontSize: 10,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              height: 24,
+              borderRadius: 4
+            }}
+          >
+            <RefreshCw size={11} className={loadingApiInvoices || refreshSpin ? 'spin' : ''} />
+            <span>{loadingApiInvoices || refreshSpin ? 'Refreshing...' : 'Refresh'}</span>
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+            className="btn btn-secondary"
+            style={{
+              padding: '4px 10px',
+              fontSize: 10,
+              opacity: currentPage === 1 ? 0.4 : 1,
+              cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              minWidth: 64
+            }}
+          >
+            <ChevronLeft size={12} /> Previous
+          </button>
+
+          <div style={{ display: 'flex', gap: 4 }}>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => (
+              <button
+                key={pageNum}
+                type="button"
+                onClick={() => setCurrentPage(pageNum)}
+                style={{
+                  minWidth: 26,
+                  height: 26,
+                  padding: '0 5px',
+                  borderRadius: 4,
+                  fontSize: 10,
+                  fontWeight: pageNum === currentPage ? 700 : 500,
+                  border: pageNum === currentPage ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
+                  background: pageNum === currentPage ? 'var(--brand-color)' : 'transparent',
+                  color: pageNum === currentPage ? '#ffffff' : 'var(--text-primary)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {pageNum}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+            className="btn btn-secondary"
+            style={{
+              padding: '4px 10px',
+              fontSize: 10,
+              opacity: currentPage === totalPages ? 0.4 : 1,
+              cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              minWidth: 64
+            }}
+          >
+            Next <ChevronRight size={12} />
+          </button>
+        </div>
       </div>
     );
   };
@@ -1838,14 +2065,14 @@ export default function Invoices({
         terms: resolvedTerms,
         items: (createdDoc?.items && createdDoc.items.length > 0)
           ? createdDoc.items.map((ci, idx) => ({
-              ...ci,
-              area: ci.area || ci.custom_area || items[idx]?.area,
-              custom_area: ci.custom_area || ci.area || items[idx]?.area
-            }))
+            ...ci,
+            area: ci.area || ci.custom_area || items[idx]?.area,
+            custom_area: ci.custom_area || ci.area || items[idx]?.area
+          }))
           : items.map(it => ({
-              ...it,
-              amount: (Number(it.qty) || 1) * (Number(it.rate) || 0)
-            }))
+            ...it,
+            amount: (Number(it.qty) || 1) * (Number(it.rate) || 0)
+          }))
       }
     };
 
@@ -2151,9 +2378,10 @@ export default function Invoices({
   };
 
   // GL and Trial Balance Calculation from existing invoices
-  const totalInvoicesValue = invoices.reduce((acc, i) => acc + i.amount, 0);
-  const totalPaid = invoices.filter(i => i.status === 'paid').reduce((acc, i) => acc + i.amount, 0);
-  const totalPending = invoices.reduce((acc, i) => acc + (i.outstandingAmount !== undefined ? i.outstandingAmount : (i.status === 'pending' ? i.amount : 0)), 0);
+  const totalInvoicesValue = effectiveInvoices.reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+  const totalPaid = effectiveInvoices.filter(i => i.status === 'paid').reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+  const totalPending = effectiveInvoices.reduce((acc, i) => acc + (i.outstandingAmount !== undefined ? Number(i.outstandingAmount) : (i.status === 'pending' ? Number(i.amount) : 0)), 0);
+  const unpaidCount = effectiveInvoices.filter(i => i.status === 'pending' || i.status === 'unpaid' || (Number(i.outstandingAmount) > 0)).length;
 
   return (
     <div>
@@ -2187,17 +2415,75 @@ export default function Invoices({
             <span>Outstanding Receivables</span>
             <ArrowDownRight size={18} className="indicator-down" />
           </div>
-          <div className="stat-value">F${totalPending.toLocaleString()}</div>
-          <div className="stat-indicator indicator-down">{invoices.filter(i => i.status === 'pending').length} Unpaid Invoices</div>
+          <div className="stat-value">
+            {loadingApiInvoices || !hasLoadedApi ? 'F$—' : `F$${totalPending.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          </div>
+          <div className="stat-indicator indicator-down">
+            {loadingApiInvoices || !hasLoadedApi ? 'Loading...' : `${unpaidCount} Unpaid Invoices`}
+          </div>
         </div>
         <div className="stat-card">
           <div className="stat-header">
             <span>Total Collected (MDT)</span>
             <ArrowUpRight size={18} className="indicator-up" />
           </div>
-          <div className="stat-value">F${totalPaid.toLocaleString()}</div>
-          <div className="stat-indicator indicator-up">+12% vs last month</div>
+          <div className="stat-value">
+            {loadingApiInvoices || !hasLoadedApi ? 'F$—' : `F$${totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          </div>
+          <div className="stat-indicator indicator-up">Live ERPNext</div>
         </div>
+      </div>
+
+      {/* Filter & Search Toolbar */}
+      <div className="card-panel" style={{ padding: '14px 20px', marginBottom: 20, display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 12, flex: 1, minWidth: 260, flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
+            <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <input
+              type="text"
+              placeholder="Search invoices by ID, tenant, date..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="form-input"
+              style={{ paddingLeft: 36, paddingRight: 28, height: 38, fontSize: 12.5, width: '100%', borderRadius: 8 }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2, display: 'flex' }}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="form-select"
+            style={{ width: 'auto', minWidth: 140, height: 38, fontSize: 12.5, borderRadius: 8 }}
+          >
+            <option value="all">All Statuses</option>
+            <option value="paid">Paid</option>
+            <option value="pending">Pending</option>
+            <option value="draft">Draft</option>
+            <option value="overdue">Overdue</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => fetchSalesInvoices(true)}
+          disabled={loadingApiInvoices || refreshSpin}
+          title="Refresh Sales Invoices from ERPNext"
+          style={{ height: 38, padding: '0 14px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 8, fontWeight: 600, flexShrink: 0 }}
+        >
+          <RefreshCw size={13} className={loadingApiInvoices || refreshSpin ? 'spin' : ''} />
+          <span>{loadingApiInvoices || refreshSpin ? 'Refreshing...' : 'Refresh'}</span>
+        </button>
       </div>
 
       {/* Split Details Layout */}
@@ -2216,52 +2502,71 @@ export default function Invoices({
                 <tr>
                   <th>Invoice ID</th>
                   <th>Tenant</th>
-                  <th>Unit Name</th>
+                  <th>Genarate Date</th>
                   <th>Amount</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {currentItems.map(inv => {
-                  const s = String(inv.status || '').toLowerCase();
-                  const badgeColor = s === 'paid' ? { bg: '#d1fae5', color: '#065f46', text: 'PAID' }
-                    : s === 'draft' ? { bg: '#e0f2fe', color: '#0369a1', text: 'DRAFT' }
-                      : (s === 'overdue' || s === 'cancelled') ? { bg: '#fee2e2', color: '#991b1b', text: s.toUpperCase() }
-                        : { bg: '#fef3c7', color: '#92400e', text: 'PENDING' };
+                {loadingApiInvoices || !hasLoadedApi ? (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                      <RefreshCw size={26} className="spin" style={{ margin: '0 auto 14px', display: 'block', color: 'var(--brand-color)' }} />
+                      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
+                        Waiting for response
+                      </div>
+                    </td>
+                  </tr>
+                ) : currentItems.length > 0 ? (
+                  currentItems.map((inv, idx) => {
+                    const s = String(inv.status || '').toLowerCase();
+                    const badgeColor = s === 'paid' ? { bg: '#d1fae5', color: '#065f46', text: 'PAID' }
+                      : s === 'draft' ? { bg: '#e0f2fe', color: '#0369a1', text: 'DRAFT' }
+                        : (s === 'overdue' || s === 'cancelled') ? { bg: '#fee2e2', color: '#991b1b', text: s.toUpperCase() }
+                          : { bg: '#fef3c7', color: '#92400e', text: 'PENDING' };
+                    const isSelected = selectedInvoice && (
+                      (selectedInvoice.id && selectedInvoice.id === inv.id) ||
+                      (selectedInvoice.name && selectedInvoice.name === inv.name)
+                    );
 
-                  return (
-                    <tr
-                      key={inv.id}
-                      onClick={() => setSelectedInvoice(inv)}
-                      style={{
-                        cursor: 'pointer',
-                        backgroundColor: selectedInvoice?.id === inv.id ? 'var(--bg-accent-alpha)' : '',
-                        borderLeft: selectedInvoice?.id === inv.id ? '3px solid var(--brand-color)' : ''
-                      }}
-                    >
-                      <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{inv.id}</td>
-                      <td style={{ fontWeight: 600 }}>{inv.tenantName}</td>
-                      <td style={{ color: 'var(--text-secondary)' }}>
-                        {selectedInvoice?.id === inv.id && invoiceDetailsExtra?.unitName
-                          ? invoiceDetailsExtra.unitName
-                          : (inv.propertyId || 'Unit-N/A')}
-                      </td>
-                      <td style={{ fontWeight: 600 }}>F${Number(inv.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td>
-                        <span style={{
-                          padding: '2px 8px',
-                          borderRadius: 10,
-                          fontSize: 9,
-                          fontWeight: 700,
-                          backgroundColor: badgeColor.bg,
-                          color: badgeColor.color
-                        }}>
-                          {badgeColor.text}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
+                    return (
+                      <tr
+                        key={inv.id || inv.name || `inv-row-${idx}`}
+                        onClick={() => setSelectedInvoice(inv)}
+                        style={{
+                          cursor: 'pointer',
+                          backgroundColor: isSelected ? 'var(--bg-accent-alpha)' : '',
+                          borderLeft: isSelected ? '3px solid var(--brand-color)' : ''
+                        }}
+                      >
+                        <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{inv.id || inv.name}</td>
+                        <td style={{ fontWeight: 600 }}>{inv.tenantName}</td>
+                        <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap', fontSize: 12 }}>
+                          {inv.generateDate || (inv.creation ? String(inv.creation).split(' ')[0] : '') || inv.posting_date || inv.issuedDate || '—'}
+                        </td>
+                        <td style={{ fontWeight: 600 }}>F${Number(inv.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td>
+                          <span style={{
+                            padding: '2px 8px',
+                            borderRadius: 10,
+                            fontSize: 9,
+                            fontWeight: 700,
+                            backgroundColor: badgeColor.bg,
+                            color: badgeColor.color
+                          }}>
+                            {badgeColor.text}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                      No invoices found matching your filter.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -2270,9 +2575,10 @@ export default function Invoices({
 
         {/* Selected Invoice PRINT FORMAT Panel (at right side) */}
         {selectedInvoice && (() => {
-          const doc = (invoiceDetailsExtra?.rawDoc?.name === selectedInvoice.id)
+          const selectedId = selectedInvoice.id || selectedInvoice.name;
+          const doc = (selectedId && invoiceDetailsExtra?.rawDoc?.name === selectedId)
             ? invoiceDetailsExtra.rawDoc
-            : (selectedInvoice?.rawDoc || null);
+            : (selectedInvoice?.rawDoc || selectedInvoice || null);
 
           const activeCurrency = doc?.currency || invoiceDetailsExtra?.currency || companyDetails.currency || 'FJD';
 
@@ -2746,7 +3052,7 @@ export default function Invoices({
                   >
                     {(() => {
                       const invId = doc?.name || selectedInvoice.id;
-                      const invoiceUrl = `https://pms.advtinni.com/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(invId)}&format=Sales%20Invoice&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+                      const invoiceUrl = `https://cfpl.anantdv.com/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(invId)}&format=Sales%20Invoice&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
                       const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(invoiceUrl)}`;
 
                       return (
@@ -4427,7 +4733,7 @@ export default function Invoices({
                   >
                     {(() => {
                       const invId = doc?.name || activeReceipt.id;
-                      const invoiceUrl = `https://pms.advtinni.com/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(invId)}&format=Sales%20Invoice&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
+                      const invoiceUrl = `https://cfpl.anantdv.com/printview?doctype=Sales%20Invoice&name=${encodeURIComponent(invId)}&format=Sales%20Invoice&no_letterhead=1&letterhead=No%20Letterhead&settings=%7B%7D&_lang=en`;
                       const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(invoiceUrl)}`;
 
                       return (

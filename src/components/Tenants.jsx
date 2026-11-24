@@ -2548,8 +2548,12 @@
 // }
 
 
-import React, { useState, useEffect } from 'react';
-import { User, Phone, Mail, Plus, X, Calendar, Building, DollarSign } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  User, Phone, Mail, Plus, X, Calendar, Building, DollarSign,
+  Search, RefreshCw, ChevronLeft, ChevronRight
+} from 'lucide-react';
+import { fetchDocTypeList, normalizeCustomer } from '../services/api';
 
 // FIELD SCOPE NOTE:
 // This form only collects fields confirmed to exist on the ERPNext "Customer"
@@ -2575,6 +2579,117 @@ export default function Tenants({ tenants, properties, bookings = [], erpnextCon
   const [loadingTenantDoc, setLoadingTenantDoc] = useState(false);
   const [tenantBookings, setTenantBookings] = useState([]);
   const [loadingBookings, setLoadingBookings] = useState(false);
+
+  // Customer DocType API state
+  const [apiCustomers, setApiCustomers] = useState([]);
+  const [loadingCustomers, setLoadingCustomers] = useState(true);
+  const [hasLoadedApi, setHasLoadedApi] = useState(false);
+  const [refreshSpin, setRefreshSpin] = useState(false);
+
+  // Search & Filters state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterGroup, setFilterGroup] = useState('all');
+  const [filterType, setFilterType] = useState('all');
+
+  // Fetch Customer DocType records using common API service
+  const fetchCustomers = useCallback(async (isManualRefresh = false) => {
+    if (isManualRefresh) setRefreshSpin(true);
+    setLoadingCustomers(true);
+    try {
+      const res = await fetchDocTypeList('Customer', {
+        page: 1,
+        limit: 100, // Fetch up to 100 for fast client-side filtering & search
+        orderBy: 'creation desc',
+        fields: ['*'],
+        baseUrl: erpnextConfig?.url
+      });
+      if (res && Array.isArray(res.data)) {
+        setApiCustomers(res.data);
+      }
+    } catch (err) {
+      console.warn('Could not fetch Customer DocType list:', err);
+    } finally {
+      setLoadingCustomers(false);
+      setHasLoadedApi(true);
+      if (isManualRefresh) {
+        setTimeout(() => setRefreshSpin(false), 500);
+      }
+    }
+  }, [erpnextConfig?.url]);
+
+  // Initial load and listen for sidebar click on "Tenants"
+  useEffect(() => {
+    fetchCustomers();
+
+    const handleSidebarClick = (e) => {
+      const target = e.target;
+      const menuItem = target.closest && target.closest('.menu-item');
+      if (
+        menuItem &&
+        menuItem.textContent &&
+        menuItem.textContent.trim().toLowerCase().includes('tenant')
+      ) {
+        fetchCustomers(true);
+      }
+    };
+
+    const handleNavigate = () => {
+      fetchCustomers(true);
+    };
+
+    document.addEventListener('click', handleSidebarClick);
+    window.addEventListener('pms:navigate-tenants', handleNavigate);
+    window.addEventListener('pms:navigate-customer', handleNavigate);
+    return () => {
+      document.removeEventListener('click', handleSidebarClick);
+      window.removeEventListener('pms:navigate-tenants', handleNavigate);
+      window.removeEventListener('pms:navigate-customer', handleNavigate);
+    };
+  }, [fetchCustomers]);
+
+  // Only use API customers - no dummy data fallback
+  const effectiveTenants = useMemo(() => {
+    return apiCustomers || [];
+  }, [apiCustomers]);
+
+  // Distinct groups & types for filter dropdowns
+  const uniqueGroups = useMemo(() => {
+    return Array.from(new Set(effectiveTenants.map(t => t.customer_group).filter(Boolean)));
+  }, [effectiveTenants]);
+
+  const uniqueTypes = useMemo(() => {
+    return Array.from(new Set(effectiveTenants.map(t => t.custom_type || t.customer_type).filter(Boolean)));
+  }, [effectiveTenants]);
+
+  // Filtered tenants
+  const filteredTenants = useMemo(() => {
+    return effectiveTenants.filter(t => {
+      if (filterGroup !== 'all' && (t.customer_group || '') !== filterGroup) {
+        return false;
+      }
+      if (filterType !== 'all') {
+        const typeVal = (t.custom_type || t.customer_type || '').toLowerCase();
+        if (typeVal !== filterType.toLowerCase()) {
+          return false;
+        }
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchName = (t.customer_name || t.name || '').toLowerCase().includes(q);
+        const matchEmail = (t.email || t.email_id || t.custom_email || '').toLowerCase().includes(q);
+        const matchPhone = (t.phone_no || t.mobile_no || t.phone || t.custom_phone_no || '').toLowerCase().includes(q);
+        const matchGroup = (t.customer_group || '').toLowerCase().includes(q);
+        const matchTerritory = (t.territory || '').toLowerCase().includes(q);
+        const matchType = (t.custom_type || t.customer_type || '').toLowerCase().includes(q);
+        const matchId = (t.name || t.id || '').toLowerCase().includes(q);
+
+        if (!matchName && !matchEmail && !matchPhone && !matchGroup && !matchTerritory && !matchType && !matchId) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [effectiveTenants, filterGroup, filterType, searchQuery]);
 
   useEffect(() => {
     if (!selectedTenant) {
@@ -2719,52 +2834,135 @@ export default function Tenants({ tenants, properties, bookings = [], erpnextCon
     }
   }, [selectedTenant, erpnextConfig, bookings]);
 
-  // Pagination
+  // Pagination: Strictly 10 rows per page
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = selectedTenant ? 6 : 10;
+  const itemsPerPage = 10;
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [tenants.length]);
+  }, [searchQuery, filterGroup, filterType, filteredTenants.length]);
 
-  const sortedTenants = [...tenants].sort((a, b) => {
-    if (a._pending && !b._pending) return -1;
-    if (!a._pending && b._pending) return 1;
-    const dateA = new Date(a.modified || a.creation || 0);
-    const dateB = new Date(b.modified || b.creation || 0);
-    return dateB - dateA;
-  });
-
-  const totalPages = Math.ceil(sortedTenants.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(filteredTenants.length / itemsPerPage));
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = sortedTenants.slice(indexOfFirstItem, indexOfLastItem);
+  const currentItems = filteredTenants.slice(indexOfFirstItem, indexOfLastItem);
+  const startRecord = filteredTenants.length > 0 ? indexOfFirstItem + 1 : 0;
+  const endRecord = Math.min(indexOfLastItem, filteredTenants.length);
 
   const renderPaginationControls = () => {
-    if (totalPages <= 1) return null;
-    return (
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-card)', flexShrink: 0 }}>
-        <button
-          type="button"
-          disabled={currentPage === 1}
-          onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', minWidth: 60 }}
+    if (loadingCustomers || !hasLoadedApi) {
+      return (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: '14px 24px',
+            borderTop: '1px solid var(--border-color)',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+            background: 'var(--bg-card)',
+            gap: 8
+          }}
         >
-          Previous
-        </button>
-        <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-          Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong>
+          <RefreshCw size={13} className="spin" style={{ color: 'var(--brand-color)' }} />
+          <span>Waiting for response</span>
         </div>
-        <button
-          type="button"
-          disabled={currentPage === totalPages}
-          onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', minWidth: 60 }}
-        >
-          Next
-        </button>
+      );
+    }
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '14px 24px',
+          borderTop: '1px solid var(--border-color)',
+          fontSize: 12,
+          color: 'var(--text-secondary)',
+          background: 'var(--bg-card)',
+          flexWrap: 'wrap',
+          gap: 12
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>
+            Showing <strong style={{ color: 'var(--text-primary)' }}>{startRecord}</strong> to{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{endRecord}</strong> of{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{filteredTenants.length}</strong> entries (10 rows/page)
+          </span>
+          {loadingCustomers && (
+            <span style={{ fontSize: 11, color: 'var(--brand-color)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <RefreshCw size={11} className="spin" /> Updating...
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+            className="btn btn-secondary"
+            style={{
+              padding: '5px 12px',
+              fontSize: 11,
+              opacity: currentPage === 1 ? 0.4 : 1,
+              cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              borderRadius: 6
+            }}
+          >
+            <ChevronLeft size={13} /> Previous
+          </button>
+
+          <div style={{ display: 'flex', gap: 4 }}>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => (
+              <button
+                key={pageNum}
+                type="button"
+                onClick={() => setCurrentPage(pageNum)}
+                style={{
+                  minWidth: 28,
+                  height: 28,
+                  padding: '0 6px',
+                  borderRadius: 6,
+                  fontSize: 11,
+                  fontWeight: pageNum === currentPage ? 700 : 500,
+                  border: pageNum === currentPage ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
+                  background: pageNum === currentPage ? 'var(--brand-color)' : 'transparent',
+                  color: pageNum === currentPage ? '#ffffff' : 'var(--text-primary)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {pageNum}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+            className="btn btn-secondary"
+            style={{
+              padding: '5px 12px',
+              fontSize: 11,
+              opacity: currentPage === totalPages ? 0.4 : 1,
+              cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              borderRadius: 6
+            }}
+          >
+            Next <ChevronRight size={13} />
+          </button>
+        </div>
       </div>
     );
   };
@@ -2846,81 +3044,276 @@ export default function Tenants({ tenants, properties, bookings = [], erpnextCon
 
   return (
     <div>
-      {/* <div className="view-header">
-        <div>
-          <h1 className="view-title">Tenants Directory</h1>
-          <p className="view-subtitle">Customer records synced with ERPNext.</p>
+      {/* Search & Filter Toolbar - Single Row */}
+      <div
+        className="card-panel"
+        style={{
+          padding: '12px 18px',
+          marginBottom: 20,
+          display: 'flex',
+          gap: 12,
+          alignItems: 'center',
+          flexWrap: 'nowrap'
+        }}
+      >
+        {/* Real-time search */}
+        <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+          <Search
+            size={15}
+            style={{
+              position: 'absolute',
+              left: 12,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: 'var(--text-muted)'
+            }}
+          />
+          <input
+            type="text"
+            placeholder="Search tenants by name, email, phone, group, territory..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="form-input"
+            style={{
+              paddingLeft: 34,
+              paddingRight: 30,
+              height: 38,
+              fontSize: 12.5,
+              width: '100%',
+              borderRadius: 8
+            }}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              style={{
+                position: 'absolute',
+                right: 10,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                padding: 2,
+                display: 'flex'
+              }}
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
-        <button className="btn btn-primary" onClick={() => setShowModal(true)}>
-          <Plus size={16} /> Register Tenant
+
+        {/* Group dropdown */}
+        <select
+          value={filterGroup}
+          onChange={(e) => setFilterGroup(e.target.value)}
+          className="form-select"
+          style={{
+            width: 'auto',
+            minWidth: 160,
+            maxWidth: 200,
+            height: 38,
+            fontSize: 12.5,
+            borderRadius: 8,
+            flexShrink: 0
+          }}
+        >
+          <option value="all">All Groups</option>
+          {uniqueGroups.map(grp => (
+            <option key={grp} value={grp}>{grp}</option>
+          ))}
+        </select>
+
+        {/* Type dropdown */}
+        <select
+          value={filterType}
+          onChange={(e) => setFilterType(e.target.value)}
+          className="form-select"
+          style={{
+            width: 'auto',
+            minWidth: 140,
+            maxWidth: 180,
+            height: 38,
+            fontSize: 12.5,
+            borderRadius: 8,
+            flexShrink: 0
+          }}
+        >
+          <option value="all">All Types</option>
+          {uniqueTypes.map(typ => (
+            <option key={typ} value={typ}>{typ}</option>
+          ))}
+        </select>
+
+        {/* Live Refresh button */}
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => fetchCustomers(true)}
+          disabled={loadingCustomers}
+          title="Refresh Customers from ERPNext"
+          style={{
+            height: 38,
+            padding: '0 14px',
+            fontSize: 12,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            borderRadius: 8,
+            fontWeight: 600,
+            flexShrink: 0,
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <RefreshCw size={13} className={loadingCustomers || refreshSpin ? 'spin' : ''} />
+          <span>{loadingCustomers || refreshSpin ? 'Refreshing...' : 'Refresh'}</span>
         </button>
-      </div> */}
+      </div>
 
       <div className="grid-2col" style={{ gridTemplateColumns: selectedTenant ? '60% calc(40% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
 
         <div className="card-panel" style={{
           padding: 0,
           overflow: 'hidden',
-          filter: selectedTenant ? 'blur(4px)' : 'none',
-          transition: 'filter 0.3s ease'
+          transition: 'all 0.3s ease'
         }}>
           <div className="table-container">
             <table className="custom-table">
               <thead>
                 <tr>
-                  <th>Tenant</th>
-                  <th>Type</th>
-                  <th>Tenant Group</th>
-                  <th>Territory</th>
-                  <th>Contact</th>
-                  <th>Status</th>
+                  <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Tenant</th>
+                  <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Type</th>
+                  <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Tenant Group</th>
+                  <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Territory</th>
+                  <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Contact</th>
+                  <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {currentItems.length === 0 && (
+                {loadingCustomers || !hasLoadedApi ? (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', padding: 32, color: 'var(--text-secondary)' }}>
-                      No tenants registered yet.
+                    <td colSpan={6} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                      <RefreshCw size={26} className="spin" style={{ margin: '0 auto 14px', display: 'block', color: 'var(--brand-color)' }} />
+                      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
+                        Waiting for response
+                      </div>
                     </td>
                   </tr>
-                )}
-                {currentItems.map(tenant => {
-                  const initials = (tenant.customer_name || '').split(' ').filter(Boolean).map(n => n[0]).join('') || '?';
-                  return (
-                    <tr
-                      key={tenant.name}
-                      onClick={() => setSelectedTenant(tenant)}
-                      style={{
-                        cursor: 'pointer',
-                        backgroundColor: selectedTenant?.name === tenant.name ? 'var(--bg-accent-alpha)' : '',
-                        borderLeft: selectedTenant?.name === tenant.name ? '3px solid var(--brand-color)' : ''
-                      }}
-                    >
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div className="user-avatar" style={{ margin: 0, width: 32, height: 32, fontSize: 12 }}>{initials}</div>
-                          <div>
-                            <div style={{ fontWeight: 600 }}>{tenant.customer_name}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>{tenant.email}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{tenant.custom_type}</td>
+                ) : currentItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
+                      No tenants found matching your filter criteria.
+                    </td>
+                  </tr>
+                ) : (
+                  currentItems.map((tenant, idx) => {
+                    const isSelected = selectedTenant?.name === tenant.name;
+                    const doc = isSelected && fullTenantDoc ? { ...tenant, ...fullTenantDoc } : tenant;
+                    const name = doc.customer_name || doc.name || 'Tenant';
+                    const initials = name.trim().charAt(0).toUpperCase() || '?';
+                    const email = doc.email || doc.email_id || doc.custom_email || '';
+                    const phone = doc.phone_no || doc.mobile_no || doc.phone || doc.custom_phone_no || '';
+                    const type = doc.custom_type || doc.customer_type || 'Individual';
+                    const group = doc.customer_group || 'Commercial';
+                    const territory = doc.territory || 'All Territories';
 
-                      <td>{tenant.customer_group || '—'}</td>
-                      <td>{tenant.territory || '—'}</td>
-                      <td>
-                        <div>{tenant.phone_no || '—'}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>{tenant.email || '—'}</div>
-                      </td>
-                      <td>
-                        <span className={`badge ${tenant.disabled ? 'badge-danger' : 'badge-success'}`}>
-                          {tenant.disabled ? 'Inactive' : 'Active'}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
+                    return (
+                      <tr
+                        key={tenant.name || tenant.id || idx}
+                        onClick={() => setSelectedTenant(tenant)}
+                        style={{
+                          cursor: 'pointer',
+                          backgroundColor: isSelected ? 'var(--bg-accent-alpha)' : 'transparent',
+                          borderLeft: isSelected ? '3px solid var(--brand-color)' : '3px solid transparent',
+                          transition: 'background-color 0.15s ease'
+                        }}
+                      >
+                        {/* TENANT: Initial circle avatar + Bold Name */}
+                        <td style={{ padding: '14px 16px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                            <div
+                              style={{
+                                width: 36,
+                                height: 36,
+                                borderRadius: '50%',
+                                backgroundColor: 'rgba(0, 122, 90, 0.12)',
+                                color: 'var(--brand-color)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 700,
+                                fontSize: 14,
+                                flexShrink: 0
+                              }}
+                            >
+                              {initials}
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 13.5 }}>
+                                {name}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* TYPE: Green brand text */}
+                        <td style={{ fontWeight: 600, color: 'var(--brand-color)', fontSize: 13, padding: '14px 16px' }}>
+                          {type}
+                        </td>
+
+                        {/* TENANT GROUP */}
+                        <td style={{ fontSize: 13, color: 'var(--text-secondary)', padding: '14px 16px' }}>
+                          {group}
+                        </td>
+
+                        {/* TERRITORY */}
+                        <td style={{ fontSize: 13, color: 'var(--text-secondary)', padding: '14px 16px' }}>
+                          {territory}
+                        </td>
+
+                        {/* CONTACT: Phone number and Mail ID with icons */}
+                        <td style={{ padding: '14px 16px' }}>
+                          {phone || email ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              {phone && (
+                                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <Phone size={13} style={{ color: 'var(--brand-color)', flexShrink: 0 }} />
+                                  <span>{phone}</span>
+                                </div>
+                              )}
+                              {email && (
+                                <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <Mail size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                                  <span>{email}</span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)' }}>—</span>
+                          )}
+                        </td>
+
+                        {/* STATUS: Active / Inactive pill badge */}
+                        <td style={{ padding: '14px 16px' }}>
+                          <span
+                            className={`badge ${tenant.disabled ? 'badge-danger' : 'badge-success'}`}
+                            style={{
+                              padding: '4px 12px',
+                              fontSize: 11.5,
+                              borderRadius: 12,
+                              fontWeight: 600,
+                              display: 'inline-block'
+                            }}
+                          >
+                            {tenant.disabled ? 'Inactive' : 'Active'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>

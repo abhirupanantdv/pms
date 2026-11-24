@@ -1,4 +1,5 @@
 import frappe  # type: ignore
+import json
 from frappe.utils import validate_phone_number  # type: ignore
 
 def validate_tenant_onboarding_signed_document(doc, method=None):
@@ -576,7 +577,7 @@ def get_csrf_token():
 
 
 @frappe.whitelist()
-def update_maintenance_schedule_row(schedule_name=None, row_name=None, custom_assign=None, custom_select_person=None, task_id=None):
+def update_maintenance_schedule_row(schedule_name=None, row_name=None, custom_assign=None, custom_select_person=None, task_id=None, custom_task_id=None):
     if not row_name:
         frappe.throw("row_name is required")
     updates = {}
@@ -585,13 +586,86 @@ def update_maintenance_schedule_row(schedule_name=None, row_name=None, custom_as
     if custom_select_person is not None:
         updates["custom_select_person"] = custom_select_person
         updates["custom_assign_to"] = custom_select_person
-    if task_id is not None:
-        updates["task_id"] = task_id
-    
-    if updates:
+
+    t_id = custom_task_id if custom_task_id is not None else task_id
+    if t_id is not None:
+        updates["custom_task_id"] = t_id
+        updates["task_id"] = t_id
+
+    # 1. Direct DB update using SQL to bypass submitted docstatus lock on Maintenance Schedule
+    try:
+        cols = [c[0] for c in frappe.db.sql("DESCRIBE `tabMaintenance Schedule Detail`")]
+        for k, v in updates.items():
+            if k in cols:
+                frappe.db.sql(f"UPDATE `tabMaintenance Schedule Detail` SET `{k}` = %s WHERE name = %s", (v, row_name))
+        frappe.db.commit()
+    except Exception as sql_e:
+        frappe.log_error(f"SQL update in update_maintenance_schedule_row: {sql_e}")
+
+    # 2. Also try frappe.db.set_value
+    try:
         frappe.db.set_value("Maintenance Schedule Detail", row_name, updates, update_modified=False)
         frappe.db.commit()
+    except Exception:
+        pass
+
+    if schedule_name:
+        if t_id:
+            try:
+                parent_cols = [c[0] for c in frappe.db.sql("DESCRIBE `tabMaintenance Schedule`")]
+                if "custom_task_id" in parent_cols:
+                    frappe.db.sql("UPDATE `tabMaintenance Schedule` SET `custom_task_id` = %s WHERE name = %s", (t_id, schedule_name))
+                if "task_id" in parent_cols:
+                    frappe.db.sql("UPDATE `tabMaintenance Schedule` SET `task_id` = %s WHERE name = %s", (t_id, schedule_name))
+                frappe.db.commit()
+            except Exception as p_e:
+                frappe.log_error(f"SQL update parent in update_maintenance_schedule_row: {p_e}")
+
+            try:
+                frappe.db.set_value("Maintenance Schedule", schedule_name, {"custom_task_id": t_id}, update_modified=False)
+                frappe.db.commit()
+            except Exception:
+                pass
+
+        try:
+            frappe.clear_document_cache("Maintenance Schedule", schedule_name)
+        except Exception:
+            pass
+
     return {"status": "success", "row_name": row_name, "updates": updates}
+
+
+@frappe.whitelist()
+def update_maintenance_schedule(schedule_name=None, custom_task_id=None, task_id=None):
+    if not schedule_name:
+        schedule_name = frappe.form_dict.get("schedule_name")
+    t_id = custom_task_id or task_id or frappe.form_dict.get("custom_task_id") or frappe.form_dict.get("task_id")
+    if not schedule_name:
+        frappe.throw("schedule_name is required")
+
+    if t_id:
+        try:
+            parent_cols = [c[0] for c in frappe.db.sql("DESCRIBE `tabMaintenance Schedule`")]
+            if "custom_task_id" in parent_cols:
+                frappe.db.sql("UPDATE `tabMaintenance Schedule` SET `custom_task_id` = %s WHERE name = %s", (t_id, schedule_name))
+            if "task_id" in parent_cols:
+                frappe.db.sql("UPDATE `tabMaintenance Schedule` SET `task_id` = %s WHERE name = %s", (t_id, schedule_name))
+            frappe.db.commit()
+        except Exception as sql_e:
+            frappe.log_error(f"SQL update in update_maintenance_schedule: {sql_e}")
+
+        try:
+            frappe.db.set_value("Maintenance Schedule", schedule_name, {"custom_task_id": t_id}, update_modified=False)
+            frappe.db.commit()
+        except Exception:
+            pass
+
+        try:
+            frappe.clear_document_cache("Maintenance Schedule", schedule_name)
+        except Exception:
+            pass
+
+    return {"status": "success", "schedule_name": schedule_name, "custom_task_id": t_id}
 
 
 @frappe.whitelist()
@@ -743,449 +817,6 @@ def get_schedule_tasks(schedule_name=None, booking_id=None):
         frappe.log_error(f"Error in get_schedule_tasks: {e}")
 
     return {"status": "success", "tasks": tasks or []}
-
-
-def ensure_quotation_cancelled(quotation_name):
-    """
-    Guarantees that an old Quotation is submitted, then cancelled (docstatus == 2, status == 'Cancelled').
-    Submits draft documents first so Frappe cancellation and amendment lifecycles work correctly.
-    """
-    if not quotation_name or not frappe.db.exists("Quotation", quotation_name):
-        return
-
-    try:
-        frappe.clear_document_cache("Quotation", quotation_name)
-    except Exception:
-        pass
-
-    # Ensure company in database is valid before submitting or cancelling
-    try:
-        cur_comp = frappe.db.get_value("Quotation", quotation_name, "company")
-        if cur_comp == "CARPENTERS PROPERTIES PTE LTD" or not cur_comp:
-            frappe.db.sql("UPDATE `tabQuotation` SET company = 'CARPENTERS PROPERTIES PTE LIMITED' WHERE name = %s", (quotation_name,))
-            frappe.db.commit()
-    except Exception:
-        pass
-
-    try:
-        doc = frappe.get_doc("Quotation", quotation_name)
-        # 1. Old version: SUBMIT if Draft (docstatus == 0)
-        if doc.docstatus == 0:
-            doc.flags.ignore_validate = True
-            doc.flags.ignore_mandatory = True
-            doc.flags.ignore_payment_validation = True
-            doc.flags.ignore_permissions = True
-            doc.flags.ignore_links = True
-            if doc.company == "CARPENTERS PROPERTIES PTE LTD" or not doc.company:
-                doc.company = "CARPENTERS PROPERTIES PTE LIMITED"
-            if not (doc.custom_payment_details or "").strip() or len(doc.custom_payment_details.strip()) < 40:
-                doc.custom_payment_details = "Quotation auto-submitted for revision cancellation."
-            try:
-                doc.submit()
-            except Exception:
-                frappe.db.sql("UPDATE `tabQuotation` SET docstatus = 1, status = 'Submitted' WHERE name = %s", (quotation_name,))
-                frappe.db.sql("UPDATE `tabQuotation Item` SET docstatus = 1 WHERE parent = %s", (quotation_name,))
-                frappe.db.commit()
-                try:
-                    doc.reload()
-                except Exception:
-                    pass
-
-        # 2. Old version: CANCEL if Submitted (docstatus == 1)
-        if doc.docstatus == 1:
-            doc.flags.ignore_validate = True
-            doc.flags.ignore_mandatory = True
-            doc.flags.ignore_permissions = True
-            doc.flags.ignore_links = True
-            try:
-                doc.cancel()
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # Unconditionally ensure database record and child items are docstatus = 2 ('Cancelled')
-    try:
-        frappe.db.sql("""
-            UPDATE `tabQuotation`
-            SET docstatus = 2, status = 'Cancelled'
-            WHERE name = %s
-        """, (quotation_name,))
-        frappe.db.sql("""
-            UPDATE `tabQuotation Item`
-            SET docstatus = 2
-            WHERE parent = %s
-        """, (quotation_name,))
-        frappe.db.commit()
-    except Exception:
-        pass
-
-    try:
-        frappe.db.set_value("Quotation", quotation_name, {
-            "docstatus": 2,
-            "status": "Cancelled"
-        }, update_modified=False)
-        frappe.db.commit()
-    except Exception:
-        pass
-
-    try:
-        if frappe.db.has_column("Quotation", "workflow_state"):
-            frappe.db.sql("""
-                UPDATE `tabQuotation`
-                SET workflow_state = 'Cancelled'
-                WHERE name = %s
-            """, (quotation_name,))
-            frappe.db.commit()
-    except Exception:
-        pass
-
-    try:
-        frappe.clear_document_cache("Quotation", quotation_name)
-    except Exception:
-        pass
-    try:
-        frappe.clear_cache(doctype="Quotation")
-    except Exception:
-        pass
-
-
-@frappe.whitelist()
-def cancel_quotation(name=None):
-    """Whitelisted endpoint to cancel a quotation and guarantee docstatus == 2."""
-    if not name:
-        name = frappe.form_dict.get("name")
-    if not name or not frappe.db.exists("Quotation", name):
-        frappe.throw(f"Quotation {name} not found.")
-    ensure_quotation_cancelled(name)
-    return {"status": "success", "name": name, "docstatus": 2}
-
-
-@frappe.whitelist()
-def cancel_quotation_family(name=None):
-    """
-    Whitelisted endpoint to cancel a quotation and ALL previous documents/versions in its family.
-    (e.g., QTN-11-00616, QTN-11-00616-1, QTN-11-00616-2).
-    """
-    if not name:
-        name = frappe.form_dict.get("name")
-    if not name:
-        frappe.throw("Quotation name is required.")
-
-    parts = name.split("-")
-    if len(parts) > 3 and parts[-1].isdigit():
-        root_base = "-".join(parts[:-1])
-    else:
-        root_base = name
-
-    cancelled_list = []
-
-    # 1. Cancel the specific named document
-    if frappe.db.exists("Quotation", name):
-        ensure_quotation_cancelled(name)
-        cancelled_list.append(name)
-
-    # 2. Cancel the root base if different
-    if root_base != name and frappe.db.exists("Quotation", root_base):
-        ensure_quotation_cancelled(root_base)
-        cancelled_list.append(root_base)
-
-    # 3. Cancel all family versions matching root_base
-    try:
-        family_docs = frappe.db.sql("""
-            SELECT name FROM `tabQuotation`
-            WHERE (name = %s OR name LIKE %s OR amended_from = %s OR amended_from LIKE %s)
-        """, (root_base, f"{root_base}-%", root_base, f"{root_base}-%"), as_dict=True)
-
-        for row in family_docs:
-            d_name = row.get("name")
-            if d_name and d_name not in cancelled_list:
-                ensure_quotation_cancelled(d_name)
-                cancelled_list.append(d_name)
-    except Exception:
-        pass
-
-    return {
-        "status": "success",
-        "root": root_base,
-        "cancelled_count": len(cancelled_list),
-        "cancelled_documents": cancelled_list
-    }
-
-
-@frappe.whitelist()
-def create_revised_quotation(source_quotation=None, items=None, start_date=None, end_date=None, remarks=None, custom_tenant_onboarding=None, tenant_onboarding=None):
-    """
-    Cancels the source quotation and all previous versions in the quotation chain,
-    and creates a new amended Quotation version (e.g. QTN-11-00616-1, QTN-11-00616-2, QTN-11-00616-3).
-    """
-    if not source_quotation:
-        source_quotation = frappe.form_dict.get("source_quotation")
-    if not items:
-        items = frappe.form_dict.get("items")
-    if not start_date:
-        start_date = frappe.form_dict.get("start_date")
-    if not end_date:
-        end_date = frappe.form_dict.get("end_date")
-    if not remarks:
-        remarks = frappe.form_dict.get("remarks")
-    if not custom_tenant_onboarding:
-        custom_tenant_onboarding = frappe.form_dict.get("custom_tenant_onboarding") or frappe.form_dict.get("tenant_onboarding")
-
-    if not source_quotation:
-        frappe.throw("Source Quotation is required.")
-
-    if not frappe.db.exists("Quotation", source_quotation):
-        frappe.throw(f"Quotation {source_quotation} does not exist.")
-
-    base_name = source_quotation
-    parts = base_name.split("-")
-    if len(parts) > 3 and parts[-1].isdigit():
-        root_base = "-".join(parts[:-1])
-    else:
-        root_base = base_name
-
-    # 1. Step 1: Guarantee the source quotation is Cancelled (docstatus == 2)
-    ensure_quotation_cancelled(source_quotation)
-
-    # 2. Step 2: Cancel ALL previous documents in the quotation family
-    # (e.g. root QTN-11-00616, QTN-11-00616-1, QTN-11-00616-2, etc.)
-    if root_base != source_quotation and frappe.db.exists("Quotation", root_base):
-        ensure_quotation_cancelled(root_base)
-
-    try:
-        previous_family_docs = frappe.db.sql("""
-            SELECT name FROM `tabQuotation`
-            WHERE (name = %s OR name LIKE %s OR amended_from = %s OR amended_from LIKE %s)
-              AND docstatus != 2
-        """, (root_base, f"{root_base}-%", root_base, f"{root_base}-%"), as_dict=True)
-
-        for p_row in previous_family_docs:
-            p_name = p_row.get("name")
-            if p_name:
-                ensure_quotation_cancelled(p_name)
-    except Exception:
-        pass
-
-    # Clear document cache so subsequent reads see docstatus == 2
-    try:
-        frappe.clear_document_cache("Quotation", source_quotation)
-        frappe.clear_cache(doctype="Quotation")
-    except Exception:
-        pass
-
-    source_doc = frappe.get_doc("Quotation", source_quotation)
-
-    # 3. Step 3: Determine next amended version name (e.g. QTN-11-00616 -> QTN-11-00616-1, or QTN-11-00616-2 -> QTN-11-00616-3)
-    existing_nums = [0]
-    try:
-        existing_versions = frappe.db.sql("""
-            SELECT name FROM `tabQuotation`
-            WHERE name LIKE %s
-        """, (f"{root_base}-%",), as_dict=True)
-
-        for v in existing_versions:
-            v_parts = v.get("name", "").split("-")
-            if len(v_parts) > 3 and v_parts[-1].isdigit():
-                existing_nums.append(int(v_parts[-1]))
-    except Exception:
-        pass
-
-    next_ver = (max(existing_nums) + 1) if existing_nums else 1
-    if next_ver < 1:
-        next_ver = 1
-
-    candidate_name = f"{root_base}-{next_ver}"
-    while frappe.db.exists("Quotation", candidate_name):
-        next_ver += 1
-        candidate_name = f"{root_base}-{next_ver}"
-
-    # 4. Step 4: Create Amended Quotation
-    amended_doc = None
-    try:
-        from frappe.model.mapper import make_amended_doc
-        amended_doc = make_amended_doc("Quotation", source_quotation)
-    except Exception:
-        pass
-
-    if not amended_doc:
-        amended_doc = frappe.copy_doc(source_doc, ignore_no_copy=False)
-        amended_doc.amended_from = source_quotation
-        amended_doc.docstatus = 0
-
-    amended_doc.name = candidate_name
-    amended_doc.amended_from = source_quotation
-    amended_doc.docstatus = 0
-    amended_doc.status = "Draft"
-    if amended_doc.company == "CARPENTERS PROPERTIES PTE LTD" or not amended_doc.company:
-        amended_doc.company = "CARPENTERS PROPERTIES PTE LIMITED"
-
-    # Step 5: Apply revised items, dates, remarks if provided
-    if items and isinstance(items, str):
-        import json
-        try:
-            items = json.loads(items)
-        except Exception:
-            pass
-
-    if items and isinstance(items, list):
-        amended_doc.set("items", [])
-        net_total = 0.0
-        for item_data in items:
-            row = amended_doc.append("items", {})
-            for key, val in item_data.items():
-                if key not in ("name", "parent", "parentfield", "parenttype"):
-                    row.set(key, val)
-            rate = float(row.rate or 0)
-            qty = float(row.qty or 1)
-            row.amount = rate * qty
-            row.net_rate = rate
-            row.net_amount = row.amount
-            net_total += row.amount
-
-        amended_doc.total = net_total
-        amended_doc.net_total = net_total
-
-        # Recalculate taxes if taxes table exists
-        tax_total = 0.0
-        if amended_doc.get("taxes"):
-            for tax_row in amended_doc.taxes:
-                tax_rate = float(tax_row.rate or 12.5)
-                tax_amount = round(net_total * (tax_rate / 100.0), 2)
-                tax_row.tax_amount = tax_amount
-                tax_row.total = net_total + tax_amount
-                tax_total += tax_amount
-
-        amended_doc.total_taxes_and_charges = tax_total
-        amended_doc.grand_total = net_total + tax_total
-        amended_doc.rounded_total = round(amended_doc.grand_total)
-
-    if start_date:
-        amended_doc.custom_start_date = start_date
-    if end_date:
-        amended_doc.custom_end_date = end_date
-
-    if remarks:
-        amended_doc.remarks = remarks
-        amended_doc.custom_negotiation_status = remarks
-
-    # Clear signed document and payment details on new revision so it starts fresh
-    if hasattr(amended_doc, "signed_document"):
-        amended_doc.signed_document = None
-    if hasattr(amended_doc, "custom_payment_details"):
-        amended_doc.custom_payment_details = ""
-
-    # Inherit and set custom_tenant_onboarding from previous quotation
-    onboarding_id = (
-        custom_tenant_onboarding
-        or source_doc.get("custom_tenant_onboarding")
-    )
-    if not onboarding_id and source_doc.get("amended_from"):
-        try:
-            if frappe.db.exists("Quotation", source_doc.amended_from):
-                onboarding_id = frappe.db.get_value("Quotation", source_doc.amended_from, "custom_tenant_onboarding")
-        except Exception:
-            pass
-
-    if not onboarding_id:
-        try:
-            if root_base and frappe.db.exists("Quotation", root_base):
-                onboarding_id = frappe.db.get_value("Quotation", root_base, "custom_tenant_onboarding")
-        except Exception:
-            pass
-
-    if onboarding_id:
-        amended_doc.custom_tenant_onboarding = onboarding_id
-
-    amended_doc.flags.ignore_validate = True
-    amended_doc.flags.ignore_mandatory = True
-    amended_doc.flags.ignore_permissions = True
-    amended_doc.flags.ignore_links = True
-
-    # Re-verify amended_from source doc is docstatus 2 before insert
-    if amended_doc.amended_from:
-        try:
-            frappe.db.sql("""
-                UPDATE `tabQuotation`
-                SET docstatus = 2, status = 'Cancelled'
-                WHERE name = %s
-            """, (amended_doc.amended_from,))
-            frappe.db.commit()
-            frappe.clear_document_cache("Quotation", amended_doc.amended_from)
-        except Exception:
-            pass
-
-    try:
-        amended_doc.insert()
-    except Exception as ins_err:
-        err_msg = str(ins_err)
-        # If Frappe throws because amended_from check failed, temporarily bypass amended_from on insert and relink
-        if "cannot be amended because it is not cancelled" in err_msg:
-            try:
-                frappe.db.sql("""
-                    UPDATE `tabQuotation`
-                    SET docstatus = 2, status = 'Cancelled'
-                    WHERE name = %s
-                """, (source_quotation,))
-                frappe.db.sql("""
-                    UPDATE `tabQuotation Item`
-                    SET docstatus = 2
-                    WHERE parent = %s
-                """, (source_quotation,))
-                frappe.db.commit()
-                frappe.clear_document_cache("Quotation", source_quotation)
-            except Exception:
-                pass
-
-            amended_doc.amended_from = None
-            amended_doc.insert()
-
-            try:
-                frappe.db.sql("""
-                    UPDATE `tabQuotation`
-                    SET amended_from = %s
-                    WHERE name = %s
-                """, (source_quotation, amended_doc.name))
-                frappe.db.commit()
-            except Exception:
-                pass
-        elif "already exists" in err_msg.lower() or "duplicate" in err_msg.lower():
-            next_ver += 1
-            candidate_name = f"{root_base}-{next_ver}"
-            amended_doc.name = candidate_name
-            amended_doc.insert()
-        else:
-            raise ins_err
-
-    # Explicitly ensure custom_tenant_onboarding is persisted in DB
-    if onboarding_id:
-        try:
-            frappe.db.set_value("Quotation", amended_doc.name, "custom_tenant_onboarding", onboarding_id, update_modified=False)
-            frappe.db.commit()
-        except Exception:
-            pass
-
-    # Ensure all previous family documents remain Cancelled in DB
-    try:
-        frappe.db.sql("""
-            UPDATE `tabQuotation`
-            SET docstatus = 2, status = 'Cancelled'
-            WHERE (name = %s OR name LIKE %s OR amended_from = %s OR amended_from LIKE %s)
-              AND name != %s
-        """, (root_base, f"{root_base}-%", root_base, f"{root_base}-%", amended_doc.name))
-        frappe.db.commit()
-    except Exception:
-        pass
-
-    return {
-        "status": "success",
-        "name": amended_doc.name,
-        "quotation": amended_doc.name,
-        "amended_from": source_quotation,
-        "custom_tenant_onboarding": onboarding_id,
-        "doc": amended_doc.as_dict()
-    }
-
 
 @frappe.whitelist()
 def create_payment_receive_entry(sales_invoice_name=None):

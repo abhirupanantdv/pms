@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Send, CheckCircle2, MessageSquare, AlertCircle, BarChart2, ShieldAlert, Clock, User, Sparkles, Mic, MicOff, RefreshCw, X, HelpCircle, Check, Play, Pencil, Settings, Paperclip, Activity, FileText, Bell, Phone, Mail, Award, DollarSign, Maximize2, ChevronDown, Bold, Italic, Underline, Link, Trash2, CheckSquare } from 'lucide-react';
-import { getAuthHeaders } from '../config';
+import { getAuthHeaders, cleanServerErrorMessage, fetchWithTimeout, safeJson } from '../config';
 import CreateScheduleModal from './CreateScheduleModal';
 
 const MOCK_ISSUE_LISTS = {
@@ -83,8 +83,8 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   const [attachedFile, setAttachedFile] = useState(null);
 
   // Local state copy of tickets to allow changing status and closing/reopening in the UI
-  const [localTickets, setLocalTickets] = useState(tickets || []);
-  const [loadingTickets, setLoadingTickets] = useState(false);
+  const [localTickets, setLocalTickets] = useState([]);
+  const [loadingTickets, setLoadingTickets] = useState(true);
   const [messageText, setMessageText] = useState('');
   const [isListening, setIsListening] = useState(false);
 
@@ -120,51 +120,31 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
     try {
       let issuesData = null;
 
-      // Strategy 1: fields=["*"] to retrieve all columns dynamically
+      // Strategy 1: Guaranteed standard Frappe Issue fields with timeout
       try {
-        const res1 = await fetch(
-          `${erpnextConfig.url}/api/resource/Issue?fields=%5B%22*%22%5D&limit_page_length=500&order_by=creation%20desc`,
+        const safeFields = encodeURIComponent(JSON.stringify([
+          "name", "subject", "customer", "customer_name", "customer_name1",
+          "customer_email", "customer_phone_number", "contact", "booking_number",
+          "raised_by", "status", "priority", "issue_type", "main_issues", "description",
+          "opening_date", "opening_time", "resolution_date", "company", "agreement_status", "budget",
+          "creation", "modified"
+        ]));
+        const res1 = await fetchWithTimeout(
+          `${erpnextConfig.url}/api/resource/Issue?fields=${safeFields}&limit_page_length=200&order_by=creation%20desc`,
           {
             credentials: 'include',
             headers: getAuthHeaders({ 'Content-Type': 'application/json' })
-          }
-        );
-        if (res1.ok) {
-          const json1 = await res1.json();
-          if (Array.isArray(json1.data) && json1.data.length > 0) {
+          },
+          10000
+        ).catch(() => null);
+        if (res1 && res1.ok) {
+          const json1 = await safeJson(res1);
+          if (Array.isArray(json1?.data) && json1.data.length > 0) {
             issuesData = json1.data;
           }
         }
       } catch (e1) {
-        console.warn('Support Issue fetch fields=["*"] failed:', e1);
-      }
-
-      // Strategy 2: Guaranteed standard Frappe Issue fields
-      if (!issuesData) {
-        try {
-          const safeFields = encodeURIComponent(JSON.stringify([
-            "name", "subject", "customer", "customer_name", "customer_name1",
-            "customer_email", "customer_phone_number", "contact", "booking_number",
-            "raised_by", "status", "priority", "issue_type", "main_issues", "description",
-            "opening_date", "opening_time", "resolution_date", "company", "agreement_status", "budget",
-            "creation", "modified"
-          ]));
-          const res2 = await fetch(
-            `${erpnextConfig.url}/api/resource/Issue?fields=${safeFields}&limit_page_length=500&order_by=creation%20desc`,
-            {
-              credentials: 'include',
-              headers: getAuthHeaders({ 'Content-Type': 'application/json' })
-            }
-          );
-          if (res2.ok) {
-            const json2 = await res2.json();
-            if (Array.isArray(json2.data) && json2.data.length > 0) {
-              issuesData = json2.data;
-            }
-          }
-        } catch (e2) {
-          console.warn('Support Issue fetch safe fields failed:', e2);
-        }
+        console.warn('Support Issue fetch safe fields failed:', e1);
       }
 
       // Strategy 3: Minimal fallback (no fields parameter)
@@ -263,12 +243,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
   }, [erpnextConfig?.url]);
 
   useEffect(() => {
-    if (Array.isArray(tickets) && tickets.length > 0) {
-      setLocalTickets(tickets);
-      if (!selectedTicketId) {
-        setSelectedTicketId(tickets[0].id);
-      }
-    }
+    // Only set from prop if not already loaded from API
   }, [tickets]);
 
   // Helper: extract 2-letter uppercase initials
@@ -1272,7 +1247,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
       setIssueDescription('');
       setShowCreateModal(false);
     } catch (err) {
-      setErrorMsg(err.message || 'Failed to create ticket');
+      setErrorMsg(cleanServerErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -1417,15 +1392,30 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                       </tr>
                     </thead>
                     <tbody>
-                      {openTickets.map(t => (
-                        <tr key={t.id} onClick={() => handleLineClick(t.id)} style={{ cursor: 'pointer' }}>
-                          <td>{t.id}</td>
-                          <td>{t.subject}</td>
-                          <td><span className="badge badge-warning">{t.status}</span></td>
-                          <td>{t.priority}</td>
-                          <td>2026-06-18</td>
+                      {loadingTickets ? (
+                        <tr>
+                          <td colSpan="5" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-secondary)' }}>
+                            <RefreshCw size={20} className="spin" style={{ margin: '0 auto 8px', display: 'block', color: 'var(--brand-color)' }} />
+                            <div style={{ fontWeight: 600, fontSize: 12 }}>Waiting for response</div>
+                          </td>
                         </tr>
-                      ))}
+                      ) : openTickets.length === 0 ? (
+                        <tr>
+                          <td colSpan="5" style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-muted)' }}>
+                            No open maintenance requests.
+                          </td>
+                        </tr>
+                      ) : (
+                        openTickets.map(t => (
+                          <tr key={t.id} onClick={() => handleLineClick(t.id)} style={{ cursor: 'pointer' }}>
+                            <td>{t.id}</td>
+                            <td>{t.subject}</td>
+                            <td><span className="badge badge-warning">{t.status}</span></td>
+                            <td>{t.priority}</td>
+                            <td>2026-06-18</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1549,16 +1539,33 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                       </tr>
                     </thead>
                     <tbody>
-                      {localTickets.map(t => (
-                        <tr key={t.id} onClick={() => handleLineClick(t.id)} style={{ cursor: 'pointer' }}>
-                          <td style={{ fontWeight: 600 }}>{t.id}</td>
-                          <td>{t.subject}</td>
-                          <td>{t.tenantName}</td>
-                          <td>{t.category || 'General'}</td>
-                          <td>{t.priority}</td>
-                          <td><span className={`badge ${t.status === 'closed' ? 'badge-success' : 'badge-warning'}`}>{t.status}</span></td>
+                      {loadingTickets ? (
+                        <tr>
+                          <td colSpan="6" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-secondary)' }}>
+                            <RefreshCw size={24} className="spin" style={{ margin: '0 auto 10px', display: 'block', color: 'var(--brand-color)' }} />
+                            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
+                              Waiting for response
+                            </div>
+                          </td>
                         </tr>
-                      ))}
+                      ) : localTickets.length === 0 ? (
+                        <tr>
+                          <td colSpan="6" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
+                            No issues found.
+                          </td>
+                        </tr>
+                      ) : (
+                        localTickets.map(t => (
+                          <tr key={t.id} onClick={() => handleLineClick(t.id)} style={{ cursor: 'pointer' }}>
+                            <td style={{ fontWeight: 600 }}>{t.id}</td>
+                            <td>{t.subject}</td>
+                            <td>{t.tenantName}</td>
+                            <td>{t.category || 'General'}</td>
+                            <td>{t.priority}</td>
+                            <td><span className={`badge ${t.status === 'closed' ? 'badge-success' : 'badge-warning'}`}>{t.status}</span></td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1618,7 +1625,7 @@ export default function Support({ tickets, onAddMessage, onCreateIssue, tenants 
                   {loadingTickets && localTickets.length === 0 ? (
                     <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
                       <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite', color: 'var(--brand-color)' }} />
-                      <span>Loading issues from Issue doctype...</span>
+                      <span>Waiting for response</span>
                     </div>
                   ) : currentItems.length === 0 ? (
                     <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>

@@ -2272,7 +2272,6 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                   <th>Contract Id</th>
                   <th>Status</th>
                   <th>Amount</th>
-                  <th>Payment Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -2343,17 +2342,12 @@ export default function Booking({ erpnextConfig, initialSearchTerm = '', onClear
                     <td style={{ fontWeight: 600 }}>
                       F${parseFloat(b.booking_amount || b.amount_to_pay || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
-                    <td>
-                      <span className={`badge ${b.payment_status === 'Paid' ? 'badge-success' : b.payment_status === 'Partially Paid' ? 'badge-warning' : 'badge-danger'}`}>
-                        {b.payment_status || 'Unpaid'}
-                      </span>
-                    </td>
                   </tr>
                 ))}
 
                 {filteredBookings.length === 0 && (
                   <tr>
-                    <td colSpan="8" style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                    <td colSpan="7" style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                       {loadingList ? 'Waiting for response' : 'No booking records found.'}
                     </td>
                   </tr>

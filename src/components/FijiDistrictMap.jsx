@@ -36,6 +36,48 @@ export const FIJI_DISTRICTS = {
     coords: [-17.6167, 177.4500],
     description: 'Sugar City & commercial port district'
   },
+  'Ba': {
+    name: 'Ba',
+    division: 'Western Division',
+    coords: [-17.5333, 177.6833],
+    description: 'Western commercial town & industrial estates'
+  },
+  'Tailevu': {
+    name: 'Tailevu',
+    division: 'Central Division',
+    coords: [-17.8833, 178.5333],
+    description: 'Eastern coastal commercial zone & dairy corridor'
+  },
+  'Labasa': {
+    name: 'Labasa',
+    division: 'Northern Division',
+    coords: [-16.4333, 179.3667],
+    description: 'Northern regional commercial hub & Macuata center'
+  },
+  'Bua': {
+    name: 'Bua',
+    division: 'Northern Division',
+    coords: [-16.8333, 178.7500],
+    description: 'Vanua Levu western province & maritime resources'
+  },
+  'Kadavu': {
+    name: 'Kadavu',
+    division: 'Eastern Division',
+    coords: [-19.0167, 178.1667],
+    description: 'Kadavu island group & maritime southern region'
+  },
+  'Levuka': {
+    name: 'Levuka',
+    division: 'Eastern Division',
+    coords: [-17.6833, 178.8333],
+    description: 'Historic port town & Ovalau maritime district'
+  },
+  'Pacific Harbor': {
+    name: 'Pacific Harbor',
+    division: 'Central Division',
+    coords: [-18.2000, 178.0500],
+    description: 'Pacific Harbour residential & commercial enclave'
+  },
   'Rewa': {
     name: 'Rewa / Nausori',
     division: 'Central Division',
@@ -60,18 +102,6 @@ export const FIJI_DISTRICTS = {
     coords: [-18.1400, 177.5100],
     description: 'Sigatoka & Coral Coast resort corridor'
   },
-  'Ba': {
-    name: 'Ba',
-    division: 'Western Division',
-    coords: [-17.5333, 177.6833],
-    description: 'Western commercial town & industrial estates'
-  },
-  'Tailevu': {
-    name: 'Tailevu',
-    division: 'Central Division',
-    coords: [-17.8833, 178.5333],
-    description: 'Eastern coastal commercial zone & dairy corridor'
-  },
   'Serua': {
     name: 'Serua / Pacific Harbour',
     division: 'Central Division',
@@ -87,13 +117,16 @@ export const resolvePropertyDistrict = (p, fallbackIndex = 0) => {
   if (corpus.includes('suva') || corpus.includes('samabula') || corpus.includes('lami') || corpus.includes('rodwell')) return 'Suva';
   if (corpus.includes('nadi') || corpus.includes('namaka') || corpus.includes('martintar') || corpus.includes('denarau')) return 'Nadi';
   if (corpus.includes('lautoka') || corpus.includes('naviti') || corpus.includes('vitogo')) return 'Lautoka';
-  if (corpus.includes('rewa') || corpus.includes('nausori')) return 'Rewa';
-  if (corpus.includes('labasa') || corpus.includes('macuata') || corpus.includes('nasekula')) return 'Macuata';
-  if (corpus.includes('savusavu') || corpus.includes('cakaudrove')) return 'Cakaudrove';
-  if (corpus.includes('nadroga') || corpus.includes('sigatoka') || corpus.includes('coral coast')) return 'Nadroga-Navosa';
   if (corpus.includes('ba')) return 'Ba';
   if (corpus.includes('tailevu') || corpus.includes('korovou')) return 'Tailevu';
-  if (corpus.includes('serua') || corpus.includes('pacific harbour') || corpus.includes('deuba')) return 'Serua';
+  if (corpus.includes('labasa') || corpus.includes('macuata') || corpus.includes('nasekula')) return 'Labasa';
+  if (corpus.includes('bua')) return 'Bua';
+  if (corpus.includes('kadavu')) return 'Kadavu';
+  if (corpus.includes('levuka') || corpus.includes('ovalau')) return 'Levuka';
+  if (corpus.includes('pacific harbor') || corpus.includes('pacific harbour') || corpus.includes('serua') || corpus.includes('deuba')) return 'Pacific Harbor';
+  if (corpus.includes('rewa') || corpus.includes('nausori')) return 'Rewa';
+  if (corpus.includes('savusavu') || corpus.includes('cakaudrove')) return 'Cakaudrove';
+  if (corpus.includes('nadroga') || corpus.includes('sigatoka') || corpus.includes('coral coast')) return 'Nadroga-Navosa';
 
   if (p.district && typeof p.district === 'string' && p.district.trim()) {
     const dTrim = p.district.trim();
@@ -104,7 +137,7 @@ export const resolvePropertyDistrict = (p, fallbackIndex = 0) => {
   }
 
   // Fallback realistic distribution across major Fiji commercial hubs
-  const defaultDistricts = ['Suva', 'Nadi', 'Lautoka', 'Rewa', 'Macuata', 'Nadroga-Navosa'];
+  const defaultDistricts = ['Suva', 'Nadi', 'Lautoka', 'Ba', 'Tailevu', 'Labasa'];
   return defaultDistricts[fallbackIndex % defaultDistricts.length];
 };
 
@@ -186,7 +219,7 @@ function createDistrictDivIcon(districtKey, displayName, count, isSelected) {
   });
 }
 
-export default function FijiDistrictMap({ properties = [], onSelectProperty = null }) {
+export default function FijiDistrictMap({ properties = [], onSelectProperty = null, propertyGroupsByDistrict = null }) {
   const [selectedDistrict, setSelectedDistrict] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -213,25 +246,72 @@ export default function FijiDistrictMap({ properties = [], onSelectProperty = nu
       };
     });
 
-    // Populate with actual properties
-    properties.forEach((p, idx) => {
-      const dKey = resolvePropertyDistrict(p, idx);
-      if (!map[dKey]) {
-        map[dKey] = {
-          key: dKey,
-          name: dKey,
+    if (propertyGroupsByDistrict && Array.isArray(propertyGroupsByDistrict) && propertyGroupsByDistrict.length > 0) {
+      // Use API-provided district groups
+      propertyGroupsByDistrict.forEach(item => {
+        const dName = item.District || item.district || '';
+        let matchedKey = Object.keys(FIJI_DISTRICTS).find(k => k.toLowerCase() === dName.toLowerCase());
+        if (!matchedKey) {
+          if (dName.toLowerCase().includes('pacific')) matchedKey = 'Pacific Harbor';
+          else if (dName.toLowerCase().includes('labasa')) matchedKey = 'Labasa';
+          else matchedKey = dName;
+        }
+
+        const count = item.Total !== undefined ? Number(item.Total) : (Array.isArray(item['Property Groups']) ? item['Property Groups'].length : 0);
+        const groupNames = item['Property Groups'] || [];
+
+        const districtProps = groupNames.map(gName => {
+          const matched = properties.find(p =>
+            (p.name || '').toLowerCase() === String(gName).toLowerCase() ||
+            (p.id || '').toLowerCase() === String(gName).toLowerCase()
+          );
+          return matched || {
+            name: gName,
+            id: gName,
+            district: dName,
+            unitsCount: 4
+          };
+        });
+
+        const districtMeta = FIJI_DISTRICTS[matchedKey] || {
+          name: dName,
           division: 'Fiji Territory',
           coords: [-18.1416, 178.4415],
-          description: 'Commercial & residential portfolio asset',
-          count: 0,
-          totalUnits: 0,
-          properties: []
+          description: `${dName} commercial & residential portfolio`
         };
-      }
-      map[dKey].count += 1;
-      map[dKey].totalUnits += parseInt(p.unitsCount || p.units || 0, 10) || 4;
-      map[dKey].properties.push(p);
-    });
+
+        map[matchedKey] = {
+          key: matchedKey,
+          name: districtMeta.name,
+          division: districtMeta.division,
+          coords: districtMeta.coords,
+          description: districtMeta.description,
+          count: count,
+          totalUnits: districtProps.reduce((sum, p) => sum + (parseInt(p.unitsCount || p.units || 0, 10) || 4), 0),
+          properties: districtProps
+        };
+      });
+    } else {
+      // Populate with actual properties
+      properties.forEach((p, idx) => {
+        const dKey = resolvePropertyDistrict(p, idx);
+        if (!map[dKey]) {
+          map[dKey] = {
+            key: dKey,
+            name: dKey,
+            division: 'Fiji Territory',
+            coords: [-18.1416, 178.4415],
+            description: 'Commercial & residential portfolio asset',
+            count: 0,
+            totalUnits: 0,
+            properties: []
+          };
+        }
+        map[dKey].count += 1;
+        map[dKey].totalUnits += parseInt(p.unitsCount || p.units || 0, 10) || 4;
+        map[dKey].properties.push(p);
+      });
+    }
 
     const list = Object.values(map);
     // Sort districts with available property groups first, ordered descending by count
@@ -239,9 +319,11 @@ export default function FijiDistrictMap({ properties = [], onSelectProperty = nu
       if (b.count !== a.count) return b.count - a.count;
       return a.name.localeCompare(b.name);
     });
-  }, [properties]);
+  }, [properties, propertyGroupsByDistrict]);
 
-  const totalPropertyGroups = properties.length;
+  const totalPropertyGroups = (propertyGroupsByDistrict && propertyGroupsByDistrict.length > 0)
+    ? districtData.reduce((acc, d) => acc + d.count, 0)
+    : properties.length;
   const activeDistricts = districtData.filter(d => d.count > 0);
 
   // Filtered districts for the side search panel

@@ -24,9 +24,10 @@ import {
   ArrowRight,
   Check,
   Copy,
-  Loader2
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
-import { getAuthHeaders, getCsrfToken } from '../config';
+import { getAuthHeaders, getCsrfToken, cleanServerErrorMessage, fetchWithTimeout, safeJson } from '../config';
 
 // Robust mock dataset with the user's sample payment entry
 const SAMPLE_PAYMENT_ENTRIES = [
@@ -333,14 +334,14 @@ export default function PaymentEntry({ erpnextConfig, tenants = [], onNavigateTo
           JSON.stringify(fields)
         )}&order_by=creation desc&limit_page_length=200`;
 
-        const res = await fetch(url, {
+        const res = await fetchWithTimeout(url, {
           credentials: 'include',
           headers: getAuthHeaders()
-        });
+        }, 15000).catch(() => null);
 
-        if (res.ok) {
-          const json = await res.json();
-          const data = json.data || [];
+        if (res && res.ok) {
+          const json = await safeJson(res);
+          const data = json?.data || [];
           if (data.length > 0) {
             const normalized = data.map(item => {
               const isSubmittedTarget = targetSubmittedName && item.name === targetSubmittedName;
@@ -379,15 +380,15 @@ export default function PaymentEntry({ erpnextConfig, tenants = [], onNavigateTo
             return;
           }
         } else {
-          console.warn('Payment Entry fetch returned non-ok:', res.status);
+          console.warn('Payment Entry fetch returned non-ok or timed out');
         }
       }
-      // If ERPNext returned 0 records or is unreachable, use rich initial fallback
-      setPayments(SAMPLE_PAYMENT_ENTRIES);
+      // If ERPNext returned 0 records or is unreachable, preserve existing records or empty list (no dummy data)
+      setPayments(prev => (prev && prev.length > 0) ? prev : []);
     } catch (err) {
-      console.warn('Payment Entry fetch failed, using fallback:', err);
-      setPayments(SAMPLE_PAYMENT_ENTRIES);
-      setErrorMsg('Could not fetch live payment entries. Displaying cached records.');
+      console.warn('Payment Entry fetch failed:', err);
+      setPayments(prev => (prev && prev.length > 0) ? prev : []);
+      setErrorMsg(cleanServerErrorMessage(err));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -671,7 +672,7 @@ export default function PaymentEntry({ erpnextConfig, tenants = [], onNavigateTo
 
       // Check if submission threw a hard error that couldn't be resolved
       if (submitError && (!updatedDoc || updatedDoc.docstatus !== 1)) {
-        const cleanMsg = submitError.replace(/<[^>]*>/g, '').trim();
+        const cleanMsg = cleanServerErrorMessage(submitError);
         throw new Error(cleanMsg || 'Submission failed in ERPNext');
       }
 
@@ -733,19 +734,10 @@ export default function PaymentEntry({ erpnextConfig, tenants = [], onNavigateTo
 
     } catch (err) {
       console.error('Error submitting Payment Entry:', err);
-      let msg = err.message || 'Failed to submit Payment Entry';
-      try {
-        if (typeof msg === 'string' && msg.startsWith('[')) {
-          const parsed = JSON.parse(msg);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const inner = typeof parsed[0] === 'string' ? JSON.parse(parsed[0]) : parsed[0];
-            msg = inner?.message || msg;
-          }
-        }
-      } catch { }
+      const cleanMsg = cleanServerErrorMessage(err);
       setActionFeedback({
         type: 'error',
-        message: `Error: ${msg}`
+        message: `Error: ${cleanMsg}`
       });
     } finally {
       setSubmittingPayment(false);
@@ -1251,8 +1243,11 @@ export default function PaymentEntry({ erpnextConfig, tenants = [], onNavigateTo
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={selectedPayment ? 7 : 8} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                      Loading payment entries...
+                    <td colSpan={selectedPayment ? 7 : 8} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                      <RefreshCw size={26} className="spin" style={{ margin: '0 auto 14px', display: 'block', color: 'var(--brand-color, #065f46)' }} />
+                      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
+                        Waiting for response
+                      </div>
                     </td>
                   </tr>
                 ) : paginatedPayments.length === 0 ? (

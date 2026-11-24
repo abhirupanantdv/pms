@@ -2055,6 +2055,7 @@ import {
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, AlertCircle, Building, MapPin, Hash, Sparkles, RefreshCw
 } from 'lucide-react';
 import { getAuthHeaders, getUploadHeaders, getCsrfToken } from '../config';
+import { fetchDocTypeList, normalizePropertyGroup, updatePropertyGroupApi } from '../services/api';
 
 const fallbackImages = {
   residential: [
@@ -2318,23 +2319,99 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
   const [selectedProp, setSelectedProp] = useState(null);
   const [expandedUnit, setExpandedUnit] = useState(null);
 
+  // API State for Property Group DocType (loaded via common API function)
+  const [apiProperties, setApiProperties] = useState([]);
+  const [loadingApiProperties, setLoadingApiProperties] = useState(true);
+  const [hasLoadedApi, setHasLoadedApi] = useState(false);
+
+  // Common API function call: pass 'Property Group' doctype name for properties sidebar option
+  const fetchPropertyGroups = useCallback(async (isRefresh = false) => {
+    setLoadingApiProperties(true);
+    try {
+      const res = await fetchDocTypeList('Property Group', {
+        page: 1,
+        limit: 100, // Fetch up to 100 records from ERPNext for real-time filtering & 10 rows per page pagination
+        orderBy: 'creation desc',
+        baseUrl: erpnextConfig?.url
+      });
+      if (res && Array.isArray(res.data)) {
+        setApiProperties(res.data);
+
+        // Synchronize metadata maps for legal description, lease start date, and floors
+        const descMap = {};
+        const startMap = {};
+        const floorsMap = {};
+        res.data.forEach(item => {
+          const key = item.id || item.name;
+          if (key) {
+            if (item.legal_description) descMap[key] = item.legal_description;
+            if (item.lease_start_date) startMap[key] = item.lease_start_date;
+            if (item.no_of_floors !== undefined && item.no_of_floors !== null) floorsMap[key] = item.no_of_floors;
+          }
+        });
+        setLegalDescriptions(prev => ({ ...prev, ...descMap }));
+        setLeaseStartDates(prev => ({ ...prev, ...startMap }));
+        setPropertyFloorsMap(prev => ({ ...prev, ...floorsMap }));
+      }
+    } catch (err) {
+      console.warn('Could not fetch Property Group DocType list:', err);
+    } finally {
+      setLoadingApiProperties(false);
+      setHasLoadedApi(true);
+    }
+  }, [erpnextConfig?.url]);
+
+  useEffect(() => {
+    fetchPropertyGroups();
+
+    // Listen for clicks on the sidebar "Properties" menu option to refresh Property Group data
+    const handleSidebarClick = (e) => {
+      const target = e.target;
+      const menuItem = target.closest && target.closest('.menu-item');
+      if (menuItem && menuItem.textContent && menuItem.textContent.trim().toLowerCase().includes('properties')) {
+        fetchPropertyGroups(true);
+      }
+    };
+
+    const handleNavigate = () => {
+      fetchPropertyGroups(true);
+    };
+
+    document.addEventListener('click', handleSidebarClick);
+    window.addEventListener('pms:navigate-properties', handleNavigate);
+    return () => {
+      document.removeEventListener('click', handleSidebarClick);
+      window.removeEventListener('pms:navigate-properties', handleNavigate);
+    };
+  }, [fetchPropertyGroups]);
+
+  // Only use API-fetched Property Groups - no dummy/mock data fallback in property table!
+  // Filter out records whose land_and_building_type is 'Services'
+  const effectiveProperties = useMemo(() => {
+    const list = apiProperties || [];
+    return list.filter(p => {
+      const type = String(p.land_and_building_type || p.type || '').trim().toLowerCase();
+      return type !== 'services' && type !== 'service';
+    });
+  }, [apiProperties]);
+
   useEffect(() => {
     if (preSelectedProperty) {
-      const match = (properties || []).find(p => p.id === preSelectedProperty.id || p.name === preSelectedProperty.name) || preSelectedProperty;
+      const match = (effectiveProperties || []).find(p => p.id === preSelectedProperty.id || p.name === preSelectedProperty.name) || preSelectedProperty;
       setSelectedProp(match);
       setSearchQuery(match.name || match.id || '');
       if (clearPreSelectedProperty) clearPreSelectedProperty();
     }
-  }, [preSelectedProperty, properties, clearPreSelectedProperty]);
+  }, [preSelectedProperty, effectiveProperties, clearPreSelectedProperty]);
 
   const [expandedFloors, setExpandedFloors] = useState({});
   const [floorReadOnly, setFloorReadOnly] = useState(false);
 
-  // Pagination & Layout States
+  // Pagination & Layout States - 10 rows per page
   const [viewLayout, setViewLayout] = useState('standard'); // 'standard' | 'three-column'
   const [selectedUnitId, setSelectedUnitId] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = selectedProp ? 6 : 10;
+  const itemsPerPage = 10;
 
   // ERPNext Integration States
   const [detailedProp, setDetailedProp] = useState(null);
@@ -2552,17 +2629,18 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     fetchDocTypeFields();
   }, [erpnextConfig]);
 
-  // Map of legal_description, lease_start_date, and no_of_floors directly fetched from Property Group DocType
+  // Map of legal_description, lease_start_date, no_of_floors, and property_area directly fetched from Property Group DocType
   const [legalDescriptions, setLegalDescriptions] = useState({});
   const [leaseStartDates, setLeaseStartDates] = useState({});
   const [propertyFloorsMap, setPropertyFloorsMap] = useState({});
+  const [propertyAreasMap, setPropertyAreasMap] = useState({});
 
-  // Fetch legal_description, lease_start_date, and no_of_floors for each Property Group directly from DocType
+  // Fetch legal_description, lease_start_date, no_of_floors, and property_area for each Property Group directly from DocType
   useEffect(() => {
     if (!erpnextConfig || !erpnextConfig.url) return;
     const fetchPropertyMeta = async () => {
       try {
-        const res = await fetch(`${erpnextConfig.url}/api/resource/Property%20Group?fields=["name","legal_description","lease_start_date","lease_end_date","no_of_floors"]&limit_page_length=0`, {
+        const res = await fetch(`${erpnextConfig.url}/api/resource/Property%20Group?fields=["name","legal_description","lease_start_date","lease_end_date","no_of_floors","property_area"]&limit_page_length=0`, {
           credentials: 'include',
           headers: getAuthHeaders({ 'Content-Type': 'application/json' })
         });
@@ -2572,6 +2650,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           const descMap = {};
           const startMap = {};
           const floorsMap = {};
+          const areasMap = {};
           items.forEach(item => {
             if (item.name) {
               if (item.legal_description) {
@@ -2583,14 +2662,18 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
               if (item.no_of_floors !== undefined && item.no_of_floors !== null) {
                 floorsMap[item.name] = item.no_of_floors;
               }
+              if (item.property_area !== undefined && item.property_area !== null && item.property_area !== '') {
+                areasMap[item.name] = item.property_area;
+              }
             }
           });
           setLegalDescriptions(prev => ({ ...prev, ...descMap }));
           setLeaseStartDates(prev => ({ ...prev, ...startMap }));
           setPropertyFloorsMap(prev => ({ ...prev, ...floorsMap }));
+          setPropertyAreasMap(prev => ({ ...prev, ...areasMap }));
         }
       } catch (err) {
-        console.warn('Failed to fetch legal_description, lease_start_date and no_of_floors from Property Group doctype:', err);
+        console.warn('Failed to fetch legal_description, lease_start_date, no_of_floors, and property_area from Property Group doctype:', err);
       }
     };
     fetchPropertyMeta();
@@ -2713,7 +2796,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       case 'land_description': return landDescription;
       case 'lease_start_date': return leaseStartDate;
       case 'lease_end_date': return leaseEndDate;
-      case 'property_area': return propertyArea;
+      case 'property_area': return (propertyArea !== undefined && propertyArea !== null && propertyArea !== '') ? propertyArea : ((area !== undefined && area !== null && area !== '') ? area : '');
       case 'years_remaining': return yearsRemaining;
       case 'external_tenant': return externalTenant;
       case 'internal_tenant': return internalTenant;
@@ -2756,7 +2839,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         setYearsRemaining(calculated !== '' ? String(calculated) : '');
         break;
       }
-      case 'property_area': setPropertyArea(value); break;
+      case 'property_area': {
+        setPropertyArea(value);
+        setArea(value);
+        break;
+      }
       case 'years_remaining': setYearsRemaining(value); break;
       case 'external_tenant': setExternalTenant(value); break;
       case 'internal_tenant': setInternalTenant(value); break;
@@ -2845,7 +2932,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         <div className="form-group" key={field.fieldname} style={{ gridColumn: '1 / -1' }}>
           <label className="form-label">{field.label} {field.required && <span style={{ color: 'red' }}>*</span>}</label>
           <textarea
-            value={value || ''}
+            value={(value !== undefined && value !== null) ? value : ''}
             onChange={(e) => onChange(e.target.value)}
             className="form-input"
             rows="2"
@@ -2863,7 +2950,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           type={field.fieldtype === 'Date' ? 'date' : (field.fieldtype === 'Float' || field.fieldtype === 'Int' ? 'number' : 'text')}
           step={field.fieldtype === 'Float' ? 'any' : (field.fieldtype === 'Int' ? '1' : undefined)}
           min={field.fieldtype === 'Int' ? '1' : undefined}
-          value={value || ''}
+          value={(value !== undefined && value !== null) ? value : ''}
           onChange={(e) => onChange(e.target.value)}
           className="form-input"
           placeholder={field.placeholder}
@@ -3083,20 +3170,14 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       case !propertyOwner?.trim():
         return 'Property owner is required';
 
+      case !country?.trim():
+        return 'Country is required';
+
       case !district?.trim():
         return 'District is required';
 
-      // case !rent:
-      //   return 'Rent is required';
-
-      // case Number(rent) <= 0:
-      //   return 'Rent must be greater than 0';
-
-      // case !area:
-      //   return 'Area is required';
-
-      // case Number(area) <= 0:
-      //   return 'Area must be greater than 0';
+      case !landAndBuildingType?.trim():
+        return 'Property Type is required';
 
       case unitsCount < 1:
         return 'Units count must be at least 1';
@@ -3389,7 +3470,34 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     setLandAndBuildingType(p.land_and_building_type || p.landAndBuildingType || 'Land and Structure');
     setNoOfFloors(p.no_of_floors !== undefined ? p.no_of_floors : (p.noOfFloors || ''));
     setLocality(p.locality || p.address || '');
-    setPropertyArea(p.property_area !== undefined ? p.property_area : (p.area || ''));
+    const resolvedArea = 
+      (p.property_area !== undefined && p.property_area !== null && p.property_area !== '')
+        ? p.property_area
+        : ((p.area !== undefined && p.area !== null && p.area !== '')
+          ? p.area
+          : ((p.custom_property_area !== undefined && p.custom_property_area !== null && p.custom_property_area !== '')
+            ? p.custom_property_area
+            : ((p.propertyArea !== undefined && p.propertyArea !== null && p.propertyArea !== '')
+              ? p.propertyArea
+              : ((p.total_area !== undefined && p.total_area !== null && p.total_area !== '')
+                ? p.total_area
+                : ((detailedProp?.property_area !== undefined && detailedProp?.property_area !== null && detailedProp?.property_area !== '')
+                  ? detailedProp.property_area
+                  : ((detailedProp?.area !== undefined && detailedProp?.area !== null && detailedProp?.area !== '')
+                    ? detailedProp.area
+                    : ((detailedProp?.custom_property_area !== undefined && detailedProp?.custom_property_area !== null && detailedProp?.custom_property_area !== '')
+                      ? detailedProp.custom_property_area
+                      : ((selectedProp?.property_area !== undefined && selectedProp?.property_area !== null && selectedProp?.property_area !== '')
+                        ? selectedProp.property_area
+                        : ((selectedProp?.area !== undefined && selectedProp?.area !== null && selectedProp?.area !== '')
+                          ? selectedProp.area
+                          : ((selectedProp?.custom_property_area !== undefined && selectedProp?.custom_property_area !== null && selectedProp?.custom_property_area !== '')
+                            ? selectedProp.custom_property_area
+                            : ((propertyAreasMap[p.name] || propertyAreasMap[p.id] || propertyAreasMap[p.reference_no] || propertyAreasMap[selectedProp?.name] || propertyAreasMap[selectedProp?.id]) || '')))))))))));
+
+    const finalArea = (resolvedArea !== undefined && resolvedArea !== null && resolvedArea !== '') ? String(resolvedArea) : '';
+    setPropertyArea(finalArea);
+    setArea(finalArea);
     const startD = p.lease_start_date || p.leaseStartDate || '';
     const endD = p.lease_end_date || p.leaseEndDate || '';
     setLeaseStartDate(startD);
@@ -3476,7 +3584,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     e.preventDefault();
 
     if (isEditingProperty) {
-      const pId = referenceNo || selectedProp?.id;
+      const pId = selectedProp?.name || detailedProp?.name || selectedProp?.id || detailedProp?.id || referenceNo;
       const numNoOfFloors = Number(noOfFloors);
       const primaryAttachment = propertyImages.length > 0
         ? (typeof propertyImages[0] === 'string' ? propertyImages[0] : (propertyImages[0].image || propertyImages[0].file_url || ''))
@@ -3520,49 +3628,11 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       if (erpnextConfig && erpnextConfig.url) {
         setSubmittingProperty(true);
         try {
-          const res = await fetch(`${erpnextConfig.url}/api/resource/Property%20Group/${encodeURIComponent(pId)}`, {
-            method: 'PUT',
-            credentials: 'include',
-            headers: getAuthHeaders({
-              'Content-Type': 'application/json'
-            }),
-            body: JSON.stringify(payload)
-          });
-
-          if (!res.ok) {
-            const errBody = await res.json().catch(() => ({}));
-            const message = errBody._server_messages
-              ? JSON.parse(JSON.parse(errBody._server_messages)[0]).message
-              : (errBody.message || res.statusText);
-            throw new Error(message);
-          }
-
-          // Ensure all propertyImages are linked in ERPNext File DocType
-          for (const img of propertyImages) {
-            const fileUrl = typeof img === 'string' ? img : (img.file_url || img.image);
-            if (!fileUrl || fileUrl.startsWith('data:')) continue;
-            const isAlreadyAttached = propertyAttachments.some(att => (typeof att === 'string' ? att : att.file_url) === fileUrl);
-            if (!isAlreadyAttached) {
-              try {
-                const fd = new FormData();
-                fd.append('file_url', fileUrl);
-                fd.append('doctype', 'Property Group');
-                fd.append('docname', pId);
-                fd.append('is_private', '0');
-                fd.append('folder', 'Home/Attachments');
-                const token = getCsrfToken();
-                if (token) fd.append('csrf_token', token);
-                await fetch(`${erpnextConfig.url}/api/method/upload_file`, {
-                  method: 'POST',
-                  credentials: 'include',
-                  headers: getUploadHeaders(),
-                  body: fd
-                });
-              } catch (e) {
-                console.warn('Could not attach file_url to Property Group:', e);
-              }
-            }
-          }
+          const resDoc = await updatePropertyGroupApi(
+            pId,
+            { ...payload, reference_no: referenceNo || pId, gallery: propertyImages },
+            erpnextConfig.url
+          );
 
           const freshAttachments = await fetchPropertyAttachments(pId);
           setPropertyAttachments(freshAttachments);
@@ -3571,6 +3641,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
             ...selectedProp,
             ...(detailedProp || {}),
             ...payload,
+            ...(resDoc || {}),
             id: pId,
             name: pId,
             address: locality || address,
@@ -3592,13 +3663,29 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           if (legalDescription) {
             setLegalDescriptions(prev => ({ ...prev, [pId]: legalDescription }));
           }
+          if (leaseStartDate) {
+            setLeaseStartDates(prev => ({ ...prev, [pId]: leaseStartDate }));
+          }
+          if (!isNaN(numNoOfFloors)) {
+            setPropertyFloorsMap(prev => ({ ...prev, [pId]: numNoOfFloors }));
+          }
+          if (propertyArea || area) {
+            setPropertyAreasMap(prev => ({ ...prev, [pId]: Number(propertyArea || area) }));
+          }
+
+          // Immediately reflect edit in apiProperties table
+          setApiProperties(prev => (prev || []).map(p => (p.name === pId || p.id === pId || (referenceNo && (p.reference_no === referenceNo || p.name === referenceNo))) ? { ...p, ...updatedDoc } : p));
+          fetchPropertyGroups(true).catch(err => console.warn('Background refresh failed:', err));
+
           setShowAddModal(false);
           setIsEditingProperty(false);
           clearPropertyGroupForm();
           setAlertState({ show: true, success: true, message: 'Property updated successfully!' });
         } catch (err) {
           console.error(err);
-          setAlertState({ show: true, success: false, message: `Failed to update property: ${err.message}` });
+          const rawErr = (err && typeof err === 'object' && err.message) ? err.message : String(err || '');
+          const cleanErr = rawErr && rawErr !== '{}' ? rawErr : 'An unexpected error occurred. Please check network and credentials.';
+          setAlertState({ show: true, success: false, message: `Failed to update property: ${cleanErr}` });
         } finally {
           setSubmittingProperty(false);
         }
@@ -3627,6 +3714,16 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         if (legalDescription) {
           setLegalDescriptions(prev => ({ ...prev, [pId]: legalDescription }));
         }
+        if (leaseStartDate) {
+          setLeaseStartDates(prev => ({ ...prev, [pId]: leaseStartDate }));
+        }
+        if (!isNaN(numNoOfFloors)) {
+          setPropertyFloorsMap(prev => ({ ...prev, [pId]: numNoOfFloors }));
+        }
+        if (propertyArea || area) {
+          setPropertyAreasMap(prev => ({ ...prev, [pId]: Number(propertyArea || area) }));
+        }
+        setApiProperties(prev => (prev || []).map(p => (p.name === pId || p.id === pId) ? { ...p, ...updatedDoc } : p));
         setShowAddModal(false);
         setIsEditingProperty(false);
         clearPropertyGroupForm();
@@ -3646,6 +3743,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
       return;
     }
 
+    setSubmittingProperty(true);
     try {
       const finalName = referenceNo || name || `PROP-${Math.floor(1000 + Math.random() * 9000)}`;
       const finalAddress = locality || address || 'Fiji';
@@ -3654,41 +3752,95 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
         : '';
       const effectiveYearsRemaining = yearsRemaining || calculateYearsRemaining(leaseEndDate, leaseStartDate) || undefined;
 
-      onAddProperty({
+      const registeredDoc = await onAddProperty({
         id: finalName,
         name: finalName,
-        type,
+        property_group_name: finalName,
+        type: landAndBuildingType || type || 'Land and Structure',
+        land_and_building_type: landAndBuildingType,
+        landAndBuildingType: landAndBuildingType,
+        property_type: landAndBuildingType,
         address: finalAddress,
-        unitsCount: Number(unitsCount),
-        rent: Number(rent),
+        unitsCount: Number(unitsCount) || 1,
+        rent: Number(rent) || 0,
         area: Number(propertyArea || area || 0),
+        property_area: Number(propertyArea || area || 0),
         listedOnline: false,
         occupancy: 0,
         propertyOwner,
+        property_owner: propertyOwner,
         country,
-        landAndBuildingType,
         district,
         locality: locality || address,
         legalDescription,
+        legal_description: legalDescription,
         referenceNo,
+        reference_no: referenceNo,
         leaseStartDate,
+        lease_start_date: leaseStartDate,
         leaseEndDate,
+        lease_end_date: leaseEndDate,
         yearsRemaining: effectiveYearsRemaining,
         years_remaining: effectiveYearsRemaining,
         noOfFloors: Number(noOfFloors) || undefined,
+        no_of_floors: Number(noOfFloors) || undefined,
         latitude,
         longitude,
+        custom_latitude: latitude ? Number(latitude) : undefined,
+        custom_longitude: longitude ? Number(longitude) : undefined,
         attachments: primaryAttachment,
         custom_attachments: primaryAttachment,
         image: primaryAttachment,
         gallery: propertyImages.map(img => ({ image: typeof img === 'string' ? img : (img.image || img.file_url) }))
       });
 
+      const createdKey = registeredDoc?.name || registeredDoc?.id || finalName;
+      const normalizedNew = normalizePropertyGroup({
+        ...(registeredDoc || {}),
+        id: createdKey,
+        name: createdKey,
+        legal_description: legalDescription || registeredDoc?.legal_description || '',
+        lease_start_date: leaseStartDate || registeredDoc?.lease_start_date || '',
+        lease_end_date: leaseEndDate || registeredDoc?.lease_end_date || '2026-12-31',
+        locality: locality || address || registeredDoc?.locality || '',
+        district: district || registeredDoc?.district || '',
+        country: country || registeredDoc?.country || 'Fiji',
+        no_of_floors: Number(noOfFloors) || registeredDoc?.no_of_floors || 1,
+        property_owner: propertyOwner || registeredDoc?.property_owner || '',
+        property_area: Number(propertyArea || area || 0),
+        land_and_building_type: landAndBuildingType || registeredDoc?.land_and_building_type || 'Commercial',
+        type: landAndBuildingType || registeredDoc?.type || 'commercial'
+      });
+
+      // Synchronize metadata maps so the new row displays properly in the table
+      if (legalDescription) {
+        setLegalDescriptions(prev => ({ ...prev, [createdKey]: legalDescription }));
+      }
+      if (leaseStartDate) {
+        setLeaseStartDates(prev => ({ ...prev, [createdKey]: leaseStartDate }));
+      }
+      if (noOfFloors) {
+        setPropertyFloorsMap(prev => ({ ...prev, [createdKey]: Number(noOfFloors) }));
+      }
+
+      // Immediately prepend into apiProperties table state so it shows up instantly
+      setApiProperties(prev => [normalizedNew, ...(prev || []).filter(p => p.name !== createdKey && p.id !== createdKey)]);
+
+      // Reset search filter and pagination to page 1 so the new property is immediately visible
+      setSearchQuery('');
+      setCurrentPage(1);
+
+      // Re-fetch from ERPNext server to ensure 100% synchronized state
+      await fetchPropertyGroups(true);
+
       clearPropertyGroupForm();
       setShowAddModal(false);
       setAlertState({ show: true, success: true, message: 'Property registered successfully!' });
     } catch (err) {
+      console.error('Failed to register property:', err);
       setAlertState({ show: true, success: false, message: err.message || 'Failed to save property portfolio!' });
+    } finally {
+      setSubmittingProperty(false);
     }
   };
 
@@ -3998,6 +4150,10 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
           }
           if ((doc.name || doc.id) && (doc.no_of_floors !== undefined && doc.no_of_floors !== null)) {
             setPropertyFloorsMap(prev => ({ ...prev, [doc.name || doc.id]: doc.no_of_floors }));
+          }
+          const docArea = doc.property_area ?? doc.area ?? doc.custom_property_area ?? doc.total_area;
+          if ((doc.name || doc.id) && docArea !== undefined && docArea !== null && docArea !== '') {
+            setPropertyAreasMap(prev => ({ ...prev, [doc.name || doc.id]: docArea }));
           }
         } else {
           setDetailedProp(selectedProp);
@@ -4504,9 +4660,12 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     setSelectedUnitId(null);
   };
 
-  const uniqueTypes = Array.from(new Set(properties.map(p => p.land_and_building_type || p.type).filter(Boolean)));
+  const uniqueTypes = Array.from(new Set(effectiveProperties.map(p => p.land_and_building_type || p.type).filter(Boolean)));
 
-  const filteredProperties = properties.filter(prop => {
+  const filteredProperties = effectiveProperties.filter(prop => {
+    const lbt = String(prop.land_and_building_type || prop.type || '').trim().toLowerCase();
+    if (lbt === 'services' || lbt === 'service') return false;
+
     const propType = prop.land_and_building_type || prop.type;
     const matchesFilter = filterType === 'all' || propType === filterType || prop.type === filterType;
     if (!matchesFilter) return false;
@@ -4563,36 +4722,143 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
     setCurrentPage(1);
   }, [searchQuery, filterType, filteredProperties.length]);
 
-  const totalPages = Math.ceil(filteredProperties.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(filteredProperties.length / itemsPerPage));
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentItems = filteredProperties.slice(indexOfFirstItem, indexOfLastItem);
 
   const renderPaginationControls = () => {
-    if (totalPages <= 1) return null;
-    return (
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-card)', flexShrink: 0 }}>
-        <button
-          type="button"
-          disabled={currentPage === 1}
-          onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', minWidth: 60 }}
+    if (loadingApiProperties || !hasLoadedApi) {
+      return (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: '12px 20px',
+            borderTop: '1px solid var(--border-color)',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+            background: 'var(--bg-card, #ffffff)',
+            gap: 8
+          }}
         >
-          Previous
-        </button>
-        <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-          Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong>
+          <RefreshCw size={13} className="spin" style={{ color: 'var(--brand-color)' }} />
+          <span>Waiting for response</span>
         </div>
-        <button
-          type="button"
-          disabled={currentPage === totalPages}
-          onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', minWidth: 60 }}
-        >
-          Next
-        </button>
+      );
+    }
+
+    const startRecord = filteredProperties.length > 0 ? indexOfFirstItem + 1 : 0;
+    const endRecord = Math.min(indexOfLastItem, filteredProperties.length);
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '12px 20px',
+          borderTop: '1px solid var(--border-color)',
+          fontSize: 11,
+          color: 'var(--text-secondary)',
+          background: 'var(--bg-card, #ffffff)',
+          flexShrink: 0,
+          flexWrap: 'wrap',
+          gap: 10
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>
+            Showing <strong style={{ color: 'var(--text-primary)' }}>{startRecord}</strong> to{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{endRecord}</strong> of{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{filteredProperties.length}</strong> entries (10 rows/page)
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => fetchPropertyGroups(true)}
+            disabled={loadingApiProperties}
+            title="Refresh Property Group from ERPNext"
+            style={{
+              padding: '2px 8px',
+              fontSize: 10,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              height: 24,
+              borderRadius: 4
+            }}
+          >
+            <RefreshCw size={11} className={loadingApiProperties ? 'spin' : ''} />
+            <span>{loadingApiProperties ? 'Refreshing...' : 'Refresh'}</span>
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+            className="btn btn-secondary"
+            style={{
+              padding: '4px 10px',
+              fontSize: 10,
+              opacity: currentPage === 1 ? 0.4 : 1,
+              cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              minWidth: 64
+            }}
+          >
+            <ChevronLeft size={12} /> Previous
+          </button>
+
+          <div style={{ display: 'flex', gap: 4 }}>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => (
+              <button
+                key={pageNum}
+                type="button"
+                onClick={() => setCurrentPage(pageNum)}
+                style={{
+                  minWidth: 26,
+                  height: 26,
+                  padding: '0 5px',
+                  borderRadius: 4,
+                  fontSize: 10,
+                  fontWeight: pageNum === currentPage ? 700 : 500,
+                  border: pageNum === currentPage ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
+                  background: pageNum === currentPage ? 'var(--brand-color)' : 'transparent',
+                  color: pageNum === currentPage ? '#ffffff' : 'var(--text-primary)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {pageNum}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+            className="btn btn-secondary"
+            style={{
+              padding: '4px 10px',
+              fontSize: 10,
+              opacity: currentPage === totalPages ? 0.4 : 1,
+              cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              minWidth: 64
+            }}
+          >
+            Next <ChevronRight size={12} />
+          </button>
+        </div>
       </div>
     );
   };
@@ -4697,7 +4963,7 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
             <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             <input
               type="text"
-              placeholder="Search properties across all fields (ID, name, location, type, legal description, lease)..."
+              placeholder="Search properties across all fields (ID, name, location, type, floors, lease)..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="form-input"
@@ -4745,37 +5011,59 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
                 <thead>
                   <tr>
                     <th>Name</th>
-                    <th>Legal Description</th>
+                    <th style={{ textAlign: 'center', verticalAlign: 'middle' }}>No of Floor</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {currentItems.map(prop => (
-                    <tr
-                      key={prop.id}
-                      onClick={() => {
-                        setSelectedProp(prop);
-                        setSelectedUnitId(null);
-                      }}
-                      style={{
-                        cursor: 'pointer',
-                        backgroundColor: selectedProp?.id === prop.id ? 'var(--bg-accent-alpha)' : ''
-                      }}
-                    >
-                      <td
-                        style={{ fontWeight: 600, color: 'var(--brand-color)', textDecoration: 'underline' }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedProp(prop);
-                          setViewLayout('standard');
-                        }}
-                      >
-                        {prop.name}
-                      </td>
-                      <td style={{ color: 'var(--text-secondary)' }}>
-                        {legalDescriptions[prop.name] || legalDescriptions[prop.id] || prop.legal_description || (prop.id === selectedProp?.id && detailedProp?.legal_description ? detailedProp.legal_description : '') || '—'}
+                  {loadingApiProperties || !hasLoadedApi ? (
+                    <tr>
+                      <td colSpan="2" style={{ textAlign: 'center', padding: '40px 12px', color: 'var(--text-secondary)' }}>
+                        <RefreshCw size={22} className="spin" style={{ margin: '0 auto 10px', display: 'block', color: 'var(--brand-color)' }} />
+                        <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)' }}>
+                          Waiting for response
+                        </div>
                       </td>
                     </tr>
-                  ))}
+                  ) : currentItems.length > 0 ? (
+                    currentItems.map(prop => (
+                      <tr
+                        key={prop.id}
+                        onClick={() => {
+                          setSelectedProp(prop);
+                          setSelectedUnitId(null);
+                        }}
+                        style={{
+                          cursor: 'pointer',
+                          backgroundColor: selectedProp?.id === prop.id ? 'var(--bg-accent-alpha)' : ''
+                        }}
+                      >
+                        <td
+                          style={{ fontWeight: 600, color: 'var(--brand-color)', textDecoration: 'underline' }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedProp(prop);
+                            setViewLayout('standard');
+                          }}
+                        >
+                          {prop.name}
+                        </td>
+                        <td style={{ color: 'var(--text-secondary)', textAlign: 'center', verticalAlign: 'middle' }}>
+                          {(() => {
+                            const floorsVal = (prop.no_of_floors !== undefined && prop.no_of_floors !== null && prop.no_of_floors !== '')
+                              ? prop.no_of_floors
+                              : (propertyFloorsMap[prop.name] ?? propertyFloorsMap[prop.id] ?? prop.custom_no_of_floors ?? prop.noOfFloors ?? (prop.id === selectedProp?.id && (detailedProp?.no_of_floors ?? detailedProp?.custom_no_of_floors)) ?? '');
+                            return (floorsVal !== '' && floorsVal !== undefined && floorsVal !== null) ? floorsVal : '—';
+                          })()}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="2" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
+                        No properties match your filter.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -5540,58 +5828,71 @@ export default function Properties({ properties, onAddProperty, onToggleListOnli
               <table className="custom-table">
                 <thead>
                   <tr>
-                    <th>ID</th>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Legal Description</th>
-                    <th>Start Date</th>
-                    <th>Lease End</th>
+                    <th style={{ textAlign: 'center', verticalAlign: 'middle' }}>ID</th>
+                    <th style={{ textAlign: 'center', verticalAlign: 'middle' }}>Name</th>
+                    <th style={{ textAlign: 'center', verticalAlign: 'middle' }}>Type</th>
+                    <th style={{ textAlign: 'center', verticalAlign: 'middle' }}>No of Floor</th>
+                    <th style={{ textAlign: 'center', verticalAlign: 'middle' }}>Start Date</th>
+                    <th style={{ textAlign: 'center', verticalAlign: 'middle' }}>Lease End</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {currentItems.map(prop => {
-                    const startDateVal = prop.lease_start_date || prop.leaseStartDate || leaseStartDates[prop.name] || leaseStartDates[prop.id] || (prop.id === selectedProp?.id && detailedProp?.lease_start_date ? detailedProp.lease_start_date : '');
-                    return (
-                      <tr
-                        key={prop.id}
-                        onClick={() => handlePropertyRowClick(prop)}
-                        style={{
-                          cursor: 'pointer',
-                          backgroundColor: selectedProp?.id === prop.id ? 'var(--bg-accent-alpha)' : '',
-                          borderLeft: selectedProp?.id === prop.id ? '3px solid var(--brand-color)' : ''
-                        }}
-                      >
-                        <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{prop.id}</td>
-                        <td>
-                          <div style={{ fontWeight: 600 }}>{prop.name}</div>
-                          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{prop.address}</div>
-                        </td>
-                        <td>
-                          <span className={`badge ${(prop.land_and_building_type || prop.type) === 'residential' ? 'badge-success' : (prop.land_and_building_type || prop.type) === 'commercial' ? 'badge-info' : 'badge-warning'}`}>
-                            {prop.land_and_building_type || prop.type}
-                          </span>
-                        </td>
-                        <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                          {legalDescriptions[prop.name] || legalDescriptions[prop.id] || prop.legal_description || (prop.id === selectedProp?.id && detailedProp?.legal_description ? detailedProp.legal_description : '') || '—'}
-                        </td>
-                        <td>
-                          {startDateVal ? (
-                            <span className="badge badge-info" style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#2563eb' }}>
-                              {startDateVal}
+                  {loadingApiProperties || !hasLoadedApi ? (
+                    <tr>
+                      <td colSpan="6" style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                        <RefreshCw size={26} className="spin" style={{ margin: '0 auto 14px', display: 'block', color: 'var(--brand-color)' }} />
+                        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
+                          Waiting for response
+                        </div>
+                      </td>
+                    </tr>
+                  ) : currentItems.length > 0 ? (
+                    currentItems.map(prop => {
+                      const startDateVal = prop.lease_start_date || prop.leaseStartDate || leaseStartDates[prop.name] || leaseStartDates[prop.id] || (prop.id === selectedProp?.id && detailedProp?.lease_start_date ? detailedProp.lease_start_date : '');
+                      const floorsVal = (prop.no_of_floors !== undefined && prop.no_of_floors !== null && prop.no_of_floors !== '')
+                        ? prop.no_of_floors
+                        : (propertyFloorsMap[prop.name] ?? propertyFloorsMap[prop.id] ?? prop.custom_no_of_floors ?? prop.noOfFloors ?? (prop.id === selectedProp?.id && (detailedProp?.no_of_floors ?? detailedProp?.custom_no_of_floors)) ?? '');
+                      return (
+                        <tr
+                          key={prop.id}
+                          onClick={() => handlePropertyRowClick(prop)}
+                          style={{
+                            cursor: 'pointer',
+                            backgroundColor: selectedProp?.id === prop.id ? 'var(--bg-accent-alpha)' : '',
+                            borderLeft: selectedProp?.id === prop.id ? '3px solid var(--brand-color)' : ''
+                          }}
+                        >
+                          <td style={{ fontWeight: 600, color: 'var(--brand-color)', textAlign: 'center', verticalAlign: 'middle' }}>{prop.id}</td>
+                          <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                            <div style={{ fontWeight: 600 }}>{prop.name}</div>
+                            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{prop.address}</div>
+                          </td>
+                          <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                            <span className={`badge ${(prop.land_and_building_type || prop.type) === 'residential' ? 'badge-success' : (prop.land_and_building_type || prop.type) === 'commercial' ? 'badge-info' : 'badge-warning'}`}>
+                              {prop.land_and_building_type || prop.type}
                             </span>
-                          ) : (
-                            <span style={{ color: 'var(--text-muted)' }}>—</span>
-                          )}
-                        </td>
-                        <td>
-                          <span className="badge badge-warning" style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--brand-color)' }}>
-                            {prop.lease_end_date || '2026-12-31'}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {filteredProperties.length === 0 && (
+                          </td>
+                          <td style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center', verticalAlign: 'middle' }}>
+                            {floorsVal !== '' && floorsVal !== undefined && floorsVal !== null ? floorsVal : '—'}
+                          </td>
+                          <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                            {startDateVal ? (
+                              <span className="badge badge-info" style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#2563eb' }}>
+                                {startDateVal}
+                              </span>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)' }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                            <span className="badge badge-warning" style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--brand-color)' }}>
+                              {prop.lease_end_date || '2026-12-31'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
                     <tr>
                       <td colSpan="6" style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
                         No properties match your filter.

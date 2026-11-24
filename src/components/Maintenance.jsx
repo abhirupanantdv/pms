@@ -2823,9 +2823,10 @@
 
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Hammer, User, Clock, CheckCircle, CheckCircle2, AlertTriangle, Plus, X, Calendar as CalendarIcon, List, BarChart3, ClipboardList, Building, Search, Activity, Settings, DollarSign, PenTool, Archive, Check, ArrowRight, UserCheck, ShieldCheck, Mail, Phone, MapPin, Award, Trash, Save, RefreshCw, Users, Briefcase, Receipt, ExternalLink } from 'lucide-react';
+import { Hammer, User, Clock, CheckCircle, CheckCircle2, AlertTriangle, Plus, X, Calendar as CalendarIcon, List, BarChart3, ClipboardList, Building, Search, Activity, Settings, DollarSign, PenTool, Archive, Check, ArrowRight, UserCheck, ShieldCheck, Mail, Phone, MapPin, Award, Trash, Save, RefreshCw, Users, Briefcase, Receipt, ExternalLink, ChevronLeft, ChevronRight } from 'lucide-react';
 import TaskItemsPanel from './TaskItemsPanel';
-import { getAuthHeaders, getCsrfToken, ensureCsrfToken } from '../config';
+import { getAuthHeaders, getCsrfToken, ensureCsrfToken, getApiBaseUrl, fetchWithTimeout, safeJson } from '../config';
+import { fetchDocTypeList, normalizeMaintenanceSchedule, normalizeEmployee, normalizeSupplier } from '../services/api';
 
 // ── Toast ────────────────────────────────────────────────────────────────────
 function Toast({ message, type, onClose }) {
@@ -3256,9 +3257,12 @@ export default function Maintenance({
     }
   };
 
-  // Pagination states
+  // Pagination states - 10 rows per page
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = selectedSchedule ? 6 : 10;
+  const itemsPerPage = 10;
+  const [loadingSchedules, setLoadingSchedules] = useState(true);
+  const [hasLoadedApi, setHasLoadedApi] = useState(false);
+  const [schedulesFetched, setSchedulesFetched] = useState(false);
   const [selectedVisit, setSelectedVisit] = useState(null);
   const [selectedWorkOrder, setSelectedWorkOrder] = useState(null);
   const [selectedAsset, setSelectedAsset] = useState(null);
@@ -3357,14 +3361,29 @@ export default function Maintenance({
   const [estComment, setEstComment] = useState('');
   const [consumeItemsList, setConsumeItemsList] = useState([{ itemCode: '', qty: 1, comment: '' }]);
 
-  const [localSchedules, setLocalSchedules] = useState([]);
+  const [localSchedules, setLocalSchedules] = useState(() => (Array.isArray(schedules) && schedules.length > 0 ? schedules.map(normalizeMaintenanceSchedule) : []));
 
   useEffect(() => {
     setCurrentPage(1);
   }, [maintenanceSearch, localSchedules.length]);
   const [workOrders, setWorkOrders] = useState([]);
   const [techProfiles, setTechProfiles] = useState([]);
+  const [loadingTechs, setLoadingTechs] = useState(true);
+  const [techsFetched, setTechsFetched] = useState(false);
+  const [refreshSpinTech, setRefreshSpinTech] = useState(false);
+  const [techSearch, setTechSearch] = useState('');
+  const [techDeptFilter, setTechDeptFilter] = useState('All');
+  const [techAvailabilityFilter, setTechAvailabilityFilter] = useState('All');
+  const [techCurrentPage, setTechCurrentPage] = useState(1);
+  const techItemsPerPage = 10;
   const [vendorDir, setVendorDir] = useState([]);
+  const [loadingVendors, setLoadingVendors] = useState(true);
+  const [vendorsFetched, setVendorsFetched] = useState(false);
+  const [refreshSpinVendor, setRefreshSpinVendor] = useState(false);
+  const [vendorSearch, setVendorSearch] = useState('');
+  const [vendorCategoryFilter, setVendorCategoryFilter] = useState('All');
+  const [vendorCurrentPage, setVendorCurrentPage] = useState(1);
+  const vendorItemsPerPage = 10;
   const [assetsList, setAssetsList] = useState([]);
   const [stockItems, setStockItems] = useState([]);
 
@@ -4431,62 +4450,299 @@ export default function Maintenance({
 
   useEffect(() => { fetchWorkOrders(); }, [fetchWorkOrders, localSchedules]);
 
-  const fetchSchedules = useCallback(async () => {
-    if (!erpnextConfig?.url) return;
+  const fetchSchedules = useCallback(async (isManualRefresh = false) => {
+    setLoadingSchedules(true);
     try {
-      const res = await fetch(
-        `${erpnextConfig.url}/api/resource/Maintenance Schedule?fields=%5B%22name%22%2C%22customer%22%2C%22customer_name%22%2C%22transaction_date%22%2C%22custom_property%22%2C%22status%22%2C%22docstatus%22%5D&limit_page_length=200&order_by=creation%20desc`,
-        { credentials: 'include', headers: { 'Content-Type': 'application/json' } }
-      );
-      if (res.ok) {
-        const json = await res.json();
-        const list = json.data || [];
-        // Fetch detailed schedules so that we have the items child table containing item_name
-        const detailed = await Promise.all(list.map(async (sch) => {
-          try {
-            const detailRes = await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(sch.name)}`, {
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' }
-            });
-            if (detailRes.ok) {
-              const detailJson = await detailRes.json();
-              return detailJson?.data || detailJson || sch;
+      const res = await fetchDocTypeList('Maintenance Schedule', {
+        page: 1,
+        limit: 100,
+        orderBy: 'creation desc',
+        baseUrl: erpnextConfig?.url
+      });
+      const rawList = res?.data || [];
+      if (Array.isArray(rawList) && rawList.length > 0) {
+        setSchedulesFetched(true);
+        // Initially set normalized list so UI responds instantly
+        setLocalSchedules(rawList.map(normalizeMaintenanceSchedule));
+
+        // Efficiently fetch child items (Unit Name, Periodicity) in ONE fast call
+        const baseUrl = erpnextConfig?.url || getApiBaseUrl();
+        let populatedWithBulkItems = false;
+        try {
+          const itemRes = await fetchWithTimeout(
+            `${baseUrl}/api/resource/Maintenance%20Schedule%20Item?fields=${encodeURIComponent(JSON.stringify(['parent', 'item_code', 'item_name', 'periodicity']))}&limit_page_length=500`,
+            { credentials: 'include', headers: getAuthHeaders() },
+            8000
+          );
+          if (itemRes?.ok) {
+            const itemJson = await safeJson(itemRes);
+            const items = itemJson?.data || [];
+            if (Array.isArray(items) && items.length > 0) {
+              const itemMap = {};
+              items.forEach(it => {
+                if (it.parent) {
+                  if (!itemMap[it.parent]) itemMap[it.parent] = [];
+                  itemMap[it.parent].push(it);
+                }
+              });
+              const enriched = rawList.map(sch => {
+                if (itemMap[sch.name]) {
+                  return { ...sch, items: itemMap[sch.name] };
+                }
+                return sch;
+              });
+              setLocalSchedules(enriched.map(normalizeMaintenanceSchedule));
+              populatedWithBulkItems = true;
             }
-          } catch (e) {
-            console.warn(`Failed to fetch detailed schedule ${sch.name}:`, e);
           }
-          return sch;
-        }));
-        setLocalSchedules(detailed);
+        } catch (itemErr) {
+          // Fallback to individual document fetch
+        }
+
+        // Fallback: Fetch full doc for records missing items if bulk child table fetch didn't apply
+        if (!populatedWithBulkItems) {
+          try {
+            const detailed = await Promise.all(
+              rawList.map(async (sch) => {
+                if (Array.isArray(sch.items) && sch.items.length > 0) {
+                  return sch;
+                }
+                if (baseUrl && sch.name) {
+                  try {
+                    const detailRes = await fetchWithTimeout(
+                      `${baseUrl}/api/resource/Maintenance%20Schedule/${encodeURIComponent(sch.name)}`,
+                      {
+                        credentials: 'include',
+                        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+                      },
+                      8000
+                    );
+                    if (detailRes?.ok) {
+                      const detailJson = await safeJson(detailRes);
+                      return { ...sch, ...(detailJson?.data || detailJson) };
+                    }
+                  } catch (e) {}
+                }
+                return sch;
+              })
+            );
+            setLocalSchedules(detailed.map(normalizeMaintenanceSchedule));
+          } catch (detailErr) {
+            console.warn('Error fetching detailed child items for schedules:', detailErr);
+          }
+        }
+      } else if (Array.isArray(schedules) && schedules.length > 0) {
+        setSchedulesFetched(true);
+        setLocalSchedules(schedules.map(normalizeMaintenanceSchedule));
+      } else {
+        setSchedulesFetched(true);
+        setLocalSchedules([]);
       }
-    } catch (e) { }
-  }, [erpnextConfig]);
-
-  useEffect(() => {
-    if (schedules && schedules.length > 0) {
-      setLocalSchedules(schedules);
-    } else {
-      fetchSchedules();
+    } catch (e) {
+      console.warn('Failed to fetch Maintenance Schedule list:', e);
+      setSchedulesFetched(true);
+      if (Array.isArray(schedules) && schedules.length > 0) {
+        setLocalSchedules(schedules.map(normalizeMaintenanceSchedule));
+      } else {
+        setLocalSchedules([]);
+      }
+    } finally {
+      setLoadingSchedules(false);
+      setHasLoadedApi(true);
     }
-  }, [schedules, fetchSchedules]);
+  }, [erpnextConfig?.url, schedules]);
+
+  // Initial load and listen for sidebar navigation click on "Maintenance"
+  useEffect(() => {
+    fetchSchedules();
+
+    const handleSidebarClick = (e) => {
+      const target = e.target;
+      const menuItem = target.closest && target.closest('.menu-item');
+      if (
+        menuItem &&
+        menuItem.textContent &&
+        menuItem.textContent.trim().toLowerCase().includes('maintenance')
+      ) {
+        fetchSchedules(true);
+      }
+    };
+
+    const handleNavigate = () => {
+      fetchSchedules(true);
+    };
+
+    document.addEventListener('click', handleSidebarClick);
+    window.addEventListener('pms:navigate-maintenance', handleNavigate);
+    window.addEventListener('pms:navigate-maintenance-schedule', handleNavigate);
+    return () => {
+      document.removeEventListener('click', handleSidebarClick);
+      window.removeEventListener('pms:navigate-maintenance', handleNavigate);
+      window.removeEventListener('pms:navigate-maintenance-schedule', handleNavigate);
+    };
+  }, [fetchSchedules]);
+
+  const fetchTechnicians = useCallback(async (isManualRefresh = false) => {
+    if (isManualRefresh) setRefreshSpinTech(true);
+    setLoadingTechs(true);
+    try {
+      const res = await fetchDocTypeList('Employee', {
+        page: 1,
+        limit: 200,
+        orderBy: 'creation desc',
+        baseUrl: erpnextConfig?.url
+      });
+      const rawList = res?.data || [];
+      if (Array.isArray(rawList)) {
+        setTechProfiles(rawList.map(normalizeEmployee));
+        setTechsFetched(true);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch Employee list:', err);
+    } finally {
+      setLoadingTechs(false);
+      setTechsFetched(true);
+      if (isManualRefresh) {
+        setTimeout(() => setRefreshSpinTech(false), 500);
+      }
+    }
+  }, [erpnextConfig?.url]);
 
   useEffect(() => {
-    setTechProfiles(employees.length > 0 ? employees.map(emp => ({
-      id: emp.id || emp.name, name: emp.name,
-      skill: emp.department || 'General Maintenance', certs: emp.designation || 'Technician',
-      availability: emp.status === 'Active' ? 'Available' : 'On Leave',
-      activeJobs: 0, phone: emp.phone || '+679 000 0000',
-      email: emp.email || 'tech@carpenterestate.org', img: emp.image || ''
-    })) : []);
-  }, [employees]);
+    fetchTechnicians();
+  }, [fetchTechnicians]);
 
   useEffect(() => {
-    setVendorDir(vendors.length > 0 ? vendors.map(v => ({
-      id: v.id, name: v.name, group: v.supplier_group || 'Local', type: v.supplier_type || 'Services',
-      rating: 4.5, quotesCount: 0, phone: v.phone || '+679 000 0000',
-      email: v.email || 'vendor@carpenterestate.org', address: v.address || 'Fiji'
-    })) : []);
-  }, [vendors]);
+    if (activeSection === 'technician') {
+      fetchTechnicians();
+    }
+  }, [activeSection, fetchTechnicians]);
+
+  const uniqueTechDepartments = useMemo(() => {
+    const set = new Set();
+    techProfiles.forEach(t => {
+      const d = t.skill || t.department;
+      if (d) set.add(d);
+    });
+    return Array.from(set).sort();
+  }, [techProfiles]);
+
+  const filteredTechs = useMemo(() => {
+    return techProfiles.filter(tech => {
+      if (techAvailabilityFilter !== 'All') {
+        const a = String(tech.availability || '').toLowerCase();
+        if (techAvailabilityFilter === 'Available' && a !== 'available') return false;
+        if (techAvailabilityFilter === 'On Leave' && a !== 'on leave') return false;
+      }
+      if (techDeptFilter !== 'All') {
+        const d = String(tech.skill || tech.department || '');
+        if (d !== techDeptFilter) return false;
+      }
+      if (techSearch.trim()) {
+        const q = techSearch.toLowerCase().trim();
+        const nameMatch = String(tech.name || tech.employee_name || '').toLowerCase().includes(q);
+        const skillMatch = String(tech.skill || tech.department || '').toLowerCase().includes(q);
+        const certMatch = String(tech.certs || tech.designation || '').toLowerCase().includes(q);
+        const emailMatch = String(tech.email || '').toLowerCase().includes(q);
+        const phoneMatch = String(tech.phone || '').toLowerCase().includes(q);
+        if (!nameMatch && !skillMatch && !certMatch && !emailMatch && !phoneMatch) return false;
+      }
+      return true;
+    });
+  }, [techProfiles, techAvailabilityFilter, techDeptFilter, techSearch]);
+
+  const techTotalPages = Math.max(1, Math.ceil(filteredTechs.length / techItemsPerPage));
+  const paginatedTechs = useMemo(() => {
+    const start = (techCurrentPage - 1) * techItemsPerPage;
+    return filteredTechs.slice(start, start + techItemsPerPage);
+  }, [filteredTechs, techCurrentPage, techItemsPerPage]);
+
+  useEffect(() => {
+    setTechCurrentPage(1);
+  }, [techSearch, techDeptFilter, techAvailabilityFilter]);
+
+  const fetchVendors = useCallback(async (isManualRefresh = false) => {
+    if (isManualRefresh) setRefreshSpinVendor(true);
+    setLoadingVendors(true);
+    try {
+      const res = await fetchDocTypeList('Supplier', {
+        page: 1,
+        limit: 200,
+        orderBy: 'creation desc',
+        baseUrl: erpnextConfig?.url
+      });
+      const rawList = res?.data || [];
+      if (Array.isArray(rawList)) {
+        // ONLY show those data whose Group value is Services
+        const serviceVendors = rawList
+          .map(normalizeSupplier)
+          .filter(v => String(v.group || v.supplier_group || '').trim().toLowerCase() === 'services');
+        setVendorDir(serviceVendors);
+        setVendorsFetched(true);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch Supplier vendors list:', err);
+    } finally {
+      setLoadingVendors(false);
+      setVendorsFetched(true);
+      if (isManualRefresh) {
+        setTimeout(() => setRefreshSpinVendor(false), 500);
+      }
+    }
+  }, [erpnextConfig?.url]);
+
+  useEffect(() => {
+    fetchVendors();
+  }, [fetchVendors]);
+
+  useEffect(() => {
+    if (activeSection === 'vendor') {
+      fetchVendors();
+    }
+  }, [activeSection, fetchVendors]);
+
+  const uniqueVendorCategories = useMemo(() => {
+    const set = new Set();
+    vendorDir.forEach(v => {
+      const cat = v.type || v.supplier_type;
+      if (cat) set.add(cat);
+    });
+    return Array.from(set).sort();
+  }, [vendorDir]);
+
+  const filteredVendors = useMemo(() => {
+    return vendorDir.filter(v => {
+      // Extra safety check for Services group
+      const grp = String(v.group || v.supplier_group || '').trim().toLowerCase();
+      if (grp !== 'services') return false;
+
+      if (vendorCategoryFilter !== 'All') {
+        const cat = String(v.type || v.supplier_type || '');
+        if (cat !== vendorCategoryFilter) return false;
+      }
+      if (vendorSearch.trim()) {
+        const q = vendorSearch.toLowerCase().trim();
+        const idMatch = String(v.id || '').toLowerCase().includes(q);
+        const nameMatch = String(v.name || v.supplier_name || '').toLowerCase().includes(q);
+        const typeMatch = String(v.type || v.supplier_type || '').toLowerCase().includes(q);
+        const phoneMatch = String(v.phone || '').toLowerCase().includes(q);
+        const emailMatch = String(v.email || '').toLowerCase().includes(q);
+        const addrMatch = String(v.address || '').toLowerCase().includes(q);
+        if (!idMatch && !nameMatch && !typeMatch && !phoneMatch && !emailMatch && !addrMatch) return false;
+      }
+      return true;
+    });
+  }, [vendorDir, vendorCategoryFilter, vendorSearch]);
+
+  const vendorTotalPages = Math.max(1, Math.ceil(filteredVendors.length / vendorItemsPerPage));
+  const paginatedVendors = useMemo(() => {
+    const start = (vendorCurrentPage - 1) * vendorItemsPerPage;
+    return filteredVendors.slice(start, start + vendorItemsPerPage);
+  }, [filteredVendors, vendorCurrentPage, vendorItemsPerPage]);
+
+  useEffect(() => {
+    setVendorCurrentPage(1);
+  }, [vendorSearch, vendorCategoryFilter]);
 
   useEffect(() => {
     if (preSelectedProperty) {
@@ -4890,16 +5146,51 @@ export default function Maintenance({
             console.warn('approve_reject_doc for Maintenance Schedule failed:', apprErr);
           }
 
-          // Direct PUT to ensure status = 'Submitted' and docstatus = 1
+          // Direct PUT to ensure status = 'Submitted', docstatus = 1 and custom_task_id is saved
           try {
+            const putPayload = { status: 'Submitted', docstatus: 1 };
+            if (taskName) {
+              putPayload.custom_task_id = taskName;
+              putPayload.task_id = taskName;
+            }
             await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(selectedSchedule.name)}`, {
               method: 'PUT',
               credentials: 'include',
               headers: getAuthHeaders(),
-              body: JSON.stringify({ status: 'Submitted', docstatus: 1 })
+              body: JSON.stringify(putPayload)
             });
           } catch (putErr) {
             console.warn('PUT docstatus for Maintenance Schedule failed:', putErr);
+          }
+
+          // Also update custom_task_id via backend SQL bypass & set_value
+          if (taskName) {
+            try {
+              await fetch(`${erpnextConfig.url}/api/method/pms.utils.update_maintenance_schedule`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({
+                  schedule_name: selectedSchedule.name,
+                  custom_task_id: taskName,
+                  task_id: taskName
+                })
+              });
+            } catch (mshErr) {}
+
+            try {
+              await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({
+                  doctype: 'Maintenance Schedule',
+                  name: selectedSchedule.name,
+                  fieldname: 'custom_task_id',
+                  value: taskName
+                })
+              });
+            } catch (setErr) {}
           }
         }
 
@@ -5118,6 +5409,7 @@ export default function Maintenance({
           maintenance_visit: r.maintenance_visit || '',
           visit_status: r.completion_status || r.visit_status || '',
           task_id: taskId,
+          custom_task_id: taskId,
           task_status: taskStatus,
           assign_type: rowAssignType,
           persons: initialPersons,
@@ -5525,10 +5817,15 @@ export default function Maintenance({
         }
 
         row.task_id = taskName;
+        row.custom_task_id = taskName;
         row.task_status = taskStatus;
-        updatedRowsMap[row.id] = { task_id: taskName, task_status: taskStatus };
+        updatedRowsMap[row.id] = { task_id: taskName, custom_task_id: taskName, task_status: taskStatus };
         created++;
       }
+
+      // Resolve the Task ID to store at the Maintenance Schedule DocType level
+      const createdTaskIds = Object.values(updatedRowsMap).map(u => u.custom_task_id || u.task_id).filter(Boolean);
+      const targetDocTaskId = createdTaskIds[createdTaskIds.length - 1] || selectedSchedule.custom_task_id || selectedSchedule.task_id || '';
 
       // Update scheduleRows in React state
       setScheduleRows(prev => prev.map(r => {
@@ -5536,6 +5833,7 @@ export default function Maintenance({
           return {
             ...r,
             task_id: updatedRowsMap[r.id].task_id,
+            custom_task_id: updatedRowsMap[r.id].custom_task_id || updatedRowsMap[r.id].task_id,
             task_status: updatedRowsMap[r.id].task_status,
             assign_type: r.assign_type,
             persons: r.persons,
@@ -5545,7 +5843,7 @@ export default function Maintenance({
         return r;
       }));
 
-      // Update selectedSchedule state locally so custom_assign and custom_select_person persist in view
+      // Update selectedSchedule state locally so custom_task_id, custom_assign and custom_select_person persist in view
       setSelectedSchedule(prev => {
         if (!prev) return prev;
         const updated = (prev.schedules || []).map(s => {
@@ -5553,9 +5851,11 @@ export default function Maintenance({
           if (matched) {
             const up = updatedRowsMap[matched.id];
             const pVal = Array.isArray(matched.persons) && matched.persons.length > 0 ? matched.persons[0] : (matched.persons || '');
+            const resolvedTaskId = up ? (up.custom_task_id || up.task_id) : (s.custom_task_id || s.task_id || matched.task_id);
             return {
               ...s,
-              task_id: up ? up.task_id : (s.task_id || matched.task_id),
+              task_id: resolvedTaskId,
+              custom_task_id: resolvedTaskId,
               custom_assign: matched.assign_type,
               custom_select_person: pVal,
               custom_assign_to: pVal
@@ -5563,10 +5863,17 @@ export default function Maintenance({
           }
           return s;
         });
-        return { ...prev, schedules: updated };
+        return {
+          ...prev,
+          custom_task_id: targetDocTaskId || prev.custom_task_id,
+          task_id: targetDocTaskId || prev.task_id,
+          status: 'Submitted',
+          docstatus: 1,
+          schedules: updated
+        };
       });
 
-      // Sync schedule child table & docstatus in ERPNext
+      // Sync schedule child table & docstatus & custom_task_id in ERPNext
       if (erpnextConfig?.url && selectedSchedule?.name) {
         try {
           const updatedSchedules = scheduleRows.map(r => {
@@ -5574,13 +5881,15 @@ export default function Maintenance({
             const pList = Array.isArray(r.persons) ? r.persons : (r.persons ? [r.persons] : []);
             const personVal = pList[0] || pList.join(', ') || '';
             const isRealRow = r.schedule_id && !r.schedule_id.startsWith('sched-') && !r.schedule_id.startsWith('row-');
+            const resolvedTaskId = up ? (up.custom_task_id || up.task_id) : (r.custom_task_id || r.task_id || undefined);
             return {
               name: isRealRow ? r.schedule_id : undefined,
               item_code: r.item_code,
               scheduled_date: r.scheduled_date,
               maintenance_visit: r.maintenance_visit || undefined,
               completion_status: r.visit_status || undefined,
-              task_id: up ? up.task_id : (r.task_id || undefined),
+              task_id: resolvedTaskId,
+              custom_task_id: resolvedTaskId,
               task_status: up ? up.task_status : (r.task_status || undefined),
               custom_assign: r.assign_type,
               custom_select_person: personVal,
@@ -5588,36 +5897,101 @@ export default function Maintenance({
             };
           });
 
-          // 1. Direct PUT on Maintenance Schedule
+          // 1. Direct PUT on Maintenance Schedule (parent doctype level + child table)
           try {
+            const parentPayload = {
+              schedules: updatedSchedules,
+              status: 'Submitted',
+              docstatus: 1,
+              csrf_token: activeCsrfToken
+            };
+            if (targetDocTaskId) {
+              parentPayload.custom_task_id = targetDocTaskId;
+              parentPayload.task_id = targetDocTaskId;
+            }
             await fetch(`${erpnextConfig.url}/api/resource/Maintenance%20Schedule/${encodeURIComponent(selectedSchedule.name)}`, {
               method: 'PUT',
               credentials: 'include',
               headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
-              body: JSON.stringify({ schedules: updatedSchedules, status: 'Submitted', docstatus: 1, csrf_token: activeCsrfToken })
+              body: JSON.stringify(parentPayload)
             });
           } catch (putErr) {
             console.warn("Parent Maintenance Schedule PUT error:", putErr);
           }
 
-          // 2. Direct set_value on each child row in Maintenance Schedule Detail
+          // 2. Direct update on Parent Maintenance Schedule doctype level (bypasses submitted docstatus lock)
+          if (targetDocTaskId) {
+            // Method 2A: Custom backend method with direct SQL update on tabMaintenance Schedule
+            try {
+              await fetch(`${erpnextConfig.url}/api/method/pms.utils.update_maintenance_schedule`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                body: JSON.stringify({
+                  schedule_name: selectedSchedule.name,
+                  custom_task_id: targetDocTaskId,
+                  task_id: targetDocTaskId,
+                  csrf_token: activeCsrfToken
+                })
+              });
+            } catch (backendErr) {
+              console.warn("pms.utils.update_maintenance_schedule error:", backendErr);
+            }
+
+            // Method 2B: frappe.client.set_value on Maintenance Schedule doctype level
+            try {
+              await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                body: JSON.stringify({
+                  doctype: 'Maintenance Schedule',
+                  name: selectedSchedule.name,
+                  fieldname: 'custom_task_id',
+                  value: targetDocTaskId,
+                  csrf_token: activeCsrfToken
+                })
+              });
+            } catch (setParentErr) {
+              console.warn("frappe.client.set_value Maintenance Schedule custom_task_id error:", setParentErr);
+            }
+
+            try {
+              await fetch(`${erpnextConfig.url}/api/method/frappe.client.set_value`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }, activeCsrfToken),
+                body: JSON.stringify({
+                  doctype: 'Maintenance Schedule',
+                  name: selectedSchedule.name,
+                  fieldname: 'task_id',
+                  value: targetDocTaskId,
+                  csrf_token: activeCsrfToken
+                })
+              });
+            } catch (setParentDictErr) {}
+          }
+
+          // 3. Direct set_value on each child row in Maintenance Schedule Detail
           for (let row of selected) {
             const childRowName = row.schedule_id;
             if (!childRowName || childRowName.startsWith('sched-') || childRowName.startsWith('row-')) continue;
             const up = updatedRowsMap[row.id];
             const pList = Array.isArray(row.persons) ? row.persons : (row.persons ? [row.persons] : []);
             const personVal = pList[0] || pList.join(', ') || '';
+            const currentTaskId = up?.custom_task_id || up?.task_id || row.custom_task_id || row.task_id;
 
             const childFields = {
               custom_assign: row.assign_type,
               custom_select_person: personVal,
               custom_assign_to: personVal
             };
-            if (up?.task_id) {
-              childFields.task_id = up.task_id;
+            if (currentTaskId) {
+              childFields.custom_task_id = currentTaskId;
+              childFields.task_id = currentTaskId;
             }
 
-            // Method A: Call custom backend API (direct frappe.db.set_value, bypasses docstatus lock)
+            // Method A: Call custom backend API (direct frappe.db.set_value & SQL, bypasses docstatus lock)
             try {
               await fetch(`${erpnextConfig.url}/api/method/pms.utils.update_maintenance_schedule_row`, {
                 method: 'POST',
@@ -5628,7 +6002,8 @@ export default function Maintenance({
                   row_name: childRowName,
                   custom_assign: row.assign_type,
                   custom_select_person: personVal,
-                  task_id: up?.task_id || row.task_id,
+                  task_id: currentTaskId,
+                  custom_task_id: currentTaskId,
                   csrf_token: activeCsrfToken
                 })
               });
@@ -5693,12 +6068,30 @@ export default function Maintenance({
         onUpdateScheduleStatus(selectedSchedule.name, 'Submitted');
       }
 
-      setLocalSchedules(prev => prev.map(s => s.name === selectedSchedule.name ? { ...s, status: 'Submitted', docstatus: 1 } : s));
-      setSelectedSchedule(prev => prev ? { ...prev, status: 'Submitted', docstatus: 1 } : prev);
+      setLocalSchedules(prev => prev.map(s => s.name === selectedSchedule.name ? {
+        ...s,
+        custom_task_id: targetDocTaskId || s.custom_task_id,
+        task_id: targetDocTaskId || s.task_id,
+        status: 'Submitted',
+        docstatus: 1
+      } : s));
+      setSelectedSchedule(prev => prev ? {
+        ...prev,
+        custom_task_id: targetDocTaskId || prev.custom_task_id,
+        task_id: targetDocTaskId || prev.task_id,
+        status: 'Submitted',
+        docstatus: 1
+      } : prev);
 
       if (typeof fetchWorkOrders === 'function') {
         fetchWorkOrders();
       }
+
+      setTimeout(() => {
+        if (typeof fetchSchedules === 'function') {
+          fetchSchedules();
+        }
+      }, 1000);
 
       showToast(created > 1 ? `${created} Tasks created successfully.` : "Task created successfully.", "success");
 
@@ -6097,16 +6490,33 @@ export default function Maintenance({
     } else { showToast(`Simulation: Quotation for ${customerId} with ${estimates.length} items.`, 'info'); }
   };
 
-  const filteredSchedules = localSchedules.filter(sch => {
-    const term = maintenanceSearch.toLowerCase();
-    const propName = getPropertyNameById(sch.custom_property) || '';
-    const itemName = sch.items?.[0]?.item_name || '';
-    return sch.name.toLowerCase().includes(term) ||
-      (sch.customer_name || sch.customer || '').toLowerCase().includes(term) ||
-      propName.toLowerCase().includes(term) ||
-      itemName.toLowerCase().includes(term) ||
-      (sch.type || '').toLowerCase().includes(term);
-  });
+  const filteredSchedules = useMemo(() => {
+    return localSchedules.filter(sch => {
+      if (!maintenanceSearch.trim()) return true;
+      const term = maintenanceSearch.toLowerCase().trim();
+      const propName = getPropertyNameById(sch.custom_property) || '';
+      const firstItem = sch.items?.[0];
+      const itemName = firstItem?.item_name || firstItem?.item_code || sch.custom_unit || sch.unit_name || '';
+      const periodicity = firstItem?.periodicity || sch.periodicity || (sch.custom_maintenance_schedule === 'Adhoc Maintenance' ? 'Random' : 'Weekly');
+      const type = sch.custom_maintenance_schedule || sch.maintenance_type || sch.type || (periodicity === 'Random' ? 'Adhoc Maintenance' : 'Scheduled Maintenance');
+      const customer = sch.customer_name || sch.customer || '';
+      const status = sch.status || '';
+
+      return (
+        (sch.name || '').toLowerCase().includes(term) ||
+        customer.toLowerCase().includes(term) ||
+        propName.toLowerCase().includes(term) ||
+        itemName.toLowerCase().includes(term) ||
+        periodicity.toLowerCase().includes(term) ||
+        type.toLowerCase().includes(term) ||
+        status.toLowerCase().includes(term)
+      );
+    });
+  }, [localSchedules, maintenanceSearch, properties]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [maintenanceSearch, filteredSchedules.length]);
 
   const sortedSchedules = useMemo(() => {
     return [...filteredSchedules].sort((a, b) => {
@@ -6116,36 +6526,127 @@ export default function Maintenance({
     });
   }, [filteredSchedules]);
 
-  const totalPages = Math.ceil(sortedSchedules.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(sortedSchedules.length / itemsPerPage));
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentSchedules = sortedSchedules.slice(indexOfFirstItem, indexOfLastItem);
+  const startRecord = sortedSchedules.length > 0 ? indexOfFirstItem + 1 : 0;
+  const endRecord = Math.min(indexOfLastItem, sortedSchedules.length);
 
   const renderPaginationControls = () => {
-    if (totalPages <= 1) return null;
-    return (
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-card)', flexShrink: 0 }}>
-        <button
-          type="button"
-          disabled={currentPage === 1}
-          onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', minWidth: 60 }}
+    if (loadingSchedules || !hasLoadedApi) {
+      return (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: '14px 24px',
+            borderTop: '1px solid var(--border-color)',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+            background: 'var(--bg-card)',
+            gap: 8
+          }}
         >
-          Previous
-        </button>
-        <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-          Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong>
+          <RefreshCw size={13} className="spin" style={{ color: 'var(--brand-color)' }} />
+          <span>Waiting for response</span>
         </div>
-        <button
-          type="button"
-          disabled={currentPage === totalPages}
-          onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', minWidth: 60 }}
-        >
-          Next
-        </button>
+      );
+    }
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '14px 24px',
+          borderTop: '1px solid var(--border-color)',
+          fontSize: 12,
+          color: 'var(--text-secondary)',
+          background: 'var(--bg-card)',
+          flexWrap: 'wrap',
+          gap: 12
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>
+            Showing <strong style={{ color: 'var(--text-primary)' }}>{startRecord}</strong> to{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{endRecord}</strong> of{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{sortedSchedules.length}</strong> entries (10 rows/page)
+          </span>
+          {loadingSchedules && (
+            <span style={{ fontSize: 11, color: 'var(--brand-color)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <RefreshCw size={11} className="spin" /> Updating...
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+            className="btn btn-secondary"
+            style={{
+              padding: '5px 12px',
+              fontSize: 11,
+              opacity: currentPage === 1 ? 0.4 : 1,
+              cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              borderRadius: 6
+            }}
+          >
+            <ChevronLeft size={13} /> Previous
+          </button>
+
+          <div style={{ display: 'flex', gap: 4 }}>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => (
+              <button
+                key={pageNum}
+                type="button"
+                onClick={() => setCurrentPage(pageNum)}
+                style={{
+                  minWidth: 28,
+                  height: 28,
+                  padding: '0 6px',
+                  borderRadius: 6,
+                  fontSize: 11,
+                  fontWeight: pageNum === currentPage ? 700 : 500,
+                  border: pageNum === currentPage ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
+                  background: pageNum === currentPage ? 'var(--brand-color)' : 'transparent',
+                  color: pageNum === currentPage ? '#ffffff' : 'var(--text-primary)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {pageNum}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+            className="btn btn-secondary"
+            style={{
+              padding: '5px 12px',
+              fontSize: 11,
+              opacity: currentPage === totalPages ? 0.4 : 1,
+              cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              borderRadius: 6
+            }}
+          >
+            Next <ChevronRight size={13} />
+          </button>
+        </div>
       </div>
     );
   };
@@ -6204,6 +6705,17 @@ export default function Maintenance({
                   <button key={mode} className={`btn btn-sm ${viewMode === mode ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '3px 8px', fontSize: 10, textTransform: 'capitalize' }} onClick={() => setViewMode(mode)}>{mode}</button>
                 ))}
               </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => fetchSchedules(true)}
+                disabled={loadingSchedules}
+                title="Refresh Maintenance Schedules from ERPNext"
+                style={{ padding: '3px 8px', fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              >
+                <RefreshCw size={11} className={loadingSchedules ? 'spin' : ''} />
+                <span>{loadingSchedules ? 'Refreshing...' : 'Refresh'}</span>
+              </button>
             </div>
             <button className="btn btn-primary btn-sm" onClick={handleOpenScheduleModal}><Plus size={14} /> New Schedule</button>
           </div>
@@ -6219,9 +6731,25 @@ export default function Maintenance({
               }}>
                 <div className="table-container" style={{ flex: 1, overflowY: 'auto' }}>
                   <table className="custom-table">
-                    <thead><tr><th>Schedule ID</th><th>Type</th><th>Tenant / Partner</th><th>Unit Name</th><th>Periodicity</th><th>Status</th></tr></thead>
+                    <thead>
+                      <tr>
+                        <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Schedule ID</th>
+                        <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Type</th>
+                        <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Tenant / Partner</th>
+                        <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Unit Name</th>
+                        <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Periodicity</th>
+                        <th style={{ textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.5px' }}>Status</th>
+                      </tr>
+                    </thead>
                     <tbody>
-                      {currentSchedules.length === 0 ? (
+                      {loadingSchedules || !hasLoadedApi ? (
+                        <tr>
+                          <td colSpan="6" style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                            <RefreshCw size={26} className="spin" style={{ margin: '0 auto 14px', display: 'block', color: 'var(--brand-color)' }} />
+                            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>Waiting for response</div>
+                          </td>
+                        </tr>
+                      ) : currentSchedules.length === 0 ? (
                         <tr>
                           <td colSpan="6" style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)' }}>
                             No schedules found.
@@ -6230,14 +6758,66 @@ export default function Maintenance({
                       ) : (
                         currentSchedules.map(sch => {
                           const firstItem = sch.items?.[0];
+                          const periodicity = firstItem?.periodicity || sch.periodicity || (sch.custom_maintenance_schedule === 'Adhoc Maintenance' ? 'Random' : 'Weekly');
+                          const typeDisplay = sch.custom_maintenance_schedule || sch.maintenance_type || (periodicity === 'Random' ? 'Adhoc Maintenance' : 'Scheduled Maintenance');
+                          const unitDisplay = firstItem?.item_name || firstItem?.item_code || sch.custom_unit || sch.unit_name || '—';
+                          const tenantDisplay = sch.customer_name || sch.customer || '—';
+                          const statusDisplay = getScheduleDisplayStatus(sch);
+                          const isSubmitted = statusDisplay === 'Submitted';
+                          const isDraft = statusDisplay === 'Draft';
+                          const isCompleted = statusDisplay === 'Completed';
+
+                          const statusBadgeStyle = isSubmitted
+                            ? { backgroundColor: '#e8f0fe', color: '#1a73e8' }
+                            : isDraft
+                            ? { backgroundColor: '#fef7e0', color: '#b06000' }
+                            : isCompleted
+                            ? { backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }
+                            : { backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' };
+
+                          const isSelected = selectedSchedule?.name === sch.name;
+
                           return (
-                            <tr key={sch.name} onClick={() => handleSelectSchedule(sch)} style={{ cursor: 'pointer', backgroundColor: selectedSchedule?.name === sch.name ? 'var(--bg-accent-alpha)' : '' }}>
-                              <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{sch.name}</td>
-                              <td><span className="badge badge-secondary" style={{ textTransform: 'none' }}>{sch.custom_maintenance_schedule || 'PM Schedule'}</span></td>
-                              <td>{sch.customer_name || sch.customer}</td>
-                              <td>{firstItem ? firstItem.item_name : '—'}</td>
-                              <td>{firstItem ? firstItem.periodicity : '—'}</td>
-                              <td><span className={`badge ${sch.status === 'Completed' ? 'badge-success' : isScheduleSubmitted(sch) ? 'badge-info' : 'badge-warning'}`}>{getScheduleDisplayStatus(sch)}</span></td>
+                            <tr
+                              key={sch.name}
+                              onClick={() => handleSelectSchedule(sch)}
+                              style={{
+                                cursor: 'pointer',
+                                backgroundColor: isSelected ? 'var(--bg-accent-alpha)' : 'transparent',
+                                borderLeft: isSelected ? '3px solid var(--brand-color)' : '3px solid transparent',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <td style={{ fontWeight: 700, color: 'var(--brand-color, #007a5a)', fontSize: 13, padding: '14px 16px' }}>
+                                {sch.name}
+                              </td>
+                              <td style={{ fontSize: 13, color: 'var(--text-primary)', padding: '14px 16px', fontWeight: 500 }}>
+                                {typeDisplay}
+                              </td>
+                              <td style={{ fontSize: 13, color: 'var(--text-primary)', padding: '14px 16px' }}>
+                                {tenantDisplay}
+                              </td>
+                              <td style={{ fontSize: 13, color: 'var(--text-secondary)', padding: '14px 16px' }}>
+                                {unitDisplay}
+                              </td>
+                              <td style={{ fontSize: 13, color: 'var(--text-secondary)', padding: '14px 16px' }}>
+                                {periodicity}
+                              </td>
+                              <td style={{ padding: '14px 16px' }}>
+                                <span
+                                  className="badge"
+                                  style={{
+                                    padding: '3px 12px',
+                                    borderRadius: 12,
+                                    fontSize: 11.5,
+                                    fontWeight: 600,
+                                    display: 'inline-block',
+                                    ...statusBadgeStyle
+                                  }}
+                                >
+                                  {statusDisplay}
+                                </span>
+                              </td>
                             </tr>
                           );
                         })
@@ -6338,12 +6918,12 @@ export default function Maintenance({
                   <div>Type: <strong>{selectedSchedule.custom_maintenance_schedule || 'PM Schedule'}</strong></div>
                   <div>Tenant: <strong>{selectedSchedule.customer_name || selectedSchedule.customer}</strong></div>
                   <div>Date: <strong>{selectedSchedule.transaction_date}</strong></div>
-                  {/* <div>Task Id: <strong>{selectedSchedule.type || '—'}</strong></div> */}
+                  <div>Task ID: <strong>{selectedSchedule.custom_task_id || selectedSchedule.task_id || '—'}</strong></div>
                   <div>Status: <span className={`badge ${selectedSchedule.status === 'Completed' ? 'badge-success' : isScheduleSubmitted(selectedSchedule) ? 'badge-info' : 'badge-warning'}`}>{getScheduleDisplayStatus(selectedSchedule)}</span></div>
                 </div>
 
-                {/* ── Booking ID & Property Group Name ── */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, marginTop: 4 }}>
+                {/* ── Booking ID, Property Group Name & Task ID (DocType Level) ── */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginTop: 4 }}>
                   <div>
                     <label style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-secondary, #64748b)', marginBottom: 4, display: 'block' }}>Booking ID</label>
                     <input
@@ -6389,6 +6969,41 @@ export default function Maintenance({
                         boxSizing: 'border-box',
                         fontWeight: 500
                       }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-secondary, #64748b)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Hammer size={13} style={{ color: 'var(--brand-color, #065f46)' }} />
+                      Task ID
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={selectedSchedule.custom_task_id || selectedSchedule.task_id || ''}
+                      placeholder="—"
+                      style={{
+                        width: '100%',
+                        background: 'var(--bg-tertiary, #f8fafc)',
+                        border: '1px solid var(--border-color, #e2e8f0)',
+                        borderRadius: 6,
+                        padding: '8px 12px',
+                        fontSize: 12.5,
+                        color: (selectedSchedule.custom_task_id || selectedSchedule.task_id) ? 'var(--brand-color, #2563eb)' : 'var(--text-primary, #0f172a)',
+                        outline: 'none',
+                        cursor: (selectedSchedule.custom_task_id || selectedSchedule.task_id) ? 'pointer' : 'default',
+                        boxSizing: 'border-box',
+                        fontWeight: 600,
+                        textDecoration: (selectedSchedule.custom_task_id || selectedSchedule.task_id) ? 'underline' : 'none'
+                      }}
+                      onClick={() => {
+                        const tId = selectedSchedule.custom_task_id || selectedSchedule.task_id;
+                        if (tId) {
+                          setActiveSection('task');
+                          const matched = (workOrders || []).find(w => w.name === tId || w.id === tId);
+                          setSelectedWorkOrder(matched || { name: tId, id: tId });
+                        }
+                      }}
+                      title={(selectedSchedule.custom_task_id || selectedSchedule.task_id) ? "Click to view Task details" : ""}
                     />
                   </div>
                 </div>
@@ -6814,56 +7429,454 @@ export default function Maintenance({
 
       {/* ── SECTION 3: TECHNICIANS ── */}
       {activeSection === 'technician' && (
-        <div className="grid-2col" style={{ gridTemplateColumns: selectedTechnician ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
-          <div className="card-panel">
-            <h3 style={{ fontSize: 15, marginBottom: 14 }}>Active Technicians Directory</h3>
-            <div className="table-container">
-              <table className="custom-table">
-                <thead><tr><th>Tech Name</th><th>Skill Category</th><th>Certifications</th><th>Availability</th></tr></thead>
-                <tbody>{techProfiles.map(tech => <tr key={tech.id} onClick={() => setSelectedTechnician(tech)} style={{ cursor: 'pointer', backgroundColor: selectedTechnician?.id === tech.id ? 'var(--bg-accent-alpha)' : '' }}><td><strong>{tech.name}</strong></td><td>{tech.skill}</td><td>{tech.certs}</td><td><span className={`badge ${tech.availability === 'Available' ? 'badge-success' : 'badge-warning'}`}>{tech.availability}</span></td></tr>)}</tbody>
-              </table>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Technicians Filter Toolbar */}
+          <div className="card-panel" style={{ padding: '12px 20px', display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 12, flex: 1, minWidth: 260, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
+                <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <input
+                  type="text"
+                  placeholder="Search by name, skill category, certifications..."
+                  value={techSearch}
+                  onChange={(e) => setTechSearch(e.target.value)}
+                  className="form-input"
+                  style={{ paddingLeft: 34, paddingRight: 28, height: 36, fontSize: 12.5, width: '100%', borderRadius: 8 }}
+                />
+                {techSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setTechSearch('')}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2, display: 'flex' }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              {/* Department / Skill Filter */}
+              <select
+                value={techDeptFilter}
+                onChange={(e) => setTechDeptFilter(e.target.value)}
+                className="form-select"
+                style={{ width: 'auto', minWidth: 150, height: 36, fontSize: 12, borderRadius: 8 }}
+              >
+                <option value="All">All Skill Categories</option>
+                {uniqueTechDepartments.map(dept => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
+
+              {/* Availability Filter */}
+              <select
+                value={techAvailabilityFilter}
+                onChange={(e) => setTechAvailabilityFilter(e.target.value)}
+                className="form-select"
+                style={{ width: 'auto', minWidth: 130, height: 36, fontSize: 12, borderRadius: 8 }}
+              >
+                <option value="All">All Availability</option>
+                <option value="Available">Available</option>
+                <option value="On Leave">On Leave</option>
+              </select>
             </div>
+
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => fetchTechnicians(true)}
+              disabled={loadingTechs || refreshSpinTech}
+              title="Refresh Employees from ERPNext"
+              style={{ height: 36, padding: '0 14px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 8, fontWeight: 600, flexShrink: 0 }}
+            >
+              <RefreshCw size={13} className={loadingTechs || refreshSpinTech ? 'spin' : ''} />
+              <span>{loadingTechs || refreshSpinTech ? 'Refreshing...' : 'Refresh'}</span>
+            </button>
           </div>
-          {selectedTechnician && (
-            <div className="card-panel" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}><strong>{selectedTechnician.name} Details</strong><button onClick={() => setSelectedTechnician(null)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={16} /></button></div>
-              <div style={{ display: 'flex', gap: 14, alignItems: 'center', background: 'var(--bg-tertiary)', padding: 12, borderRadius: 8 }}>
-                <img src={selectedTechnician.img} alt={selectedTechnician.name} style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--brand-color)' }} />
-                <div><h4 style={{ fontSize: 14, margin: 0 }}>{selectedTechnician.name}</h4><span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Skill: {selectedTechnician.skill}</span></div>
+
+          <div className="grid-2col" style={{ gridTemplateColumns: selectedTechnician ? '60% calc(40% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
+            <div className="card-panel" style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ fontSize: 15, margin: 0 }}>Active Technicians Directory</h3>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  Total: {filteredTechs.length} {filteredTechs.length === 1 ? 'employee' : 'employees'}
+                </span>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Award size={14} /> Certs: {selectedTechnician.certs}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Phone size={14} /> Phone: {selectedTechnician.phone}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Mail size={14} /> Email: {selectedTechnician.email}</div>
-                <div>Status: <span className="badge badge-success">{selectedTechnician.availability}</span></div>
+              <div className="table-container" style={{ margin: 0, border: 'none' }}>
+                <table className="custom-table">
+                  <thead>
+                    <tr>
+                      <th>Tech Name</th>
+                      <th>Skill Category</th>
+                      <th>Certifications</th>
+                      <th>Availability</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loadingTechs || !techsFetched ? (
+                      <tr>
+                        <td colSpan={4} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                          <RefreshCw size={26} className="spin" style={{ margin: '0 auto 14px', display: 'block', color: 'var(--brand-color)' }} />
+                          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
+                            Waiting for response
+                          </div>
+                        </td>
+                      </tr>
+                    ) : paginatedTechs.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                          No technicians found matching your filter criteria.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedTechs.map(tech => (
+                        <tr
+                          key={tech.id}
+                          onClick={() => setSelectedTechnician(tech)}
+                          style={{
+                            cursor: 'pointer',
+                            backgroundColor: selectedTechnician?.id === tech.id ? 'var(--bg-accent-alpha)' : '',
+                            borderLeft: selectedTechnician?.id === tech.id ? '3px solid var(--brand-color)' : ''
+                          }}
+                        >
+                          <td><strong>{tech.name}</strong></td>
+                          <td>{tech.skill}</td>
+                          <td>{tech.certs}</td>
+                          <td>
+                            <span className={`badge ${String(tech.availability || '').toLowerCase() === 'available' ? 'badge-success' : 'badge-warning'}`}>
+                              {tech.availability}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 10 rows per page pagination controls */}
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '12px 20px',
+                  borderTop: '1px solid var(--border-color)',
+                  fontSize: 11,
+                  color: 'var(--text-secondary)',
+                  background: 'var(--bg-card, #ffffff)',
+                  flexShrink: 0,
+                  flexWrap: 'wrap',
+                  gap: 10
+                }}
+              >
+                <span>
+                  Showing <strong style={{ color: 'var(--text-primary)' }}>
+                    {filteredTechs.length === 0 ? 0 : (techCurrentPage - 1) * techItemsPerPage + 1}
+                  </strong> to{' '}
+                  <strong style={{ color: 'var(--text-primary)' }}>
+                    {Math.min(techCurrentPage * techItemsPerPage, filteredTechs.length)}
+                  </strong> of{' '}
+                  <strong style={{ color: 'var(--text-primary)' }}>{filteredTechs.length}</strong> entries (10 rows/page)
+                </span>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button
+                    type="button"
+                    disabled={techCurrentPage === 1}
+                    onClick={() => setTechCurrentPage(p => Math.max(p - 1, 1))}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: 10,
+                      opacity: techCurrentPage === 1 ? 0.4 : 1,
+                      cursor: techCurrentPage === 1 ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      minWidth: 64
+                    }}
+                  >
+                    <ChevronLeft size={12} /> Previous
+                  </button>
+
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {Array.from({ length: techTotalPages }, (_, i) => i + 1).map(pageNum => (
+                      <button
+                        key={pageNum}
+                        type="button"
+                        onClick={() => setTechCurrentPage(pageNum)}
+                        style={{
+                          minWidth: 26,
+                          height: 26,
+                          padding: '0 5px',
+                          borderRadius: 4,
+                          fontSize: 10,
+                          fontWeight: pageNum === techCurrentPage ? 700 : 500,
+                          border: pageNum === techCurrentPage ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
+                          background: pageNum === techCurrentPage ? 'var(--brand-color)' : 'transparent',
+                          color: pageNum === techCurrentPage ? '#ffffff' : 'var(--text-primary)',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        {pageNum}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={techCurrentPage === techTotalPages}
+                    onClick={() => setTechCurrentPage(p => Math.min(p + 1, techTotalPages))}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: 10,
+                      opacity: techCurrentPage === techTotalPages ? 0.4 : 1,
+                      cursor: techCurrentPage === techTotalPages ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      minWidth: 64
+                    }}
+                  >
+                    Next <ChevronRight size={12} />
+                  </button>
+                </div>
               </div>
             </div>
-          )}
+
+            {selectedTechnician && (
+              <div className="card-panel" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}><strong>{selectedTechnician.name} Details</strong><button onClick={() => setSelectedTechnician(null)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={16} /></button></div>
+                <div style={{ display: 'flex', gap: 14, alignItems: 'center', background: 'var(--bg-tertiary)', padding: 12, borderRadius: 8 }}>
+                  <img src={selectedTechnician.img} alt={selectedTechnician.name} style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--brand-color)' }} />
+                  <div><h4 style={{ fontSize: 14, margin: 0 }}>{selectedTechnician.name}</h4><span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Skill: {selectedTechnician.skill}</span></div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Award size={14} /> Certs: {selectedTechnician.certs}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Phone size={14} /> Phone: {selectedTechnician.phone}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Mail size={14} /> Email: {selectedTechnician.email}</div>
+                  <div>Status: <span className="badge badge-success">{selectedTechnician.availability}</span></div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
       {/* ── SECTION 4: VENDORS ── */}
       {activeSection === 'vendor' && (
-        <div className="grid-2col" style={{ gridTemplateColumns: selectedVendor ? '60% calc(40% - 24px)' : '1fr', gap: 24 }}>
-          <div className="card-panel">
-            <h3 style={{ fontSize: 15, marginBottom: 14 }}>Vendor Directory & Quotations Log</h3>
-            <div className="table-container">
-              <table className="custom-table">
-                <thead><tr><th>Vendor ID</th><th>Vendor Name</th><th>Service Category</th></tr></thead>
-                <tbody>{vendorDir.map(v => <tr key={v.id} onClick={() => setSelectedVendor(v)} style={{ cursor: 'pointer', backgroundColor: selectedVendor?.id === v.id ? 'var(--bg-accent-alpha)' : '' }}><td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{v.id}</td><td>{v.name}</td><td>{v.type}</td></tr>)}</tbody>
-              </table>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Vendors Filter Toolbar */}
+          <div className="card-panel" style={{ padding: '12px 20px', display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 12, flex: 1, minWidth: 260, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
+                <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <input
+                  type="text"
+                  placeholder="Search by vendor ID, name, category, phone..."
+                  value={vendorSearch}
+                  onChange={(e) => setVendorSearch(e.target.value)}
+                  className="form-input"
+                  style={{ paddingLeft: 34, paddingRight: 28, height: 36, fontSize: 12.5, width: '100%', borderRadius: 8 }}
+                />
+                {vendorSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setVendorSearch('')}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2, display: 'flex' }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              {/* Service Category Filter */}
+              <select
+                value={vendorCategoryFilter}
+                onChange={(e) => setVendorCategoryFilter(e.target.value)}
+                className="form-select"
+                style={{ width: 'auto', minWidth: 160, height: 36, fontSize: 12, borderRadius: 8 }}
+              >
+                <option value="All">All Service Categories</option>
+                {uniqueVendorCategories.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
             </div>
+
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => fetchVendors(true)}
+              disabled={loadingVendors || refreshSpinVendor}
+              title="Refresh Supplier Vendors from ERPNext"
+              style={{ height: 36, padding: '0 14px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 8, fontWeight: 600, flexShrink: 0 }}
+            >
+              <RefreshCw size={13} className={loadingVendors || refreshSpinVendor ? 'spin' : ''} />
+              <span>{loadingVendors || refreshSpinVendor ? 'Refreshing...' : 'Refresh'}</span>
+            </button>
           </div>
-          {selectedVendor && (
-            <div className="card-panel" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}><strong>{selectedVendor.name} Details</strong><button onClick={() => setSelectedVendor(null)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={16} /></button></div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
-                <div>Vendor Group: <strong>{selectedVendor.group}</strong></div><div>Category Type: <strong>{selectedVendor.type}</strong></div>
-                <div>Phone: <strong>{selectedVendor.phone}</strong></div><div>Email: <strong>{selectedVendor.email}</strong></div>
-                <div>Address: <strong>{selectedVendor.address}</strong></div>
+
+          <div className="grid-2col" style={{ gridTemplateColumns: selectedVendor ? '60% calc(40% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
+            <div className="card-panel" style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ fontSize: 15, margin: 0 }}>Vendor Directory & Quotations Log</h3>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  Total: {filteredVendors.length} {filteredVendors.length === 1 ? 'vendor' : 'vendors'} (Group: Services)
+                </span>
+              </div>
+              <div className="table-container" style={{ margin: 0, border: 'none' }}>
+                <table className="custom-table">
+                  <thead>
+                    <tr>
+                      <th>Vendor ID</th>
+                      <th>Vendor Name</th>
+                      <th>Service Category</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loadingVendors || !vendorsFetched ? (
+                      <tr>
+                        <td colSpan={3} style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                          <RefreshCw size={26} className="spin" style={{ margin: '0 auto 14px', display: 'block', color: 'var(--brand-color)' }} />
+                          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
+                            Waiting for response
+                          </div>
+                        </td>
+                      </tr>
+                    ) : paginatedVendors.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                          No vendors found in Services group matching your filter criteria.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedVendors.map(v => (
+                        <tr
+                          key={v.id}
+                          onClick={() => setSelectedVendor(v)}
+                          style={{
+                            cursor: 'pointer',
+                            backgroundColor: selectedVendor?.id === v.id ? 'var(--bg-accent-alpha)' : '',
+                            borderLeft: selectedVendor?.id === v.id ? '3px solid var(--brand-color)' : ''
+                          }}
+                        >
+                          <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{v.id}</td>
+                          <td style={{ fontWeight: 600 }}>{v.name}</td>
+                          <td>{v.type}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 10 rows per page pagination controls */}
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '12px 20px',
+                  borderTop: '1px solid var(--border-color)',
+                  fontSize: 11,
+                  color: 'var(--text-secondary)',
+                  background: 'var(--bg-card, #ffffff)',
+                  flexShrink: 0,
+                  flexWrap: 'wrap',
+                  gap: 10
+                }}
+              >
+                <span>
+                  Showing <strong style={{ color: 'var(--text-primary)' }}>
+                    {filteredVendors.length === 0 ? 0 : (vendorCurrentPage - 1) * vendorItemsPerPage + 1}
+                  </strong> to{' '}
+                  <strong style={{ color: 'var(--text-primary)' }}>
+                    {Math.min(vendorCurrentPage * vendorItemsPerPage, filteredVendors.length)}
+                  </strong> of{' '}
+                  <strong style={{ color: 'var(--text-primary)' }}>{filteredVendors.length}</strong> entries (10 rows/page)
+                </span>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button
+                    type="button"
+                    disabled={vendorCurrentPage === 1}
+                    onClick={() => setVendorCurrentPage(p => Math.max(p - 1, 1))}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: 10,
+                      opacity: vendorCurrentPage === 1 ? 0.4 : 1,
+                      cursor: vendorCurrentPage === 1 ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      minWidth: 64
+                    }}
+                  >
+                    <ChevronLeft size={12} /> Previous
+                  </button>
+
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {Array.from({ length: vendorTotalPages }, (_, i) => i + 1).map(pageNum => (
+                      <button
+                        key={pageNum}
+                        type="button"
+                        onClick={() => setVendorCurrentPage(pageNum)}
+                        style={{
+                          minWidth: 26,
+                          height: 26,
+                          padding: '0 5px',
+                          borderRadius: 4,
+                          fontSize: 10,
+                          fontWeight: pageNum === vendorCurrentPage ? 700 : 500,
+                          border: pageNum === vendorCurrentPage ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
+                          background: pageNum === vendorCurrentPage ? 'var(--brand-color)' : 'transparent',
+                          color: pageNum === vendorCurrentPage ? '#ffffff' : 'var(--text-primary)',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        {pageNum}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={vendorCurrentPage === vendorTotalPages}
+                    onClick={() => setVendorCurrentPage(p => Math.min(p + 1, vendorTotalPages))}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: 10,
+                      opacity: vendorCurrentPage === vendorTotalPages ? 0.4 : 1,
+                      cursor: vendorCurrentPage === vendorTotalPages ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      minWidth: 64
+                    }}
+                  >
+                    Next <ChevronRight size={12} />
+                  </button>
+                </div>
               </div>
             </div>
-          )}
+
+            {selectedVendor && (
+              <div className="card-panel" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}><strong>{selectedVendor.name} Details</strong><button onClick={() => setSelectedVendor(null)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={16} /></button></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
+                  <div>Vendor Group: <strong>{selectedVendor.group}</strong></div><div>Category Type: <strong>{selectedVendor.type}</strong></div>
+                  <div>Phone: <strong>{selectedVendor.phone}</strong></div><div>Email: <strong>{selectedVendor.email}</strong></div>
+                  <div>Address: <strong>{selectedVendor.address}</strong></div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

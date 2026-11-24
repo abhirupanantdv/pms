@@ -1,23 +1,127 @@
-import React, { useState, useEffect } from 'react';
-import { UserCheck, ShieldCheck, Mail, Phone, Briefcase, DollarSign, X, CheckCircle, Clock, MapPin, Star, ChevronRight, Building } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  UserCheck, ShieldCheck, Mail, Phone, Briefcase, DollarSign, X, CheckCircle,
+  Clock, MapPin, Star, ChevronRight, ChevronLeft, Building, Search, RefreshCw
+} from 'lucide-react';
+import { fetchDocTypeList, normalizeSupplier } from '../services/api';
 
-export default function Owners({ owners, erpnextConfig }) {
+export default function Owners({ owners = [], erpnextConfig }) {
   const [selectedOwner, setSelectedOwner] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [vendorDetails, setVendorDetails] = useState(null);
 
-  // Pagination states & calculations
+  // Supplier DocType API state
+  const [apiSuppliers, setApiSuppliers] = useState([]);
+  const [loadingSuppliers, setLoadingSuppliers] = useState(true);
+  const [hasLoadedApi, setHasLoadedApi] = useState(false);
+
+  // Filters & Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterGroup, setFilterGroup] = useState('all');
+  const [filterType, setFilterType] = useState('all');
+
+  // Pagination states - 10 rows per page
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = selectedOwner ? 6 : 10;
+  const itemsPerPage = 10;
+
+  // Fetch Supplier DocType records using common API service
+  const fetchSuppliers = useCallback(async (isRefresh = false) => {
+    setLoadingSuppliers(true);
+    try {
+      const res = await fetchDocTypeList('Supplier', {
+        page: 1,
+        limit: 100, // Fetch up to 100 for fast client filtering & 10 rows/page pagination
+        orderBy: 'creation desc',
+        baseUrl: erpnextConfig?.url
+      });
+      if (res && Array.isArray(res.data)) {
+        setApiSuppliers(res.data);
+      }
+    } catch (err) {
+      console.warn('Could not fetch Supplier DocType list:', err);
+    } finally {
+      setLoadingSuppliers(false);
+      setHasLoadedApi(true);
+    }
+  }, [erpnextConfig?.url]);
+
+  // Initial load and listen for sidebar navigation click on "Contractors"
+  useEffect(() => {
+    fetchSuppliers();
+
+    const handleSidebarClick = (e) => {
+      const target = e.target;
+      const menuItem = target.closest && target.closest('.menu-item');
+      if (
+        menuItem &&
+        menuItem.textContent &&
+        (menuItem.textContent.trim().toLowerCase().includes('contractors') ||
+          menuItem.textContent.trim().toLowerCase().includes('owners'))
+      ) {
+        fetchSuppliers(true);
+      }
+    };
+
+    const handleNavigate = () => {
+      fetchSuppliers(true);
+    };
+
+    document.addEventListener('click', handleSidebarClick);
+    window.addEventListener('pms:navigate-contractors', handleNavigate);
+    window.addEventListener('pms:navigate-owners', handleNavigate);
+    return () => {
+      document.removeEventListener('click', handleSidebarClick);
+      window.removeEventListener('pms:navigate-contractors', handleNavigate);
+      window.removeEventListener('pms:navigate-owners', handleNavigate);
+    };
+  }, [fetchSuppliers]);
+
+  // Only use API-fetched suppliers - no dummy data fallback
+  const effectiveOwners = useMemo(() => {
+    return apiSuppliers || [];
+  }, [apiSuppliers]);
+
+  // Distinct groups & types for filter dropdowns
+  const uniqueGroups = useMemo(() => {
+    return Array.from(new Set(effectiveOwners.map(o => o.supplier_group).filter(Boolean)));
+  }, [effectiveOwners]);
+
+  const uniqueTypes = useMemo(() => {
+    return Array.from(new Set(effectiveOwners.map(o => o.supplier_type).filter(Boolean)));
+  }, [effectiveOwners]);
+
+  // Filtered suppliers
+  const filteredOwners = useMemo(() => {
+    return effectiveOwners.filter(owner => {
+      if (filterGroup !== 'all' && owner.supplier_group !== filterGroup) {
+        return false;
+      }
+      if (filterType !== 'all' && owner.supplier_type !== filterType) {
+        return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchId = (owner.id || '').toLowerCase().includes(q);
+        const matchName = (owner.supplier_name || owner.name || '').toLowerCase().includes(q);
+        const matchEmail = (owner.email_id || owner.email || '').toLowerCase().includes(q);
+        const matchGroup = (owner.supplier_group || '').toLowerCase().includes(q);
+        const matchType = (owner.supplier_type || '').toLowerCase().includes(q);
+        if (!matchId && !matchName && !matchEmail && !matchGroup && !matchType) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [effectiveOwners, filterGroup, filterType, searchQuery]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [owners.length]);
+  }, [searchQuery, filterGroup, filterType, filteredOwners.length]);
 
-  const totalPages = Math.ceil(owners.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(filteredOwners.length / itemsPerPage));
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = owners.slice(indexOfFirstItem, indexOfLastItem);
+  const currentItems = filteredOwners.slice(indexOfFirstItem, indexOfLastItem);
 
   // Load detailed information on demand
   useEffect(() => {
@@ -29,11 +133,11 @@ export default function Owners({ owners, erpnextConfig }) {
     // Set fallback initial details from listing data
     const fallbackDetails = {
       id: selectedOwner.id,
-      name: selectedOwner.name,
+      name: selectedOwner.supplier_name || selectedOwner.name,
       supplier_type: selectedOwner.supplier_type,
       supplier_group: selectedOwner.supplier_group,
-      email: selectedOwner.email,
-      phone: selectedOwner.phone,
+      email: selectedOwner.email_id || selectedOwner.email,
+      phone: selectedOwner.mobile_no || selectedOwner.phone,
       address: selectedOwner.address || '',
       properties: selectedOwner.properties || [],
       addresses: [],
@@ -43,7 +147,7 @@ export default function Owners({ owners, erpnextConfig }) {
     };
     setVendorDetails(fallbackDetails);
 
-    if (!erpnextConfig || !erpnextConfig.url || selectedOwner.id.startsWith('OWN-')) {
+    if (!erpnextConfig || !erpnextConfig.url || (selectedOwner.id && selectedOwner.id.startsWith('OWN-'))) {
       console.log('Contractor Details (Fallback/Offline Response):', fallbackDetails);
       return;
     }
@@ -51,7 +155,7 @@ export default function Owners({ owners, erpnextConfig }) {
     const fetchDetails = async () => {
       setDetailsLoading(true);
       try {
-        const idEnc = encodeURIComponent(selectedOwner.id);
+        const idEnc = encodeURIComponent(selectedOwner.id || selectedOwner.name);
 
         // 1. Fetch Supplier Doc
         const supPromise = fetch(`${erpnextConfig.url}/api/resource/Supplier/${idEnc}`, { credentials: 'include' })
@@ -59,22 +163,16 @@ export default function Owners({ owners, erpnextConfig }) {
           .catch(() => null);
 
         // 2. Fetch Addresses
-        const addrPromise = fetch(`${erpnextConfig.url}/api/resource/Address?filters=[["Dynamic Link", "link_doctype", "=", "Supplier"], ["Dynamic Link", "link_name", "=", "${selectedOwner.id}"]]&fields=["address_line1","address_line2","city","state","country","pincode"]`, { credentials: 'include' })
+        const addrPromise = fetch(`${erpnextConfig.url}/api/resource/Address?filters=[["Dynamic Link", "link_doctype", "=", "Supplier"], ["Dynamic Link", "link_name", "=", "${selectedOwner.id || selectedOwner.name}"]]&fields=["address_line1","address_line2","city","state","country","pincode"]`, { credentials: 'include' })
           .then(res => res.ok ? res.json() : null)
           .catch(() => null);
 
         // 3. Fetch Contacts
-        const contactPromise = fetch(`${erpnextConfig.url}/api/resource/Contact?filters=[["Dynamic Link", "link_doctype", "=", "Supplier"], ["Dynamic Link", "link_name", "=", "${selectedOwner.id}"]]&fields=["name","email_id","phone","first_name","last_name"]`, { credentials: 'include' })
+        const contactPromise = fetch(`${erpnextConfig.url}/api/resource/Contact?filters=[["Dynamic Link", "link_doctype", "=", "Supplier"], ["Dynamic Link", "link_name", "=", "${selectedOwner.id || selectedOwner.name}"]]&fields=["name","email_id","phone","first_name","last_name"]`, { credentials: 'include' })
           .then(res => res.ok ? res.json() : null)
           .catch(() => null);
 
         const [supJson, addrJson, contactJson] = await Promise.all([supPromise, addrPromise, contactPromise]);
-
-        console.log('Contractor API Responses:', {
-          supplierResponse: supJson,
-          addressResponse: addrJson,
-          contactResponse: contactJson
-        });
 
         const supplierData = supJson?.data || supJson || {};
         const addressList = addrJson?.data || addrJson || [];
@@ -87,32 +185,8 @@ export default function Owners({ owners, erpnextConfig }) {
           addressStr = [addr.address_line1, addr.address_line2, addr.city, addr.state, addr.country, addr.pincode].filter(Boolean).join(', ');
         }
 
-        // Fetch detailed contact information for any contact whose first_name is "Jitendra"
-        contactList = await Promise.all(contactList.map(async (c) => {
-          if (c.first_name === 'Jitendra' && c.name) {
-            try {
-              const detailRes = await fetch(`${erpnextConfig.url}/api/resource/Contact/${encodeURIComponent(c.name)}`, { credentials: 'include' });
-              if (detailRes.ok) {
-                const detailJson = await detailRes.json();
-                const contactDetails = detailJson?.data || detailJson || {};
-                console.log('Fetched Detailed Contact (Jitendra):', contactDetails);
-                const fetchedPhone = contactDetails.phone || (contactDetails.phone_nos && contactDetails.phone_nos[0]?.phone) || '';
-                const fetchedEmail = contactDetails.email_id || (contactDetails.email_ids && contactDetails.email_ids[0]?.email_id) || '';
-                return {
-                  ...c,
-                  phone: fetchedPhone || c.phone,
-                  email_id: fetchedEmail || c.email_id
-                };
-              }
-            } catch (err) {
-              console.warn('Failed fetching detailed contact info:', err);
-            }
-          }
-          return c;
-        }));
-
-        let contactPhone = selectedOwner.phone || '';
-        let contactEmail = selectedOwner.email || '';
+        let contactPhone = selectedOwner.mobile_no || selectedOwner.phone || '';
+        let contactEmail = selectedOwner.email_id || selectedOwner.email || '';
         if (contactList.length > 0) {
           contactEmail = contactList[0].email_id || contactEmail;
           contactPhone = contactList[0].phone || contactPhone;
@@ -131,8 +205,6 @@ export default function Owners({ owners, erpnextConfig }) {
           custom_services_list: supplierData.custom_services_list || fallbackDetails.custom_services_list
         };
 
-        console.log('Compiled Contractor Details:', compiledDetails);
-
         setVendorDetails(compiledDetails);
       } catch (err) {
         console.warn('Failed fetching supplier details:', err);
@@ -145,30 +217,137 @@ export default function Owners({ owners, erpnextConfig }) {
   }, [selectedOwner, erpnextConfig]);
 
   const renderPaginationControls = () => {
-    if (totalPages <= 1) return null;
-    return (
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderTop: '1px solid var(--border-color)', fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-card)', flexShrink: 0 }}>
-        <button
-          type="button"
-          disabled={currentPage === 1}
-          onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', minWidth: 60 }}
+    if (loadingSuppliers || !hasLoadedApi) {
+      return (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: '12px 20px',
+            borderTop: '1px solid var(--border-color)',
+            fontSize: 12,
+            color: 'var(--text-secondary)',
+            background: 'var(--bg-card, #ffffff)',
+            gap: 8
+          }}
         >
-          Previous
-        </button>
-        <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-          Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong>
+          <RefreshCw size={13} className="spin" style={{ color: 'var(--brand-color)' }} />
+          <span>Waiting for response</span>
         </div>
-        <button
-          type="button"
-          disabled={currentPage === totalPages}
-          onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-          className="btn btn-secondary"
-          style={{ padding: '4px 8px', fontSize: 10, opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', minWidth: 60 }}
-        >
-          Next
-        </button>
+      );
+    }
+
+    const startRecord = filteredOwners.length > 0 ? indexOfFirstItem + 1 : 0;
+    const endRecord = Math.min(indexOfLastItem, filteredOwners.length);
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '12px 20px',
+          borderTop: '1px solid var(--border-color)',
+          fontSize: 11,
+          color: 'var(--text-secondary)',
+          background: 'var(--bg-card, #ffffff)',
+          flexShrink: 0,
+          flexWrap: 'wrap',
+          gap: 10
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>
+            Showing <strong style={{ color: 'var(--text-primary)' }}>{startRecord}</strong> to{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{endRecord}</strong> of{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>{filteredOwners.length}</strong> entries (10 rows/page)
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => fetchSuppliers(true)}
+            disabled={loadingSuppliers}
+            title="Refresh Suppliers from ERPNext"
+            style={{
+              padding: '2px 8px',
+              fontSize: 10,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              height: 24,
+              borderRadius: 4
+            }}
+          >
+            <RefreshCw size={11} className={loadingSuppliers ? 'spin' : ''} />
+            <span>{loadingSuppliers ? 'Refreshing...' : 'Refresh'}</span>
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
+            className="btn btn-secondary"
+            style={{
+              padding: '4px 10px',
+              fontSize: 10,
+              opacity: currentPage === 1 ? 0.4 : 1,
+              cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              minWidth: 64
+            }}
+          >
+            <ChevronLeft size={12} /> Previous
+          </button>
+
+          <div style={{ display: 'flex', gap: 4 }}>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => (
+              <button
+                key={pageNum}
+                type="button"
+                onClick={() => setCurrentPage(pageNum)}
+                style={{
+                  minWidth: 26,
+                  height: 26,
+                  padding: '0 5px',
+                  borderRadius: 4,
+                  fontSize: 10,
+                  fontWeight: pageNum === currentPage ? 700 : 500,
+                  border: pageNum === currentPage ? '1px solid var(--brand-color)' : '1px solid var(--border-color)',
+                  background: pageNum === currentPage ? 'var(--brand-color)' : 'transparent',
+                  color: pageNum === currentPage ? '#ffffff' : 'var(--text-primary)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {pageNum}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
+            className="btn btn-secondary"
+            style={{
+              padding: '4px 10px',
+              fontSize: 10,
+              opacity: currentPage === totalPages ? 0.4 : 1,
+              cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              minWidth: 64
+            }}
+          >
+            Next <ChevronRight size={12} />
+          </button>
+        </div>
       </div>
     );
   };
@@ -182,54 +361,101 @@ export default function Owners({ owners, erpnextConfig }) {
         </div>
       </div>
 
+      {/* Filter Toolbar */}
+      <div className="card-panel" style={{ padding: '16px 24px', marginBottom: 24, display: 'flex', gap: 16, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 12, flex: 1, minWidth: 260, flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 240 }}>
+            <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <input
+              type="text"
+              placeholder="Search contractors across all fields (Vendor ID, name, email, type, group)..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="form-input"
+              style={{ paddingLeft: 38 }}
+            />
+          </div>
+          <select
+            value={filterGroup}
+            onChange={(e) => setFilterGroup(e.target.value)}
+            className="form-select"
+            style={{ width: 170 }}
+          >
+            <option value="all">All Groups</option>
+            {uniqueGroups.map(g => (
+              <option key={g} value={g}>{g}</option>
+            ))}
+          </select>
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            className="form-select"
+            style={{ width: 160 }}
+          >
+            <option value="all">All Types</option>
+            {uniqueTypes.map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {/* Split Details Layout */}
       <div className="grid-2col" style={{ gridTemplateColumns: selectedOwner ? '60% calc(40% - 24px)' : '1fr', gap: 24, transition: 'all 0.3s ease' }}>
 
         {/* Vendors/Suppliers List */}
         <div className="card-panel" style={{
           padding: 0,
-          overflow: 'hidden',
-          filter: selectedOwner ? 'blur(4px)' : 'none',
-          transition: 'filter 0.3s ease'
+          overflow: 'hidden'
         }}>
-          <div className="table-container">
+          <div className="table-container" style={{ border: 'none', marginTop: 0 }}>
             <table className="custom-table">
               <thead>
                 <tr>
-                  <th>Vendor ID</th>
-                  <th>Vendor Name</th>
-                  <th>Type</th>
-                  <th>Group</th>
+                  <th>VENDOR ID</th>
+                  <th>VENDOR NAME</th>
+                  <th>TYPE</th>
+                  <th>GROUP</th>
                 </tr>
               </thead>
               <tbody>
-                {currentItems.map(owner => (
-                  <tr
-                    key={owner.id}
-                    onClick={() => setSelectedOwner(owner)}
-                    style={{
-                      cursor: 'pointer',
-                      backgroundColor: selectedOwner?.id === owner.id ? 'var(--bg-accent-alpha)' : '',
-                      borderLeft: selectedOwner?.id === owner.id ? '3px solid var(--brand-color)' : ''
-                    }}
-                  >
-                    <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{owner.id}</td>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{owner.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{owner.email}</div>
+                {loadingSuppliers || !hasLoadedApi ? (
+                  <tr>
+                    <td colSpan="4" style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-secondary)' }}>
+                      <RefreshCw size={26} className="spin" style={{ margin: '0 auto 14px', display: 'block', color: 'var(--brand-color)' }} />
+                      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
+                        Waiting for response
+                      </div>
                     </td>
-                    <td>
-                      <span className="badge badge-secondary" style={{ textTransform: 'none' }}>
-                        {owner.supplier_type || 'Services'}
-                      </span>
-                    </td>
-                    <td>{owner.supplier_group || 'Local'}</td>
                   </tr>
-                ))}
-                {currentItems.length === 0 && (
+                ) : currentItems.length > 0 ? (
+                  currentItems.map(owner => (
+                    <tr
+                      key={owner.id}
+                      onClick={() => setSelectedOwner(owner)}
+                      style={{
+                        cursor: 'pointer',
+                        backgroundColor: selectedOwner?.id === owner.id ? 'var(--bg-accent-alpha)' : '',
+                        borderLeft: selectedOwner?.id === owner.id ? '3px solid var(--brand-color)' : ''
+                      }}
+                    >
+                      <td style={{ fontWeight: 600, color: 'var(--brand-color)' }}>{owner.id}</td>
+                      <td>
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{owner.supplier_name || owner.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{owner.email_id || owner.email || '—'}</div>
+                      </td>
+                      <td style={{ color: 'var(--text-primary)' }}>
+                        {owner.supplier_type || 'Company'}
+                      </td>
+                      <td style={{ color: 'var(--text-primary)' }}>
+                        {owner.supplier_group || 'Services'}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
                   <tr>
                     <td colSpan="4" style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                      No vendors found.
+                      No contractors found matching your filter.
                     </td>
                   </tr>
                 )}

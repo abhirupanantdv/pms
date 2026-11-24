@@ -192,7 +192,7 @@ export const getUploadHeaders = (extraHeaders = {}) => {
  * - On production domains, ensures https:// is used to avoid Nginx 301 redirects (which drop headers and POST bodies).
  */
 export const getApiBaseUrl = () => {
-  if (typeof window === 'undefined') return 'https://cfpl.anantdv.com';
+  if (typeof window === 'undefined') return 'https://pms.advtinni.com';
   const { origin, protocol, hostname, host } = window.location;
 
   // Local development via Vite dev server proxy
@@ -226,3 +226,120 @@ export const ERPNEXT_CONFIG = {
     return getCsrfToken();
   }
 };
+
+/**
+ * Safely cleans server and Nginx errors, stripping raw 504/502 Gateway Time-out HTML.
+ */
+export const cleanServerErrorMessage = (errOrMsg) => {
+  if (!errOrMsg) return 'An error occurred. Please try again.';
+
+  let str = '';
+  if (typeof errOrMsg === 'string') {
+    str = errOrMsg;
+  } else if (typeof errOrMsg === 'object') {
+    if (errOrMsg._server_messages) {
+      try {
+        const msgs = JSON.parse(errOrMsg._server_messages);
+        if (Array.isArray(msgs) && msgs.length > 0) {
+          const first = typeof msgs[0] === 'string' ? JSON.parse(msgs[0]) : msgs[0];
+          str = first.message || first.title || '';
+        }
+      } catch { }
+    }
+    if (!str) {
+      str = errOrMsg.message || errOrMsg.exception || errOrMsg.exc || (typeof errOrMsg.data === 'string' ? errOrMsg.data : '');
+    }
+    if (!str) {
+      try {
+        str = JSON.stringify(errOrMsg);
+      } catch {
+        str = '';
+      }
+    }
+    if (!str || str === '{}' || str === '[]') {
+      return 'An unexpected error occurred. Please try again.';
+    }
+  }
+
+  const lower = str.toLowerCase();
+  if (
+    lower.includes('504 gateway time-out') ||
+    lower.includes('504 gateway timeout') ||
+    lower.includes('gateway time-out') ||
+    lower.includes('502 bad gateway') ||
+    lower.includes('503 service') ||
+    (lower.includes('nginx') && (lower.includes('504') || lower.includes('timeout') || lower.includes('ubuntu') || lower.includes('502')))
+  ) {
+    return 'The server took too long to respond (504 Gateway Timeout). The server is busy or the operation is processing in the background. Please refresh in a moment to verify.';
+  }
+
+  // Strip HTML tags
+  if (str.includes('<') && str.includes('>')) {
+    str = str.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // Handle traceback
+  if (str.includes('Traceback (most recent call last):') || str.includes('Traceback')) {
+    const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
+    const errLine = lines.reverse().find(l => l.includes('Error:') || l.includes('Exception:') || (!l.startsWith('File') && !l.startsWith('^')));
+    if (errLine) str = errLine;
+  }
+
+  // Remove common exception prefixes
+  str = str.replace(/^[a-zA-Z0-9._]+Error:\s*/, '');
+  str = str.replace(/^[a-zA-Z0-9._]+Exception:\s*/, '');
+  str = str.replace(/^ValidationError:\s*/i, '');
+
+  return str.slice(0, 300).trim() || 'An error occurred. Please try again.';
+};
+
+/**
+ * Fetch with automatic AbortController timeout and 504/502/503 Nginx error detection.
+ */
+export const fetchWithTimeout = async (url, options = {}, timeoutMs = 15000) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: options.signal || controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (response.status === 504 || response.status === 502 || response.status === 503) {
+      const err = new Error('The server took too long to respond (504 Gateway Timeout). The operation may still be processing in the background.');
+      err.status = response.status;
+      err.isTimeout = true;
+      throw err;
+    }
+
+    return response;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError' || err.message?.includes('aborted')) {
+      const timeoutErr = new Error('Request timed out (server took too long to respond).');
+      timeoutErr.status = 504;
+      timeoutErr.isTimeout = true;
+      throw timeoutErr;
+    }
+    throw err;
+  }
+};
+
+/**
+ * Safely parses response as JSON, returning fallback if response is 504/HTML or malformed.
+ */
+export const safeJson = async (response, fallback = null) => {
+  if (!response) return fallback;
+  const contentType = response.headers?.get ? (response.headers.get('content-type') || '') : '';
+  if (contentType && !contentType.includes('application/json')) {
+    return fallback;
+  }
+  try {
+    return await response.json();
+  } catch {
+    return fallback;
+  }
+};
+
